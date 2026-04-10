@@ -17,6 +17,8 @@ import DistributionManagement from '@/pages/DistributionManagement';
 import DistributionDetail from '@/pages/DistributionDetail';
 import ProblemSearch from '@/pages/ProblemSearch';
 import Analytics from '@/pages/Analytics';
+import PdfImport from '@/pages/PdfImport';
+import PdfReview from '@/pages/PdfReview';
 import Header from '@/components/layout/Header';
 
 function AppContent() {
@@ -52,6 +54,8 @@ function AppContent() {
             <Route path="/cms/distributions/:distributionId" element={<DistributionDetail />} />
             <Route path="/cms/search" element={<ProblemSearch />} />
             <Route path="/cms/analytics" element={<Analytics />} />
+            <Route path="/cms/import" element={<PdfImport />} />
+            <Route path="/cms/import/:jobId" element={<PdfReview />} />
           </>
         )}
 

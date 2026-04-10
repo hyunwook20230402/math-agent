@@ -1,6 +1,6 @@
 import { useAuth } from '@shared/hooks/useAuth';
 import { Button } from '@shared/ui/button';
-import { LogOut, User, Library } from 'lucide-react';
+import { LogOut, User, Library, FileUp } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@shared/ui/avatar';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -31,13 +31,21 @@ const Header = () => {
               >
                 선생님 대시보드
               </Button>
-              <Button 
-                variant={location.pathname.startsWith('/cms') ? "default" : "ghost"} 
+              <Button
+                variant={location.pathname.startsWith('/cms') && !location.pathname.startsWith('/cms/import') ? "default" : "ghost"}
                 size="sm"
                 onClick={() => navigate('/cms')}
               >
                 <Library className="h-4 w-4 mr-2" />
                 CMS
+              </Button>
+              <Button
+                variant={location.pathname.startsWith('/cms/import') ? "default" : "ghost"}
+                size="sm"
+                onClick={() => navigate('/cms/import')}
+              >
+                <FileUp className="h-4 w-4 mr-2" />
+                파일 가져오기
               </Button>
             </div>
           )}
