@@ -1,46 +1,78 @@
-# PDF 문제 추출 파이프라인
+# PDF 문제 자동 추출 파이프라인
 
-수학 교재 스캔 PDF에서 문제를 자동 추출하여 Supabase에 저장하는 백엔드.
-
-## 상태: 구현 예정
+수학 교재 PDF에서 문제를 자동 추출해서 검수 후 Supabase `problems` 테이블에 저장하는 백엔드.
 
 ## 환경 요구사항
 - Python 3.10+
-- CUDA 12.x (RTX 4070)
-- Ollama (Qwen2.5-7B)
+- RTX 4070 8GB VRAM
+- Ollama (Qwen2.5-7B 설치됨)
 
-## 예정 구조
+## 설정
+
+### 1. 가상환경 및 패키지 설치
+
+```bash
+cd backend/pdf_pipeline
+python -m venv venv
+venv\Scripts\activate   # Windows
+pip install -r requirements.txt
+```
+
+### 2. 환경변수 설정
+
+```bash
+copy .env.example .env
+```
+
+`.env` 파일의 `SUPABASE_SERVICE_KEY`를 Supabase 프로젝트 설정 > API > **service_role** 키로 채우세요.
+
+### 3. Supabase DB 마이그레이션
+
+Supabase SQL Editor에서 실행:
+```
+supabase/migrations/001_fix_image_url_and_add_staging.sql
+```
+
+### 4. 서버 실행
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+## API
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| POST | `/api/upload` | 파일 업로드 → job_id 반환 |
+| POST | `/api/extract/{job_id}` | 추출 시작 (백그라운드) |
+| GET | `/api/jobs/{job_id}` | 진행 상황 |
+| GET | `/api/staging/{job_id}` | 추출된 문제 목록 |
+| PATCH | `/api/staging/{staging_id}` | 개별 문제 수정/승인/거부 |
+| POST | `/api/staging/{job_id}/approve-all` | 승인된 문제 → problems 테이블 등록 |
+
+## 구조
 
 ```
 pdf_pipeline/
 ├── main.py                    # FastAPI 서버 (포트 8000)
-├── config.py                  # 환경 변수 (Supabase URL/Key)
+├── config.py                  # 환경변수
 ├── requirements.txt
 ├── pipeline/
-│   ├── pdf_splitter.py        # PDF → 페이지 이미지
-│   ├── layout_detector.py     # 문제 영역 분할
-│   ├── ocr_engine.py          # Surya OCR
-│   ├── math_recognizer.py     # Nougat 수식 인식
-│   ├── figure_analyzer.py     # Qwen2.5-VL-7B 도형 분석
-│   ├── structurizer.py        # Qwen2.5-7B 구조화
-│   └── model_manager.py       # GPU 메모리 관리
-├── storage/
-│   ├── supabase_client.py
-│   └── image_uploader.py
-└── textbook_configs/
-    └── ssen_math1.json        # 쎈 수학1 교재 설정
+│   ├── file_converter.py      # PDF → 텍스트/이미지 (PyMuPDF)
+│   ├── text_splitter.py       # 정규식 문제 분리
+│   └── structurizer.py        # Qwen2.5-7B (Ollama) 구조화
+└── storage/
+    └── supabase_client.py     # staging 테이블 CRUD
 ```
 
 ## 처리 흐름
 
 ```
-스캔 PDF → pdf2image → Surya OCR → 문제 분할
-       → Nougat 수식 → Qwen2.5-VL 도형 → Qwen2.5-7B 구조화
-       → problem_staging 테이블 → CMS 검수 → problems 테이블
+PDF 업로드 → 텍스트 추출 (PyMuPDF) → 문제 분리 (정규식)
+          → Qwen2.5-7B 구조화 (Ollama) → problem_staging INSERT
+          → CMS 검수 UI → problems 테이블 최종 등록
 ```
 
-## VRAM 관리 (8GB 제약)
-모델을 순차적으로 로드/언로드한다:
-1. Surya + Nougat (~5GB) → 언로드
-2. Qwen2.5-VL-7B 4bit (~5GB) → 언로드  
-3. Qwen2.5-7B 4bit via Ollama (~5GB)
+## 향후 추가 예정
+- **3단계**: 이미지형 PDF — Surya OCR + Nougat 수식 인식
+- **4단계**: HWP 지원 — pyhwp + LibreOffice headless
