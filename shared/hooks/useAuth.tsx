@@ -23,36 +23,27 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Set up auth state listener
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        console.log('Auth state change:', event, session?.user?.email);
-        setSession(session);
-        setUser(session?.user ?? null);
-        
-        if (session?.user) {
-          console.log('Fetching profile for user:', session.user.id);
-          
-          // 프로필 조회 (timeout 추가)
-          console.log('Starting profile fetch for user_id:', session.user.id);
-          
-          const profilePromise = supabase
-            .from('profiles')
-            .select('*')
-            .eq('user_id', session.user.id)
-            .single();
-          
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Profile fetch timeout after 5 seconds')), 5000)
-          );
-          
-          const { data: profileData, error } = await Promise.race([profilePromise, timeoutPromise]) as any;
-          console.log('Profile fetch completed:', { profileData, error });
-          
-          if (error) {
-            console.error('Profile fetch error:', error);
-            // 프로필이 없으면 임시 프로필로 로그인 허용
-            const tempProfile: Profile = {
+    let initialized = false;
+
+    // 초기 세션 먼저 확인 후 리스너 등록
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      initialized = true;
+      setSession(session);
+      setUser(session?.user ?? null);
+
+      if (!session?.user) {
+        setLoading(false);
+        return;
+      }
+
+      supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .single()
+        .then(({ data: profileData, error }) => {
+          if (error || !profileData) {
+            setProfile({
               id: session.user.id,
               user_id: session.user.id,
               name: session.user.user_metadata?.name || '사용자',
@@ -61,12 +52,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
               avatar_url: null,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
-            };
-            setProfile(tempProfile);
+            });
           } else {
-            console.log('Database profile found:', profileData);
-            // 데이터베이스 프로필 사용
-            const secureProfile: Profile = {
+            setProfile({
               id: profileData.id,
               user_id: profileData.user_id,
               name: profileData.name || session.user.user_metadata?.name || '사용자',
@@ -75,86 +63,59 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
               avatar_url: profileData.avatar_url || null,
               created_at: profileData.created_at || new Date().toISOString(),
               updated_at: profileData.updated_at || new Date().toISOString()
-            };
-            setProfile(secureProfile);
+            });
           }
           setLoading(false);
-        } else {
+        });
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        // 초기 세션 처리 전에는 무시 (중복 방지)
+        if (!initialized) return;
+
+        setSession(session);
+        setUser(session?.user ?? null);
+
+        if (!session?.user) {
           setProfile(null);
           setLoading(false);
+          return;
         }
+
+        supabase
+          .from('profiles')
+          .select('*')
+          .eq('user_id', session.user.id)
+          .single()
+          .then(({ data: profileData, error }) => {
+            if (error || !profileData) {
+              setProfile({
+                id: session.user.id,
+                user_id: session.user.id,
+                name: session.user.user_metadata?.name || '사용자',
+                role: session.user.user_metadata?.role || 'student',
+                email: session.user.email || '',
+                avatar_url: null,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              });
+            } else {
+              setProfile({
+                id: profileData.id,
+                user_id: profileData.user_id,
+                name: profileData.name || session.user.user_metadata?.name || '사용자',
+                role: profileData.role || session.user.user_metadata?.role || 'student',
+                email: profileData.email || session.user.email || '',
+                avatar_url: profileData.avatar_url || null,
+                created_at: profileData.created_at || new Date().toISOString(),
+                updated_at: profileData.updated_at || new Date().toISOString()
+              });
+            }
+            setLoading(false);
+          });
       }
     );
-
-    // Check for existing session
-    const initializeAuth = async () => {
-      try {
-        console.log('Initializing auth...');
-        const { data: { session } } = await supabase.auth.getSession();
-        console.log('Initial session:', session?.user?.email);
-        setSession(session);
-        setUser(session?.user ?? null);
-        
-        if (session?.user) {
-          console.log('Initial session - Fetching profile for user:', session.user.id);
-          
-          // 프로필 조회 (timeout 추가)
-          console.log('Initial - Starting profile fetch for user_id:', session.user.id);
-          
-          const profilePromise = supabase
-            .from('profiles')
-            .select('*')
-            .eq('user_id', session.user.id)
-            .single();
-          
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Initial profile fetch timeout after 5 seconds')), 5000)
-          );
-          
-          const { data: profileData, error } = await Promise.race([profilePromise, timeoutPromise]) as any;
-          console.log('Initial - Profile fetch completed:', { profileData, error });
-          
-          if (error) {
-            console.error('Initial profile fetch error:', error);
-            // 프로필이 없으면 임시 프로필로 로그인 허용
-            const tempProfile: Profile = {
-              id: session.user.id,
-              user_id: session.user.id,
-              name: session.user.user_metadata?.name || '사용자',
-              role: session.user.user_metadata?.role || 'student',
-              email: session.user.email || '',
-              avatar_url: null,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            };
-            setProfile(tempProfile);
-          } else {
-            console.log('Initial - Database profile found:', profileData);
-            // 데이터베이스 프로필 사용
-            const secureProfile: Profile = {
-              id: profileData.id,
-              user_id: profileData.user_id,
-              name: profileData.name || session.user.user_metadata?.name || '사용자',
-              role: profileData.role || session.user.user_metadata?.role || 'student',
-              email: profileData.email || session.user.email || '',
-              avatar_url: profileData.avatar_url || null,
-              created_at: profileData.created_at || new Date().toISOString(),
-              updated_at: profileData.updated_at || new Date().toISOString()
-            };
-            setProfile(secureProfile);
-          }
-          setLoading(false);
-        } else {
-          console.log('No initial session found');
-          setLoading(false);
-        }
-      } catch (error) {
-        console.error('Auth initialization error:', error);
-        setLoading(false);
-      }
-    };
-
-    initializeAuth();
 
     return () => {
       subscription.unsubscribe();

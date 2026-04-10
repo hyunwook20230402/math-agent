@@ -7,13 +7,8 @@ import Index from '@/pages/Index';
 import EmailConfirm from '@/pages/EmailConfirm';
 import CMSLayout from '@/components/layout/CMSLayout';
 import TextbookManagementNew from '@/pages/TextbookManagementNew';
-import ProblemManagement from '@/pages/ProblemManagement';
 import AddProblem from '@/pages/AddProblem';
 import AddProblemNew from '@/pages/AddProblemNew';
-import ProblemSetManagement from '@/pages/ProblemSetManagement';
-import DistributionManagement from '@/pages/DistributionManagement';
-import DistributionDetail from '@/pages/DistributionDetail';
-import Analytics from '@/pages/Analytics';
 import PdfReview from '@/pages/PdfReview';
 
 function AppContent() {
@@ -36,13 +31,8 @@ function AppContent() {
         <Route path="/cms" element={<CMSLayout />}>
           <Route index element={<Navigate to="/cms/textbooks" replace />} />
           <Route path="textbooks" element={<TextbookManagementNew />} />
-          <Route path="problems" element={<ProblemManagement />} />
           <Route path="problems/new" element={<AddProblemNew />} />
           <Route path="problems/:id" element={<AddProblem />} />
-          <Route path="problem-sets" element={<ProblemSetManagement />} />
-          <Route path="distributions" element={<DistributionManagement />} />
-          <Route path="distributions/:distributionId" element={<DistributionDetail />} />
-          <Route path="analytics" element={<Analytics />} />
           <Route path="import/:jobId" element={<PdfReview />} />
         </Route>
       )}

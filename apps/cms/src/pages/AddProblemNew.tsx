@@ -357,13 +357,30 @@ const AddProblemNew = () => {
   useEffect(() => {
     if (profile) {
       fetchProblemSets();
-      
+
       // 편집 모드 확인
       const editId = searchParams.get('edit');
       if (editId) {
         setIsEditMode(true);
         setEditingProblemId(editId);
         fetchProblemForEdit(editId);
+      }
+
+      // 교재/단원 query param으로 초기 선택값 설정
+      const textbookId = searchParams.get('textbook_id');
+      const chapterId = searchParams.get('chapter_id');
+      const subchapterId = searchParams.get('subchapter_id');
+      if (textbookId) {
+        supabase.from('textbooks').select('*').eq('id', textbookId).single()
+          .then(({ data }) => { if (data) setSelectedTextbook(data); });
+      }
+      if (chapterId) {
+        supabase.from('chapters').select('*').eq('id', chapterId).single()
+          .then(({ data }) => { if (data) setSelectedChapter(data); });
+      }
+      if (subchapterId) {
+        supabase.from('subchapters').select('*').eq('id', subchapterId).single()
+          .then(({ data }) => { if (data) setSelectedSubchapter(data); });
       }
     }
   }, [profile, searchParams]);
@@ -642,9 +659,7 @@ const AddProblemNew = () => {
         description: isEditMode ? "문제가 수정되었습니다." : "문제가 등록되었습니다."
       });
 
-      // 즉시 문제 관리 페이지로 이동
-      console.log('문제 등록 성공 - 문제 목록 페이지로 이동');
-      navigate('/cms/problems');
+      navigate('/cms/textbooks');
 
       if (!isEditMode) {
         setFormData({
@@ -687,7 +702,7 @@ const AddProblemNew = () => {
     <div className="container mx-auto px-4 py-6 max-w-4xl">
       {/* 헤더 */}
       <div className="flex items-center gap-4 mb-6">
-        <Button variant="outline" size="sm" onClick={() => navigate('/cms')}>
+        <Button variant="outline" size="sm" onClick={() => navigate('/cms/textbooks')}>
           <ArrowLeft className="h-4 w-4 mr-2" />
           돌아가기
         </Button>

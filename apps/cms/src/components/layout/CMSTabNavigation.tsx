@@ -1,13 +1,9 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { BookOpen, FileText, FolderOpen, Send, BarChart3 } from 'lucide-react';
+import { BookOpen } from 'lucide-react';
 import { cn } from '@shared/lib/utils';
 
 const tabs = [
-  { path: '/cms/textbooks', label: '교재', icon: BookOpen },
-  { path: '/cms/problems', label: '문제', icon: FileText },
-  { path: '/cms/problem-sets', label: '세트', icon: FolderOpen },
-  { path: '/cms/distributions', label: '배포', icon: Send },
-  { path: '/cms/analytics', label: '분석', icon: BarChart3 },
+  { path: '/cms/textbooks', label: '교재 관리', icon: BookOpen },
 ];
 
 const CMSTabNavigation = () => {

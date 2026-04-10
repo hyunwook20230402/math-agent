@@ -9,7 +9,13 @@
       "Bash(pip install:*)",
       "Bash(pip show:*)",
       "Bash(npx tsc:*)",
-      "Bash(npx --prefix apps/cms tsc --noEmit)"
+      "Bash(npx --prefix apps/cms tsc --noEmit)",
+      "Bash(grep -E \"\\\\.\\(tsx?|json\\)$\")",
+      "Bash(npx vite:*)",
+      "Bash(netstat -ano)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(node_modules/.bin/tsc --project apps/cms/tsconfig.json --noEmit)",
+      "Bash(echo \"exit: $?\")"
     ]
   },
   "hooks": {
