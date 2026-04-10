@@ -8,7 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@shared/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { Badge } from '@shared/ui/badge';
 import { toast } from '@shared/hooks/use-toast';
-import { ArrowLeft, Check, X, CheckCheck, Loader2 } from 'lucide-react';
+import { ArrowLeft, Check, X, CheckCheck, Loader2, BookOpen } from 'lucide-react';
+import { useTextbook } from '@/context/TextbookContext';
 
 const PIPELINE_URL = 'http://localhost:8000';
 
@@ -22,6 +23,7 @@ interface StagingProblem {
   correct_answer: string;
   explanation: string | null;
   problem_text: string;
+  source_image_url: string | null;
   confidence: number;
   status: 'pending' | 'approved' | 'rejected' | 'modified';
 }
@@ -38,6 +40,7 @@ const PdfReview = () => {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
   const { profile } = useAuth();
+  const { selectedTextbook, selectedChapter, breadcrumb } = useTextbook();
   const [problems, setProblems] = useState<StagingProblem[]>([]);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState(false);
@@ -124,6 +127,7 @@ const PdfReview = () => {
   const startEdit = (p: StagingProblem) => {
     setEditing(p.id);
     setEditValues({
+      problem_number: p.problem_number,
       difficulty: p.difficulty,
       answer_type: p.answer_type,
       correct_answer: p.correct_answer,
@@ -156,12 +160,18 @@ const PdfReview = () => {
     <div className="container mx-auto px-4 py-6 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
-          <Button variant="outline" size="sm" onClick={() => navigate('/cms/import')}>
+          <Button variant="outline" size="sm" onClick={() => navigate('/cms/textbooks')}>
             <ArrowLeft className="h-4 w-4 mr-2" />
             돌아가기
           </Button>
           <div>
             <h1 className="text-2xl font-bold">문제 검수</h1>
+            {breadcrumb && (
+              <p className="text-sm text-primary flex items-center gap-1">
+                <BookOpen className="h-3 w-3" />
+                {breadcrumb}
+              </p>
+            )}
             <p className="text-muted-foreground">
               승인됨: {approvedCount} / {totalCount}개
             </p>
@@ -236,7 +246,26 @@ const PdfReview = () => {
             <CardContent>
               {editing === p.id ? (
                 <div className="space-y-3">
+                  {p.source_image_url && (
+                    <div>
+                      <img
+                        src={p.source_image_url}
+                        alt={`문제 ${p.problem_number}`}
+                        className="max-w-full rounded border"
+                        style={{ maxHeight: '400px' }}
+                      />
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">문제 번호</Label>
+                      <Input
+                        type="number"
+                        value={editValues.problem_number || ''}
+                        onChange={e => setEditValues(prev => ({ ...prev, problem_number: parseInt(e.target.value) || 0 }))}
+                        className="h-8"
+                      />
+                    </div>
                     <div>
                       <Label className="text-xs">난이도</Label>
                       <Select
@@ -298,9 +327,20 @@ const PdfReview = () => {
                     <span>정답: {p.correct_answer}</span>
                   </div>
                   {p.unit && <p className="text-xs text-muted-foreground">단원: {p.unit}</p>}
-                  <p className="mt-2 text-sm bg-muted p-2 rounded text-ellipsis overflow-hidden max-h-20">
-                    {p.problem_text}
-                  </p>
+                  {p.source_image_url ? (
+                    <div className="mt-2">
+                      <img
+                        src={p.source_image_url}
+                        alt={`문제 ${p.problem_number}`}
+                        className="max-w-full rounded border"
+                        style={{ maxHeight: '400px' }}
+                      />
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm bg-muted p-2 rounded text-ellipsis overflow-hidden max-h-20">
+                      {p.problem_text}
+                    </p>
+                  )}
                 </div>
               )}
             </CardContent>

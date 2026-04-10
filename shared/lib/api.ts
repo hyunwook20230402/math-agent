@@ -46,66 +46,128 @@ export const profileApi = {
   }
 };
 
+// ===== 교재 관련 API =====
+export const textbookApi = {
+  getTextbooks: async () => {
+    const { data, error } = await supabase
+      .from('textbooks')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  getTextbooksWithHierarchy: async () => {
+    const { data: textbooks, error: tbError } = await supabase
+      .from('textbooks')
+      .select('*')
+      .order('name', { ascending: true });
+    if (tbError) throw tbError;
+
+    const { data: chapters, error: chError } = await supabase
+      .from('chapters')
+      .select('*')
+      .order('sort_order', { ascending: true });
+    if (chError) throw chError;
+
+    const { data: subchapters, error: scError } = await supabase
+      .from('subchapters')
+      .select('*')
+      .order('sort_order', { ascending: true });
+    if (scError) throw scError;
+
+    return (textbooks || []).map(tb => ({
+      ...tb,
+      chapters: (chapters || [])
+        .filter(ch => ch.textbook_id === tb.id)
+        .map(ch => ({
+          ...ch,
+          subchapters: (subchapters || []).filter(sc => sc.chapter_id === ch.id)
+        }))
+    }));
+  },
+
+  getChaptersByTextbook: async (textbookId) => {
+    const { data, error } = await supabase
+      .from('chapters')
+      .select('*')
+      .eq('textbook_id', textbookId)
+      .order('sort_order', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+
+  getSubchaptersByChapter: async (chapterId) => {
+    const { data, error } = await supabase
+      .from('subchapters')
+      .select('*')
+      .eq('chapter_id', chapterId)
+      .order('sort_order', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  },
+
+  getTextbookProblemCounts: async (textbookId) => {
+    const { data, error, count } = await supabase
+      .from('problems')
+      .select('id', { count: 'exact', head: true })
+      .eq('textbook_id', textbookId);
+    if (error) throw error;
+    return count || 0;
+  },
+};
+
 // ===== 문제 관련 API =====
 export const problemApi = {
-  // 문제 목록 조회 (현재 선생님의 문제만)
-  getProblems: async (teacherId) => {
-    console.log('getProblems 호출됨, teacherId:', teacherId);
-    
+  // 문제 목록 조회 (현재 선생님의 문제만, 교재 필터 옵션)
+  getProblems: async (teacherId, filters?: { textbookId?: string; chapterId?: string; subchapterId?: string }) => {
     let query = supabase
       .from('problems')
       .select('*')
       .order('problem_number', { ascending: true });
-    
+
     if (teacherId) {
-      console.log('teacherId가 제공됨:', teacherId);
-      // teacherId가 user_id인 경우 profile.id로 변환
       if (teacherId.length === 36) {
-        console.log('UUID 형식의 teacherId, profile 조회 시도');
-        const { data: profile, error: profileError } = await supabase
+        const { data: profile } = await supabase
           .from('profiles')
           .select('id')
           .eq('user_id', teacherId)
           .maybeSingle();
-        
-        console.log('profile 조회 결과:', { profile, profileError });
-        
+
         if (profile) {
           query = query.eq('teacher_id', profile.id);
-          console.log('profile.id로 필터링:', profile.id);
         } else {
           query = query.eq('teacher_id', teacherId);
-          console.log('teacherId로 직접 필터링:', teacherId);
         }
       } else {
         query = query.eq('teacher_id', teacherId);
-        console.log('teacherId로 직접 필터링 (UUID 아님):', teacherId);
       }
     } else {
-      console.log('teacherId가 없음, 현재 사용자 조회');
-      // 현재 사용자의 profile ID를 사용
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        console.log('현재 사용자:', user.id);
-        const { data: profile, error: profileError } = await supabase
+        const { data: profile } = await supabase
           .from('profiles')
           .select('id')
           .eq('user_id', user.id)
           .maybeSingle();
-        
-        console.log('현재 사용자 profile 조회 결과:', { profile, profileError });
-        
+
         if (profile) {
           query = query.eq('teacher_id', profile.id);
-          console.log('현재 사용자 profile.id로 필터링:', profile.id);
         }
       }
     }
 
-    console.log('최종 쿼리 실행');
+    if (filters?.textbookId) {
+      query = query.eq('textbook_id', filters.textbookId);
+    }
+    if (filters?.chapterId) {
+      query = query.eq('chapter_id', filters.chapterId);
+    }
+    if (filters?.subchapterId) {
+      query = query.eq('subchapter_id', filters.subchapterId);
+    }
+
     const { data, error } = await query;
-    console.log('쿼리 결과:', { data, error });
-    
     if (error) throw error;
     return data || [];
   },
@@ -272,32 +334,6 @@ export const problemSetApi = {
       throw error;
     }
     return result;
-  },
-
-  // 문제 세트에 문제들 추가
-  addProblemsToSet: async (problemSetId, problemIds) => {
-    console.log('addProblemsToSet 호출됨:', { problemSetId, problemIds });
-    
-    if (!problemIds || problemIds.length === 0) {
-      console.log('추가할 문제가 없음');
-      return;
-    }
-
-    // problem_set_items 테이블에 문제들 추가
-    const items = problemIds.map(problemId => ({
-      problem_set_id: problemSetId,
-      problem_id: problemId
-    }));
-
-    const { data, error } = await supabase
-      .from('problem_set_items')
-      .insert(items)
-      .select();
-
-    console.log('문제 세트 아이템 삽입 결과:', { data, error });
-
-    if (error) throw error;
-    return data;
   },
 
   // 문제 세트 수정

@@ -49,6 +49,15 @@ export interface Database {
           choices: any | null; // 객관식 보기
           explanation: string | null; // 해설
           tags: string[] | null; // 태그 이름 배열
+          problem_text: string | null; // 순수 텍스트 (수식 제거)
+          problem_latex: string | null; // LaTeX 포함 텍스트
+          topic_tags: string[] | null; // ['미분', '접선의 방정식']
+          source_info: any | null; // {"book":"쎈","page":15}
+          structuring_status: 'pending' | 'processing' | 'done' | 'failed';
+          embedding: any | null; // vector(1024)
+          textbook_id: string | null;
+          chapter_id: string | null;
+          subchapter_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -66,6 +75,15 @@ export interface Database {
           choices?: any | null;
           explanation?: string | null;
           tags?: string[] | null;
+          problem_text?: string | null;
+          problem_latex?: string | null;
+          topic_tags?: string[] | null;
+          source_info?: any | null;
+          structuring_status?: 'pending' | 'processing' | 'done' | 'failed';
+          embedding?: any | null;
+          textbook_id?: string | null;
+          chapter_id?: string | null;
+          subchapter_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -83,6 +101,15 @@ export interface Database {
           choices?: any | null;
           explanation?: string | null;
           tags?: string[] | null;
+          problem_text?: string | null;
+          problem_latex?: string | null;
+          topic_tags?: string[] | null;
+          source_info?: any | null;
+          structuring_status?: 'pending' | 'processing' | 'done' | 'failed';
+          embedding?: any | null;
+          textbook_id?: string | null;
+          chapter_id?: string | null;
+          subchapter_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -611,4 +638,32 @@ export interface FolderWithChildren extends Folder {
 export interface StudentAchievementWithDetails extends StudentAchievement {
   problem_set: ProblemSet;
   student: Profile;
+}
+
+// PDF 파이프라인 staging 타입
+export interface ProblemStaging {
+  id: string;
+  job_id: string;
+  teacher_id: string;
+  problem_number: number | null;
+  title: string | null;
+  unit: string | null;
+  difficulty: 'easy' | 'medium' | 'hard' | null;
+  answer_type: 'multiple_choice' | 'short_answer' | null;
+  correct_answer: string | null;
+  choices: any | null;
+  explanation: string | null;
+  problem_text: string | null;
+  source_image_url: string | null;
+  source_pdf: string | null;
+  source_page: number | null;
+  confidence: number;
+  category: string | null;
+  status: 'pending' | 'approved' | 'rejected' | 'modified';
+  textbook_id: string | null;
+  chapter_id: string | null;
+  page_start: number | null;
+  page_end: number | null;
+  created_at: string;
+  updated_at: string;
 }

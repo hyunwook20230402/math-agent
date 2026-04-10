@@ -17,10 +17,12 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@shared/hooks/useAuth';
 import { distributionApi, studentAnswerApi } from '@shared/lib/api';
 import type { DistributionWithDetails } from '@shared/types/database';
+import { useTextbook } from '@/context/TextbookContext';
 
 const DistributionManagement = () => {
   const navigate = useNavigate();
   const { profile } = useAuth();
+  const { selectedTextbook } = useTextbook();
   const [distributions, setDistributions] = useState<DistributionWithDetails[]>([]);
   const [distributionStats, setDistributionStats] = useState<{[key: string]: {completed: number, total: number}}>({});
   const [loading, setLoading] = useState(true);

@@ -1,55 +1,26 @@
 import { useAuth } from '@shared/hooks/useAuth';
 import { Button } from '@shared/ui/button';
-import { LogOut, User, Library, FileUp } from 'lucide-react';
+import { LogOut, User } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@shared/ui/avatar';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 const Header = () => {
   const { profile, signOut } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
 
   if (!profile) return null;
 
   return (
     <header className="border-b bg-card">
       <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <h1 className="text-xl font-bold text-primary">학습 관리</h1>
-          <span className="text-sm text-muted-foreground">
-            {profile.role === 'teacher' ? '선생님' : '학생'} 모드
-          </span>
+        <div
+          className="flex items-center space-x-2 cursor-pointer"
+          onClick={() => navigate('/cms/textbooks')}
+        >
+          <h1 className="text-xl font-bold text-primary">수학 문제 CMS</h1>
         </div>
-        
+
         <div className="flex items-center space-x-4">
-          {profile.role === 'teacher' && (
-            <div className="flex items-center space-x-2">
-              <Button 
-                variant={location.pathname.startsWith('/teacher') ? "default" : "ghost"} 
-                size="sm"
-                onClick={() => navigate('/teacher')}
-              >
-                선생님 대시보드
-              </Button>
-              <Button
-                variant={location.pathname.startsWith('/cms') && !location.pathname.startsWith('/cms/import') ? "default" : "ghost"}
-                size="sm"
-                onClick={() => navigate('/cms')}
-              >
-                <Library className="h-4 w-4 mr-2" />
-                CMS
-              </Button>
-              <Button
-                variant={location.pathname.startsWith('/cms/import') ? "default" : "ghost"}
-                size="sm"
-                onClick={() => navigate('/cms/import')}
-              >
-                <FileUp className="h-4 w-4 mr-2" />
-                파일 가져오기
-              </Button>
-            </div>
-          )}
-          
           <div className="flex items-center space-x-2">
             <Avatar className="h-8 w-8">
               <AvatarImage src={profile.avatar_url} />
@@ -59,7 +30,7 @@ const Header = () => {
             </Avatar>
             <span className="text-sm font-medium">{profile.name}</span>
           </div>
-          
+
           <Button variant="ghost" size="sm" onClick={signOut}>
             <LogOut className="h-4 w-4 mr-2" />
             로그아웃

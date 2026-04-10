@@ -32,11 +32,21 @@ def insert_staging_problems(job_id: str, teacher_id: str, problems: list) -> lis
             "choices": None,
             "explanation": p.get("explanation"),
             "problem_text": p.get("problem_text", ""),
+            "source_image_url": p.get("source_image_url"),
             "source_pdf": p.get("source_pdf"),
             "source_page": p.get("source_page"),
             "confidence": p.get("confidence", 0.5),
+            "category": p.get("category"),
             "status": "pending",
         }
+        if p.get("textbook_id"):
+            row["textbook_id"] = p["textbook_id"]
+        if p.get("chapter_id"):
+            row["chapter_id"] = p["chapter_id"]
+        if p.get("page_start"):
+            row["page_start"] = p["page_start"]
+        if p.get("page_end"):
+            row["page_end"] = p["page_end"]
         rows.append(row)
 
     result = client.table("problem_staging").insert(rows).execute()
@@ -86,7 +96,7 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
 
     problems = []
     for p in staged:
-        problems.append({
+        entry = {
             "teacher_id": teacher_id,
             "title": p.get("title") or _build_title(p),
             "problem_number": p.get("problem_number", 1),
@@ -98,7 +108,19 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
             "correct_answer": p.get("correct_answer", ""),
             "choices": None,
             "explanation": p.get("explanation"),
-        })
+            "structuring_status": "pending",
+            "source_info": {
+                "book": p.get("category", "기타"),
+                "page": p.get("source_page"),
+                "pdf": p.get("source_pdf"),
+                "job_id": str(p.get("job_id", "")),
+            },
+        }
+        if p.get("textbook_id"):
+            entry["textbook_id"] = p["textbook_id"]
+        if p.get("chapter_id"):
+            entry["chapter_id"] = p["chapter_id"]
+        problems.append(entry)
 
     client.table("problems").insert(problems).execute()
     # staging 상태 업데이트

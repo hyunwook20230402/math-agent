@@ -4,14 +4,14 @@ import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Badge } from '@shared/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
-import { 
-  Plus, 
-  Search, 
-  Filter, 
-  FileText, 
-  Tag, 
-  BarChart3, 
-  Edit, 
+import {
+  Plus,
+  Search,
+  Filter,
+  FileText,
+  Tag,
+  BarChart3,
+  Edit,
   Trash2,
   Upload,
   Eye,
@@ -19,12 +19,14 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
-  ChevronsRight
+  ChevronsRight,
+  BookOpen
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@shared/hooks/useAuth';
 import { problemApi } from '@shared/lib/api';
 import { supabase } from '@shared/supabase/client';
+import { useTextbook } from '@/context/TextbookContext';
 
 // 데이터베이스에서 가져온 실제 문제 타입
 interface Problem {
@@ -49,6 +51,7 @@ interface Problem {
 const ProblemManagement = () => {
   const navigate = useNavigate();
   const { profile } = useAuth();
+  const { selectedTextbook, selectedChapter, selectedSubchapter, breadcrumb } = useTextbook();
   const [problems, setProblems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -92,7 +95,7 @@ const ProblemManagement = () => {
     if (profile) {
       fetchProblems();
     }
-  }, [profile, currentPage, searchTerm, selectedCategory, selectedDifficulty, selectedAnswerType, deletedProblemIds]);
+  }, [profile, currentPage, searchTerm, selectedCategory, selectedDifficulty, selectedAnswerType, deletedProblemIds, selectedTextbook?.id, selectedChapter?.id, selectedSubchapter?.id]);
 
   // 페이지 포커스 시 데이터 새로고침
   useEffect(() => {
@@ -123,127 +126,58 @@ const ProblemManagement = () => {
   const fetchProblems = async () => {
     try {
       setLoading(true);
-      console.log('실제 데이터베이스에서 문제 데이터 로드');
-      console.log('현재 사용자 프로필:', profile);
-      console.log('teacher_id:', profile?.id);
-      
-      // 현재 사용자의 UUID 가져오기
-      const { data: { user } } = await supabase.auth.getUser();
-      console.log('문제 조회 - 현재 인증된 사용자:', user);
-      console.log('문제 조회 - 사용자 UUID:', user?.id);
 
-      // RLS 정책 우회를 위한 문제 조회
-      console.log('=== RLS 정책 우회 문제 조회 ===');
-      console.log('현재 인증된 사용자 ID:', user?.id);
-      
-      // 현재 세션 정보 가져오기
-      const { data: { session } } = await supabase.auth.getSession();
-      console.log('현재 세션:', session);
-      
-      if (!session) {
-        throw new Error('인증 세션이 없습니다. 다시 로그인해주세요.');
-      }
-      
-      const currentUserId = session.user.id;
-      console.log('세션에서 가져온 사용자 ID:', currentUserId);
-      
-      // RLS 정책이 비활성화되었으므로 모든 문제를 조회 (임시로 복잡한 조인 제거)
-      const { data: problemsData, error } = await supabase
+      // 교재 필터 적용하여 서버 쿼리
+      let query = supabase
         .from('problems')
-        .select(`*`)
+        .select('*')
+        .eq('teacher_id', profile?.id)
         .order('created_at', { ascending: false });
-      
-      console.log('문제 조회 결과:', { problemsData, error });
+
+      if (selectedTextbook) {
+        query = query.eq('textbook_id', selectedTextbook.id);
+      }
+      if (selectedChapter) {
+        query = query.eq('chapter_id', selectedChapter.id);
+      }
+      if (selectedSubchapter) {
+        query = query.eq('subchapter_id', selectedSubchapter.id);
+      }
+
+      const { data: problemsData, error } = await query;
 
       if (error) {
         console.error('문제 조회 오류:', error);
-        console.log('데이터베이스 조회 실패, 임시 저장된 문제들만 로드합니다.');
-        // throw error; // 오류를 던지지 않고 임시 저장된 문제들만 로드
       }
 
-      console.log('조회된 실제 문제 데이터:', problemsData);
-      
-      // 모든 문제도 조회해보기 (디버깅용)
-      const { data: allProblemsData, error: allError } = await supabase
-        .from('problems')
-        .select('id, teacher_id, title, created_at')
-        .order('created_at', { ascending: false });
-      
-      console.log('데이터베이스의 모든 문제:', allProblemsData);
-      
-      // 실제 데이터베이스에서 가져온 문제
-      const allDbProblems = problemsData || [];
-      console.log('=== 데이터베이스 문제 목록 ===');
-      console.log('전체 데이터베이스 문제 수:', allDbProblems.length);
-      
-      // 현재 사용자의 profile.id 찾기 (user_id로 조회)
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', currentUserId)
-        .single();
-      
-      console.log('현재 사용자의 profile 데이터:', profileData);
-      
-      // profile.id로 문제 필터링
-      const dbProblems = allDbProblems.filter(problem => 
-        problem.teacher_id === profileData?.id
-      );
-      console.log('현재 사용자 문제 수:', dbProblems.length);
-      
-      // 디버깅: 각 문제의 생성 날짜 확인
-      console.log('=== 문제별 생성 날짜 확인 ===');
-      dbProblems.forEach((problem, index) => {
-        console.log(`문제 ${index + 1}: ${problem.title} - 생성일: ${problem.created_at}`);
-      });
-      
-      // 임시 저장된 문제들도 가져오기
-      const tempProblems = JSON.parse(localStorage.getItem('temp_problems') || '[]');
-      const userTempProblems = tempProblems.filter((problem: any) => 
-        problem.teacher_id === currentUserId
-      );
-      
-      console.log('임시 저장된 문제 수:', userTempProblems.length);
-      
-      // 데이터베이스 문제와 임시 문제 합치기
-      const allProblems = [...dbProblems, ...userTempProblems];
-      console.log('전체 문제 목록:', allProblems);
-      
+      let allProblems = problemsData || [];
+
       // 삭제된 문제들을 제외
-      const availableProblems = allProblems.filter(problem => !deletedProblemIds.has(problem.id));
-      
-      // 필터링 적용
-      let filteredProblems = availableProblems;
-      
+      let filteredProblems = allProblems.filter(problem => !deletedProblemIds.has(problem.id));
+
+      // 클라이언트 사이드 필터링
       if (searchTerm) {
-        filteredProblems = filteredProblems.filter(p => 
-          p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          p.unit.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          p.category.toLowerCase().includes(searchTerm.toLowerCase())
+        filteredProblems = filteredProblems.filter(p =>
+          p.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          p.unit?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          p.category?.toLowerCase().includes(searchTerm.toLowerCase())
         );
       }
-      
       if (selectedCategory !== 'all') {
         filteredProblems = filteredProblems.filter(p => p.category === selectedCategory);
       }
-      
       if (selectedDifficulty !== 'all') {
         filteredProblems = filteredProblems.filter(p => p.difficulty === selectedDifficulty);
       }
-      
       if (selectedAnswerType !== 'all') {
         filteredProblems = filteredProblems.filter(p => p.answer_type === selectedAnswerType);
       }
-      
+
       setProblems(filteredProblems);
       setTotalProblems(filteredProblems.length);
       setTotalPages(Math.ceil(filteredProblems.length / problemsPerPage));
-      
     } catch (error) {
       console.error('문제 조회 실패:', error);
-      console.log('데이터베이스 오류 발생, 빈 목록을 표시합니다.');
-      
-      // 데이터베이스 오류 시 빈 목록 표시
       setProblems([]);
       setTotalProblems(0);
       setTotalPages(0);
@@ -391,55 +325,17 @@ const ProblemManagement = () => {
     if (!confirm('정말로 이 문제를 삭제하시겠습니까?')) return;
 
     try {
-      console.log('문제 삭제:', problemId);
-      
-      // 임시 저장된 문제인지 확인
-      if (problemId.startsWith('temp_')) {
-        // 임시 저장된 문제 삭제
-        const tempProblems = JSON.parse(localStorage.getItem('temp_problems') || '[]');
-        const updatedTempProblems = tempProblems.filter((p: any) => p.id !== problemId);
-        localStorage.setItem('temp_problems', JSON.stringify(updatedTempProblems));
-        console.log('임시 문제 삭제 완료');
-      } else {
-        // 실제 데이터베이스에서 문제 삭제
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        if (!session) {
-          throw new Error('인증 세션이 없습니다. 다시 로그인해주세요.');
-        }
-        
-        const currentUserId = session.user.id;
-        console.log('삭제 시 사용자 ID:', currentUserId);
-        
-        // 현재 사용자의 profile.id 찾기
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('user_id', currentUserId)
-          .single();
-        
-        console.log('삭제 시 profile 데이터:', profileData);
-        
-        const { error } = await supabase
-          .from('problems')
-          .delete()
-          .eq('id', problemId)
-          .eq('teacher_id', profileData?.id);
+      const { error } = await supabase
+        .from('problems')
+        .delete()
+        .eq('id', problemId)
+        .eq('teacher_id', profile?.id);
 
-        if (error) {
-          console.error('문제 삭제 오류:', error);
-          throw error;
-        }
-      }
-      
-      // 삭제된 문제 ID를 Set에 추가
+      if (error) throw error;
+
       setDeletedProblemIds(prev => new Set([...prev, problemId]));
-      
-      // 현재 표시된 문제 목록에서도 즉시 제거
       setProblems(prev => prev.filter(p => p.id !== problemId));
       setTotalProblems(prev => prev - 1);
-      
-      alert('문제가 삭제되었습니다.');
     } catch (error) {
       console.error('문제 삭제 실패:', error);
       alert('문제 삭제에 실패했습니다.');
@@ -461,20 +357,26 @@ const ProblemManagement = () => {
       {/* 헤더 */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-foreground">문제 관리</h1>
-          <p className="text-muted-foreground">
-            등록된 문제들을 관리하고 새로운 문제를 추가하세요
-          </p>
+          <h1 className="text-2xl font-bold text-foreground">문제 관리</h1>
+          {selectedTextbook ? (
+            <p className="text-muted-foreground">
+              {breadcrumb} 의 문제를 관리합니다
+            </p>
+          ) : (
+            <p className="text-muted-foreground">
+              교재를 선택하면 해당 교재의 문제만 표시됩니다
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => fetchProblems()}>
+          <Button variant="outline" size="sm" onClick={() => fetchProblems()}>
             <Search className="h-4 w-4 mr-2" />
             새로고침
           </Button>
-        <Button onClick={() => navigate('/cms/problems/new')}>
-          <Plus className="h-4 w-4 mr-2" />
-          새 문제 등록
-        </Button>
+          <Button size="sm" onClick={() => navigate('/cms/problems/new')}>
+            <Plus className="h-4 w-4 mr-2" />
+            새 문제 등록
+          </Button>
         </div>
       </div>
 

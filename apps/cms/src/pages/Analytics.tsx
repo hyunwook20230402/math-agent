@@ -17,10 +17,12 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@shared/hooks/useAuth';
 import { problemApi, problemSetApi, distributionApi } from '@shared/lib/api';
 import type { Problem, ProblemSet, DistributionWithDetails } from '@shared/types/database';
+import { useTextbook } from '@/context/TextbookContext';
 
 const Analytics = () => {
   const navigate = useNavigate();
   const { profile } = useAuth();
+  const { selectedTextbook } = useTextbook();
   const [problems, setProblems] = useState<Problem[]>([]);
   const [problemSets, setProblemSets] = useState<ProblemSet[]>([]);
   const [distributions, setDistributions] = useState<DistributionWithDetails[]>([]);

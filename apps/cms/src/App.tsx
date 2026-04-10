@@ -5,21 +5,16 @@ import { AuthProvider, useAuth } from '@shared/hooks/useAuth';
 
 import Index from '@/pages/Index';
 import EmailConfirm from '@/pages/EmailConfirm';
-import CMSDashboardNew from '@/pages/CMSDashboardNew';
-import CMSDashboard from '@/pages/CMSDashboard';
+import CMSLayout from '@/components/layout/CMSLayout';
+import TextbookManagementNew from '@/pages/TextbookManagementNew';
 import ProblemManagement from '@/pages/ProblemManagement';
 import AddProblem from '@/pages/AddProblem';
 import AddProblemNew from '@/pages/AddProblemNew';
-import TextbookManagement from '@/pages/TextbookManagement';
-import TextbookManagementNew from '@/pages/TextbookManagementNew';
 import ProblemSetManagement from '@/pages/ProblemSetManagement';
 import DistributionManagement from '@/pages/DistributionManagement';
 import DistributionDetail from '@/pages/DistributionDetail';
-import ProblemSearch from '@/pages/ProblemSearch';
 import Analytics from '@/pages/Analytics';
-import PdfImport from '@/pages/PdfImport';
 import PdfReview from '@/pages/PdfReview';
-import Header from '@/components/layout/Header';
 
 function AppContent() {
   const { profile, loading } = useAuth();
@@ -33,37 +28,29 @@ function AppContent() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      {profile && <Header />}
+    <Routes>
+      <Route path="/" element={<Index />} />
+      <Route path="/auth/confirm" element={<EmailConfirm />} />
 
-      <Routes>
-        <Route path="/" element={<Index />} />
-        <Route path="/auth/confirm" element={<EmailConfirm />} />
+      {profile && (
+        <Route path="/cms" element={<CMSLayout />}>
+          <Route index element={<Navigate to="/cms/textbooks" replace />} />
+          <Route path="textbooks" element={<TextbookManagementNew />} />
+          <Route path="problems" element={<ProblemManagement />} />
+          <Route path="problems/new" element={<AddProblemNew />} />
+          <Route path="problems/:id" element={<AddProblem />} />
+          <Route path="problem-sets" element={<ProblemSetManagement />} />
+          <Route path="distributions" element={<DistributionManagement />} />
+          <Route path="distributions/:distributionId" element={<DistributionDetail />} />
+          <Route path="analytics" element={<Analytics />} />
+          <Route path="import/:jobId" element={<PdfReview />} />
+        </Route>
+      )}
 
-        {profile && (
-          <>
-            <Route path="/cms" element={<CMSDashboardNew />} />
-            <Route path="/cms/old" element={<CMSDashboard />} />
-            <Route path="/cms/problems" element={<ProblemManagement />} />
-            <Route path="/cms/problems/new" element={<AddProblemNew />} />
-            <Route path="/cms/problems/:id" element={<AddProblem />} />
-            <Route path="/cms/textbooks" element={<TextbookManagementNew />} />
-            <Route path="/cms/textbooks/old" element={<TextbookManagement />} />
-            <Route path="/cms/problem-sets" element={<ProblemSetManagement />} />
-            <Route path="/cms/distributions" element={<DistributionManagement />} />
-            <Route path="/cms/distributions/:distributionId" element={<DistributionDetail />} />
-            <Route path="/cms/search" element={<ProblemSearch />} />
-            <Route path="/cms/analytics" element={<Analytics />} />
-            <Route path="/cms/import" element={<PdfImport />} />
-            <Route path="/cms/import/:jobId" element={<PdfReview />} />
-          </>
-        )}
-
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-
-      <Toaster />
-    </div>
+      {/* 레거시 리다이렉트 */}
+      <Route path="/cms/import" element={<Navigate to="/cms/textbooks" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 
@@ -72,6 +59,7 @@ function App() {
     <AuthProvider>
       <Router>
         <AppContent />
+        <Toaster />
       </Router>
     </AuthProvider>
   );

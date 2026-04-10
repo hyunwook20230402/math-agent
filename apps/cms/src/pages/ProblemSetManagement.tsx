@@ -29,6 +29,7 @@ import { useAuth } from '@shared/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
 import { problemSetApi, problemApi } from '@shared/lib/api';
 import type { ProblemSetWithProblems, FolderWithChildren, Problem } from '@shared/types/database';
+import { useTextbook } from '@/context/TextbookContext';
 
 interface ProblemSetFormData {
   name: string;
@@ -40,6 +41,7 @@ interface ProblemSetFormData {
 const ProblemSetManagement = () => {
   const { profile } = useAuth();
   const navigate = useNavigate();
+  const { selectedTextbook, breadcrumb } = useTextbook();
   const [problemSets, setProblemSets] = useState<ProblemSetWithProblems[]>([]);
   const [folders, setFolders] = useState<FolderWithChildren[]>([]);
   const [problems, setProblems] = useState<Problem[]>([]);
