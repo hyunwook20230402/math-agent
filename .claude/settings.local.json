@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(xargs -I {} sh -c 'echo \"=== {} ===\" && head -50 {}')",
+      "Bash(gh api:*)",
+      "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(x['path']\\) for x in data.get\\('tree',[]\\)]\")",
+      "Bash(python3 -c \"import json,sys; [print\\(x['name'],x['type']\\) for x in json.load\\(sys.stdin\\)]\")",
+      "Bash(gh auth:*)",
+      "Bash(git clone:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)"
+    ]
+  }
+}

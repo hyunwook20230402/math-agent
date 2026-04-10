@@ -1,0 +1,31 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 배경 그라데이션 -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#8B5CF6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#EC4899;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- 배경 -->
+  <rect width="1200" height="630" fill="url(#bgGradient)"/>
+  
+  <!-- 수학 기호들 -->
+  <text x="100" y="150" font-family="Arial, sans-serif" font-size="80" font-weight="bold" fill="white" opacity="0.3">+</text>
+  <text x="1000" y="200" font-family="Arial, sans-serif" font-size="60" font-weight="bold" fill="white" opacity="0.3">×</text>
+  <text x="150" y="500" font-family="Arial, sans-serif" font-size="70" font-weight="bold" fill="white" opacity="0.3">÷</text>
+  <text x="1050" y="450" font-family="Arial, sans-serif" font-size="65" font-weight="bold" fill="white" opacity="0.3">=</text>
+  
+  <!-- 메인 제목 -->
+  <text x="600" y="280" font-family="Arial, sans-serif" font-size="72" font-weight="bold" fill="white" text-anchor="middle">수학 학습 관리</text>
+  
+  <!-- 부제목(영문 삭제) -->
+  <!-- 영문 부제목 삭제 요청에 따라 제거되었습니다. -->
+  
+  <!-- 설명 -->
+  <text x="600" y="400" font-family="Arial, sans-serif" font-size="24" font-weight="normal" fill="white" text-anchor="middle" opacity="0.8">학생들의 수학 학습을 체계적으로 관리하고 분석하는 플랫폼</text>
+  
+  <!-- 하단 정보 -->
+  <text x="600" y="550" font-family="Arial, sans-serif" font-size="20" font-weight="normal" fill="white" text-anchor="middle" opacity="0.7">선생님과 학생을 위한 스마트한 수학 학습 관리</text>
+</svg>

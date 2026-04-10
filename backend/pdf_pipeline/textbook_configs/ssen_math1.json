@@ -1,0 +1,34 @@
+{
+  "name": "쎈 수학1",
+  "category": "쎈",
+  "subject": "공통수학1",
+  "layout": "two_column",
+  "problem_number_pattern": "^\\d{3,4}$",
+  "difficulty_mapping": {
+    "A": "easy",
+    "B": "medium",
+    "C": "hard"
+  },
+  "chapters": [
+    {
+      "name": "다항식",
+      "subchapters": ["다항식의 연산", "항등식과 나머지정리", "인수분해"],
+      "page_range": [1, 50]
+    },
+    {
+      "name": "방정식과 부등식",
+      "subchapters": ["복소수", "이차방정식", "이차방정식과 이차함수", "여러 가지 방정식", "여러 가지 부등식"],
+      "page_range": [51, 110]
+    },
+    {
+      "name": "경우의 수",
+      "subchapters": ["순열과 조합"],
+      "page_range": [111, 140]
+    },
+    {
+      "name": "행렬",
+      "subchapters": ["행렬과 그 연산", "역행렬과 연립방정식"],
+      "page_range": [141, 184]
+    }
+  ]
+}
