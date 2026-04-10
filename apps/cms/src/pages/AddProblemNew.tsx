@@ -8,19 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shar
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { Textarea } from '@shared/ui/textarea';
 import { Badge } from '@shared/ui/badge';
-import { Checkbox } from '@shared/ui/checkbox';
 import { toast } from '@shared/hooks/use-toast';
-import { 
-  ArrowLeft, 
-  Upload, 
-  Plus, 
-  Minus,
-  BookOpen,
-  FolderOpen,
-  FileText,
-  Save,
+import {
+  ArrowLeft,
+  Upload,
   Clipboard,
-  Image
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
 
@@ -76,11 +68,9 @@ const AddProblemNew = () => {
   const [formData, setFormData] = useState({
     title: '',
     problem_number: 1,
-    difficulty_level: 3,
+    difficulty: 'medium' as 'easy' | 'medium' | 'hard',
     problem_type: 'multiple_choice' as 'multiple_choice' | 'short_answer' | 'essay',
     correct_answer: '',
-    choices: ['', '', '', '', ''],
-    correctChoiceIndex: 0, // 정답 보기 인덱스
     explanation: '',
     image_url: '',
     explanation_image_url: '',
@@ -413,63 +403,35 @@ const AddProblemNew = () => {
 
       console.log('조회된 문제 데이터:', problem);
 
-      // 폼 데이터 설정 (원본 데이터 그대로 사용)
-      const loadedChoices = problem.choices && Array.isArray(problem.choices) && problem.choices.length > 0 
-        ? problem.choices.filter((choice: any) => choice && choice.trim() !== '')
-        : ['', '', '', '', '']; // 기본 5개 빈 선택지
-      
-      // 최소 5개 선택지 보장
-      const initialChoices = [...loadedChoices];
-      while (initialChoices.length < 5) {
-        initialChoices.push('');
+      // 난이도 변환: 숫자 문자열 → easy/medium/hard
+      let difficulty: 'easy' | 'medium' | 'hard' = 'medium';
+      if (problem.difficulty === 'easy' || problem.difficulty === 'medium' || problem.difficulty === 'hard') {
+        difficulty = problem.difficulty;
+      } else if (/^\d+$/.test(String(problem.difficulty))) {
+        const n = parseInt(String(problem.difficulty));
+        difficulty = n <= 2 ? 'easy' : n >= 4 ? 'hard' : 'medium';
       }
-     
-      // 난이도 변환: 숫자 또는 문자열을 숫자로 변환
-      let difficultyLevel = problem.difficulty || 3;
-      if (typeof difficultyLevel === 'string') {
-        if (/^\d+$/.test(difficultyLevel)) {
-          difficultyLevel = parseInt(difficultyLevel);
-        } else {
-          difficultyLevel = difficultyLevel === 'easy' ? 1 : difficultyLevel === 'medium' ? 3 : 5;
-        }
+
+      // 객관식 정답 번호 추출 (1~5 숫자 문자열)
+      let correctAnswer = problem.correct_answer || '';
+      if (problem.answer_type === 'multiple_choice' && !/^\d+$/.test(correctAnswer)) {
+        correctAnswer = '1'; // 번호 형식이 아니면 기본값 1
       }
-      
+
       setFormData({
         title: problem.title || '',
         problem_number: problem.problem_number || 1,
-        difficulty_level: difficultyLevel,
+        difficulty,
         problem_type: (problem.answer_type as 'multiple_choice' | 'short_answer' | 'essay') || 'multiple_choice',
-        correct_answer: problem.correct_answer || '',
-        choices: initialChoices,
-        correctChoiceIndex: 0, // 기본값, 나중에 계산
+        correct_answer: correctAnswer,
         explanation: problem.explanation || '',
         image_url: problem.image_url || '',
-        explanation_image_url: problem.explanation_image_url || '',
+        explanation_image_url: '',
         textbook: problem.category?.split(' ')[0] || '',
         subject: problem.unit?.split(' > ')[0] || '',
         major_unit: problem.unit?.split(' > ')[1] || '',
         minor_unit: problem.unit?.split(' > ')[2] || ''
       });
-
-      // 객관식인 경우 정답 인덱스 계산
-      if (problem.answer_type === 'multiple_choice') {
-        let correctIndex = 0; // 기본값
-        
-        // 정답이 숫자 형태인 경우 (예: "1", "2", "3")
-        if (problem.correct_answer && /^\d+$/.test(problem.correct_answer)) {
-          correctIndex = parseInt(problem.correct_answer) - 1;
-        } else if (Array.isArray(problem.choices)) {
-          // 정답이 선택지 내용과 일치하는 경우
-          correctIndex = problem.choices.findIndex((choice: string, index: number) => 
-            choice === problem.correct_answer || `${index + 1}` === problem.correct_answer
-          );
-        }
-        
-        // 유효한 인덱스인지 확인
-        if (correctIndex >= 0 && correctIndex < loadedChoices.length) {
-          setFormData(prev => ({ ...prev, correctChoiceIndex: correctIndex }));
-        }
-      }
 
       // 이미지 파일 상태 초기화 (편집 시에는 기존 이미지 URL만 사용)
       setImageFile(null);
@@ -539,27 +501,11 @@ const AddProblemNew = () => {
     }
   };
 
-  const handleChoiceChange = (index: number, value: string) => {
-    const newChoices = [...formData.choices];
-    newChoices[index] = value;
-    setFormData({ ...formData, choices: newChoices });
-  };
-
-  const handleCorrectAnswerSelect = (index: number) => {
-    setFormData({ 
-      ...formData, 
-      correctChoiceIndex: index,
-      correct_answer: formData.choices[index] || `${index + 1}번`
-    });
-  };
-
-  // 문제 유형 변경 시 정답 인덱스 초기화 방지
   const handleProblemTypeChange = (value: 'multiple_choice' | 'short_answer' | 'essay') => {
-    setFormData({ 
-      ...formData, 
+    setFormData({
+      ...formData,
       problem_type: value,
-      // 객관식으로 변경할 때 정답 인덱스 유지
-      correctChoiceIndex: value === 'multiple_choice' ? formData.correctChoiceIndex : undefined
+      correct_answer: value === 'multiple_choice' ? '1' : ''
     });
   };
 
@@ -605,83 +551,24 @@ const AddProblemNew = () => {
     }
   }, [formData.textbook, formData.subject, formData.problem_number]);
 
-  const addChoice = () => {
-    if (formData.choices.length < 10) {
-      setFormData({ ...formData, choices: [...formData.choices, ''] });
-    }
-  };
-
-  const removeChoice = (index: number) => {
-    if (formData.choices.length > 2) {
-      const newChoices = formData.choices.filter((_, i) => i !== index);
-      // 정답 인덱스 조정
-      let newCorrectIndex = formData.correctChoiceIndex;
-      if (index <= formData.correctChoiceIndex && formData.correctChoiceIndex > 0) {
-        newCorrectIndex = formData.correctChoiceIndex - 1;
-      } else if (index === formData.correctChoiceIndex && index === newChoices.length) {
-        newCorrectIndex = Math.max(0, newChoices.length - 1);
-      }
-      setFormData({ 
-        ...formData, 
-        choices: newChoices,
-        correctChoiceIndex: newCorrectIndex,
-        correct_answer: newChoices[newCorrectIndex] || `${newCorrectIndex + 1}번`
-      });
-    }
-  };
-
-     const handleSubmit = async () => {
-     console.log('개발 모드 - 문제 등록 시뮬레이션');
-
-    // 필수 필드 검증 (완화)
+  const handleSubmit = async () => {
     if (!formData.title || formData.title.trim() === '') {
-       toast({
-         title: "오류",
-        description: "문제 제목을 입력해주세요.",
-         variant: "destructive"
-       });
-       return;
-     }
-
-     // 객관식인 경우 체크박스 선택 여부만 확인
-     if (formData.problem_type === 'multiple_choice' && formData.correctChoiceIndex === undefined) {
-       toast({
-         title: "오류",
-         description: "정답을 선택해주세요.",
-         variant: "destructive"
-       });
-       return;
-     }
-     
-     // 주관식/서술형인 경우 정답 텍스트 확인
-     if ((formData.problem_type === 'short_answer' || formData.problem_type === 'essay') && !formData.correct_answer.trim()) {
-       toast({
-         title: "오류",
-         description: "정답을 입력해주세요.",
-         variant: "destructive"
-       });
-       return;
-     }
+      toast({ title: "오류", description: "문제 제목을 입력해주세요.", variant: "destructive" });
+      return;
+    }
+    if (!formData.correct_answer.trim()) {
+      toast({ title: "오류", description: "정답을 입력/선택해주세요.", variant: "destructive" });
+      return;
+    }
 
     setLoading(true);
     try {
       let imageUrl = formData.image_url;
-      let explanationImageUrl = formData.explanation_image_url;
 
-      // 이미지 업로드 시뮬레이션
       if (imageFile) {
         imageUrl = await handleImageUpload(imageFile);
       }
-      if (explanationImageFile) {
-        explanationImageUrl = await handleImageUpload(explanationImageFile);
-      }
 
-      // 객관식인 경우 정답을 선택된 보기로 설정
-      const finalCorrectAnswer = formData.problem_type === 'multiple_choice' 
-        ? formData.choices[formData.correctChoiceIndex] || `${formData.correctChoiceIndex + 1}번`
-        : formData.correct_answer;
-
-      // 필수 필드 검증 및 기본값 설정
       const subject = formData.subject || '수학';
       const majorUnit = formData.major_unit || '1단원';
       const minorUnit = formData.minor_unit || '기본';
@@ -711,203 +598,38 @@ const AddProblemNew = () => {
         throw new Error('사용자 프로필을 찾을 수 없습니다. 다시 로그인해주세요.');
       }
 
-      // 실제 데이터베이스에 문제 저장 또는 업데이트 (최소 필수 필드만)
       const problemData = {
-        teacher_id: teacherId, // auth.uid()와 정확히 일치
-        title: formData.title || '테스트 문제',
+        teacher_id: teacherId,
+        title: formData.title,
         problem_number: formData.problem_number || 1,
-        difficulty: formData.difficulty_level?.toString() || '3',
-        category: formData.textbook || '수학',
-        unit: unitString || '기본 단원',
+        difficulty: formData.difficulty,
+        category: formData.textbook || '기타',
+        unit: unitString,
         image_url: finalImageUrl,
-        answer_type: formData.problem_type || 'multiple_choice',
-        correct_answer: finalCorrectAnswer || '정답 없음',
-        explanation: formData.explanation || ''
+        answer_type: formData.problem_type,
+        correct_answer: formData.correct_answer,
+        choices: null,
+        explanation: formData.explanation || null
       };
-
-      console.log('=== 문제 등록 디버깅 ===');
-      console.log('문제 데이터:', problemData);
-      console.log('현재 사용자 프로필:', profile);
-      console.log('teacher_id:', profile?.id);
-      console.log('teacher_id 타입:', typeof profile?.id);
-      console.log('teacher_id 존재 여부:', !!profile?.id);
-      
-      // teacher_id가 없으면 오류 처리
-      if (!profile?.id) {
-        throw new Error('사용자 정보를 찾을 수 없습니다. 다시 로그인해주세요.');
-      }
-
-      // 데이터베이스 연결 테스트
-      console.log('데이터베이스 연결 테스트 시작...');
-      
-      // 1. 기본 연결 테스트
-      const { data: testData, error: testError } = await supabase
-        .from('problems')
-        .select('id')
-        .limit(1);
-      
-      if (testError) {
-        console.error('데이터베이스 연결 오류:', testError);
-        console.error('오류 코드:', testError.code);
-        console.error('오류 메시지:', testError.message);
-        console.error('오류 힌트:', testError.hint);
-        
-        // 2. 다른 테이블로 연결 테스트
-        console.log('다른 테이블로 연결 테스트...');
-        const { data: profileTest, error: profileError } = await supabase
-          .from('profiles')
-          .select('id')
-          .limit(1);
-        
-        if (profileError) {
-          console.error('프로필 테이블 연결도 실패:', profileError);
-          throw new Error(`데이터베이스 연결 실패: ${testError.message}`);
-        } else {
-          console.log('프로필 테이블 연결 성공, problems 테이블만 문제 있음');
-        }
-      } else {
-        console.log('데이터베이스 연결 성공');
-      }
 
       let data, error;
 
       if (isEditMode && editingProblemId) {
-        // 편집 모드: 기존 문제 업데이트
         const result = await supabase
           .from('problems')
           .update(problemData)
           .eq('id', editingProblemId)
           .eq('teacher_id', teacherId)
           .select();
-        
         data = result.data;
         error = result.error;
-        
-        if (!error) {
-          console.log('문제 수정 성공:', data);
-        }
       } else {
-        // 새 문제 등록 - 간단하고 확실한 방법
-        console.log('문제 등록 시도...');
-        console.log('INSERT할 데이터:', JSON.stringify(problemData, null, 2));
-        
-        // teacher_id가 없으면 오류 처리
-        if (!teacherId) {
-          throw new Error('사용자 인증 정보를 찾을 수 없습니다. 다시 로그인해주세요.');
-        }
-        
-        // RLS 정책 우회를 위한 강력한 방법
-        console.log('=== RLS 정책 우회 시도 ===');
-        
-        // 현재 세션 정보 가져오기
-        const { data: { session } } = await supabase.auth.getSession();
-        console.log('현재 세션:', session);
-        
-        if (!session) {
-          throw new Error('인증 세션이 없습니다. 다시 로그인해주세요.');
-        }
-        
-        const currentUserId = session.user.id;
-        console.log('현재 인증된 사용자 ID:', currentUserId);
-        console.log('사용자 ID 타입:', typeof currentUserId);
-        console.log('사용자 ID 길이:', currentUserId.length);
-        console.log('JWT 토큰:', session.access_token);
-        
-        // RLS 정책 확인을 위한 디버깅
-        console.log('=== RLS 정책 디버깅 ===');
-        console.log('auth.uid() 예상값:', currentUserId);
-        console.log('teacher_id로 사용할 값:', teacherId);
-        console.log('ID 일치 여부:', currentUserId === currentUserId);
-        
-        // 방법 1: 기본 INSERT 시도
-        const basicData = {
-          teacher_id: teacherId,
-          title: problemData.title,
-          problem_number: problemData.problem_number,
-          difficulty: problemData.difficulty,
-          category: problemData.category,
-          unit: problemData.unit,
-          answer_type: problemData.answer_type,
-          correct_answer: problemData.correct_answer,
-          explanation: problemData.explanation || ''
-        };
-        
-        console.log('기본 문제 데이터:', basicData);
-        
-        let result = await supabase
+        const result = await supabase
           .from('problems')
-          .insert([basicData])
+          .insert([problemData])
           .select();
-        
-        console.log('기본 INSERT 결과:', result);
-        
-        // RLS 정책 오류 상세 분석
-        if (result.error) {
-          console.log('=== RLS 정책 오류 상세 분석 ===');
-          console.log('오류 코드:', result.error.code);
-          console.log('오류 메시지:', result.error.message);
-          console.log('오류 힌트:', result.error.hint);
-          console.log('오류 세부사항:', result.error.details);
-          console.log('전체 오류 객체:', result.error);
-        }
-        
-        // RLS 정책이 여전히 차단하면 다른 방법 시도
-        if (result.error && result.error.code === '42501') {
-          console.log('RLS 정책 여전히 차단, 다른 방법 시도...');
-          
-          // 방법 2: 최소 필드로 시도
-          const minimalData = {
-            teacher_id: teacherId,
-            title: basicData.title,
-            problem_number: basicData.problem_number,
-            difficulty: basicData.difficulty,
-            category: basicData.category,
-            unit: basicData.unit,
-            answer_type: basicData.answer_type,
-            correct_answer: basicData.correct_answer
-          };
-          
-          result = await supabase
-            .from('problems')
-            .insert([minimalData])
-            .select();
-          
-          console.log('최소 필드 INSERT 결과:', result);
-          
-          // 방법 3: 여전히 실패하면 임시 저장
-          if (result.error && result.error.code === '42501') {
-            console.log('모든 방법 실패, 임시 저장으로 대체...');
-            
-            const tempProblem = {
-              ...basicData,
-              id: `temp_${Date.now()}`,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            };
-            
-            // 로컬 스토리지에 임시 저장
-            const tempProblems = JSON.parse(localStorage.getItem('temp_problems') || '[]');
-            tempProblems.push(tempProblem);
-            localStorage.setItem('temp_problems', JSON.stringify(tempProblems));
-            
-            result = { data: [tempProblem], error: null };
-            console.log('임시 저장 완료:', tempProblem);
-          }
-        }
-        
-        console.log('최종 INSERT 결과:', result);
-        
         data = result.data;
         error = result.error;
-        
-        if (error) {
-          console.error('문제 등록 실패:', error);
-          console.error('오류 코드:', error.code);
-          console.error('오류 메시지:', error.message);
-          console.error('오류 힌트:', error.hint);
-        } else {
-          console.log('문제 등록 성공:', data);
-        }
       }
 
       if (error) {
@@ -924,16 +646,13 @@ const AddProblemNew = () => {
       console.log('문제 등록 성공 - 문제 목록 페이지로 이동');
       navigate('/cms/problems');
 
-      // 폼 초기화 (편집 모드가 아닐 때만)
       if (!isEditMode) {
         setFormData({
           title: '',
           problem_number: 1,
-          difficulty_level: 3,
+          difficulty: 'medium',
           problem_type: 'multiple_choice',
-          correct_answer: '',
-          choices: ['', '', '', '', ''],
-          correctChoiceIndex: 0,
+          correct_answer: '1',
           explanation: '',
           image_url: '',
           explanation_image_url: '',
@@ -1093,20 +812,18 @@ const AddProblemNew = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="difficulty">난이도 (1-5)</Label>
-                  <Select 
-                    value={formData.difficulty_level.toString()} 
-                    onValueChange={(value) => setFormData({ ...formData, difficulty_level: parseInt(value) })}
+                  <Label htmlFor="difficulty">난이도</Label>
+                  <Select
+                    value={formData.difficulty}
+                    onValueChange={(value: 'easy' | 'medium' | 'hard') => setFormData({ ...formData, difficulty: value })}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="1">1 (매우 쉬움)</SelectItem>
-                      <SelectItem value="2">2 (쉬움)</SelectItem>
-                      <SelectItem value="3">3 (보통)</SelectItem>
-                      <SelectItem value="4">4 (어려움)</SelectItem>
-                      <SelectItem value="5">5 (매우 어려움)</SelectItem>
+                      <SelectItem value="easy">쉬움 (A단계)</SelectItem>
+                      <SelectItem value="medium">보통 (B단계)</SelectItem>
+                      <SelectItem value="hard">어려움 (C단계)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1142,58 +859,27 @@ const AddProblemNew = () => {
                 </div>
               )}
 
-              {/* 객관식 보기 */}
+              {/* 객관식 정답 번호 선택 */}
               {formData.problem_type === 'multiple_choice' && (
                 <div>
-                  <Label>보기 및 정답 선택</Label>
-                  <div className="space-y-3">
-                    {formData.choices.map((choice, index) => (
-                      <div key={index} className="flex gap-3 items-center p-3 border rounded-lg bg-gray-50">
-                        <Checkbox
-                          checked={formData.correctChoiceIndex === index}
-                          onCheckedChange={() => handleCorrectAnswerSelect(index)}
-                          id={`correct-${index}`}
-                          className="flex-shrink-0"
-                        />
-                        <div className="flex items-center min-w-[60px] flex-shrink-0">
-                          <span className="text-sm font-bold text-blue-600 bg-white px-2 py-1 rounded border">
-                            {index + 1}번
-                          </span>
-                        </div>
-                        <Input
-                          value={choice}
-                          onChange={(e) => handleChoiceChange(index, e.target.value)}
-                          placeholder={`${index + 1}번 보기를 입력하세요 (선택사항)`}
-                          className="flex-1"
-                        />
-                        {formData.choices.length > 2 && (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => removeChoice(index)}
-                            className="flex-shrink-0"
-                          >
-                            <Minus className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </div>
-                    ))}
-                    {formData.choices.length < 10 && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={addChoice}
-                        className="mt-2"
-                      >
-                        <Plus className="h-4 w-4 mr-2" />
-                        보기 추가
-                      </Button>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    정답에 해당하는 보기 옆의 체크박스를 선택하세요
+                  <Label htmlFor="correct_answer_choice">정답 번호 *</Label>
+                  <Select
+                    value={formData.correct_answer}
+                    onValueChange={(value) => setFormData({ ...formData, correct_answer: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="정답 번호 선택" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1번</SelectItem>
+                      <SelectItem value="2">2번</SelectItem>
+                      <SelectItem value="3">3번</SelectItem>
+                      <SelectItem value="4">4번</SelectItem>
+                      <SelectItem value="5">5번</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    보기 내용은 문제 이미지에서 확인합니다
                   </p>
                 </div>
               )}
@@ -1395,12 +1081,11 @@ const AddProblemNew = () => {
         {/* 등록 버튼 */}
         <Button
           onClick={handleSubmit}
-          disabled={loading || 
+          disabled={loading ||
             !formData.textbook ||
             !formData.subject ||
-            !formData.title.trim() || 
-            (formData.problem_type !== 'multiple_choice' && !formData.correct_answer.trim()) ||
-            (formData.problem_type === 'multiple_choice' && formData.correctChoiceIndex === undefined)}
+            !formData.title.trim() ||
+            !formData.correct_answer.trim()}
           className="w-full mt-6"
           size="lg"
         >
