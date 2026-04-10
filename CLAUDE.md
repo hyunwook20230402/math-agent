@@ -118,6 +118,15 @@ import type { Database } from '@shared/types/database';
 
 ---
 
+## 비용 절감 규칙
+
+- 파일 탐색/검색 → subagent에 위임 (haiku 모델 자동 적용)
+- 단순 CRUD, 컴포넌트 작성에 Opus 사용 금지 (Sonnet으로 충분)
+- 대규모 리팩터링·탐색 완료 후 구현 시작 전 `/compact` 실행
+- `--no-verify` 사용 금지 (hook으로 차단됨)
+
+---
+
 ## 향후 작업
 
 - [ ] PDF 자동 추출 파이프라인 (`backend/pdf_pipeline/`)
