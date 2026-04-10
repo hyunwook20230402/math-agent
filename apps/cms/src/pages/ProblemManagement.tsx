@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Button } from '@shared/ui/button';
+import { Input } from '@shared/ui/input';
+import { Badge } from '@shared/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { 
   Plus, 
   Search, 
@@ -22,9 +22,9 @@ import {
   ChevronsRight
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
-import { problemApi } from '@/lib/api';
-import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@shared/hooks/useAuth';
+import { problemApi } from '@shared/lib/api';
+import { supabase } from '@shared/supabase/client';
 
 // 데이터베이스에서 가져온 실제 문제 타입
 interface Problem {

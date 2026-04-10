@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Badge } from '@shared/ui/badge';
+import { Progress } from '@shared/ui/progress';
 import { 
   TrendingUp, 
   Target, 
@@ -14,8 +14,8 @@ import {
   Star,
   Clock
 } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@shared/supabase/client';
+import { useAuth } from '@shared/hooks/useAuth';
 
 interface Achievement {
   id: string;

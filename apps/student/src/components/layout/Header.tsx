@@ -1,7 +1,7 @@
-import { useAuth } from '@/hooks/useAuth';
-import { Button } from '@/components/ui/button';
+import { useAuth } from '@shared/hooks/useAuth';
+import { Button } from '@shared/ui/button';
 import { LogOut, User, Library } from 'lucide-react';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@shared/ui/avatar';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const Header = () => {

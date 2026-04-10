@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Checkbox } from '@/components/ui/checkbox';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Button } from '@shared/ui/button';
+import { Input } from '@shared/ui/input';
+import { Badge } from '@shared/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@shared/ui/dialog';
+import { Label } from '@shared/ui/label';
+import { Textarea } from '@shared/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
+import { Checkbox } from '@shared/ui/checkbox';
 import { 
   Plus, 
   Copy, 
@@ -25,10 +25,10 @@ import {
   Share,
   FileText
 } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@shared/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
-import { problemSetApi, problemApi } from '@/lib/api';
-import type { ProblemSetWithProblems, FolderWithChildren, Problem } from '@/types/database';
+import { problemSetApi, problemApi } from '@shared/lib/api';
+import type { ProblemSetWithProblems, FolderWithChildren, Problem } from '@shared/types/database';
 
 interface ProblemSetFormData {
   name: string;

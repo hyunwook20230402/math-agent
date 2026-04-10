@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { supabase } from '@shared/supabase/client';
+import { Button } from '@shared/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
 
 const EmailConfirm = () => {

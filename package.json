@@ -1,0 +1,8 @@
+{
+  "name": "math-lms",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "shared"
+  ]
+}

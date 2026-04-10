@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { supabase } from '@/integrations/supabase/client';
+import { supabase } from '@shared/supabase/client';
 
 // ===== 프로필 관련 API =====
 export const profileApi = {

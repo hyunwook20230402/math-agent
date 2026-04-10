@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Button } from '@shared/ui/button';
+import { Input } from '@shared/ui/input';
+import { Badge } from '@shared/ui/badge';
+import { Checkbox } from '@shared/ui/checkbox';
+import { Calendar } from '@shared/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import { 
   Users, 
   BookOpen, 
@@ -18,8 +18,8 @@ import {
   Target
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@shared/supabase/client';
+import { useAuth } from '@shared/hooks/useAuth';
 
 interface ProblemSet {
   id: string;

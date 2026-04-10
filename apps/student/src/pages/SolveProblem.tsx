@@ -1,12 +1,12 @@
 // @ts-nocheck
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
-import { Badge } from '@/components/ui/badge';
-import { toast } from '@/hooks/use-toast';
+import { useAuth } from '@shared/hooks/useAuth';
+import { Button } from '@shared/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Progress } from '@shared/ui/progress';
+import { Badge } from '@shared/ui/badge';
+import { toast } from '@shared/hooks/use-toast';
 import { 
   ArrowLeft, 
   ArrowRight, 
@@ -17,8 +17,8 @@ import {
   Send,
   AlertCircle
 } from 'lucide-react';
-import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@/lib/api';
-import type { DistributionWithDetails } from '@/types/database';
+import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@shared/lib/api';
+import type { DistributionWithDetails } from '@shared/types/database';
 
 interface Problem {
   id: string;

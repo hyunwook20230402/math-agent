@@ -1,8 +1,8 @@
 // @ts-nocheck
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Button } from '@shared/ui/button';
+import { Badge } from '@shared/ui/badge';
 import { 
   Users, 
   Calendar, 
@@ -14,9 +14,9 @@ import {
   Trash2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
-import { distributionApi, studentAnswerApi } from '@/lib/api';
-import type { DistributionWithDetails } from '@/types/database';
+import { useAuth } from '@shared/hooks/useAuth';
+import { distributionApi, studentAnswerApi } from '@shared/lib/api';
+import type { DistributionWithDetails } from '@shared/types/database';
 
 const DistributionManagement = () => {
   const navigate = useNavigate();

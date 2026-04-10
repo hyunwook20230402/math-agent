@@ -1,9 +1,9 @@
 // @ts-nocheck
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Button } from '@shared/ui/button';
+import { Badge } from '@shared/ui/badge';
+import { Progress } from '@shared/ui/progress';
 import { 
   BookOpen, 
   Target, 
@@ -17,19 +17,19 @@ import {
   Star
 } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
-import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@/lib/api';
+import { useAuth } from '@shared/hooks/useAuth';
+import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@shared/lib/api';
 import { format } from 'date-fns';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Calendar } from '@shared/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import { DateRange } from 'react-day-picker';
 import type { 
   DistributionWithDetails, 
   StudentAnswer, 
   WrongAnswer,
   StudentAchievementWithDetails 
-} from '@/types/database';
-import { toast } from '@/components/ui/use-toast';
+} from '@shared/types/database';
+import { toast } from '@shared/ui/use-toast';
 
 interface RecentActivity {
   id: string;

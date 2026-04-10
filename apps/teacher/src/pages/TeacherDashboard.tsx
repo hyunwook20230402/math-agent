@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Button } from '@shared/ui/button';
+import { Input } from '@shared/ui/input';
+import { Badge } from '@shared/ui/badge';
+import { Avatar, AvatarFallback, AvatarImage } from '@shared/ui/avatar';
 import { 
   Users, 
   Plus, 
@@ -21,10 +21,10 @@ import {
   Award,
   BookOpen
 } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@shared/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
-import { profileApi, distributionApi, studentApi } from '@/lib/api';
-import type { Profile, DistributionWithDetails } from '@/types/database';
+import { profileApi, distributionApi, studentApi } from '@shared/lib/api';
+import type { Profile, DistributionWithDetails } from '@shared/types/database';
 
 
 interface RecentActivity {

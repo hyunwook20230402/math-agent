@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { useAuth } from '@/hooks/useAuth';
-import { toast } from '@/hooks/use-toast';
+import { useAuth } from '@shared/hooks/useAuth';
+import { toast } from '@shared/hooks/use-toast';
 
 const AuthForm = () => {
   const [isLogin, setIsLogin] = useState(true);

@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Button } from '@shared/ui/button';
+import { Badge } from '@shared/ui/badge';
+import { Progress } from '@shared/ui/progress';
+import { Avatar, AvatarFallback, AvatarImage } from '@shared/ui/avatar';
 import { 
   ArrowLeft,
   CalendarIcon,
@@ -18,18 +18,18 @@ import {
   User,
   BarChart3
 } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
-import { distributionApi, studentAnswerApi, wrongAnswerApi, studentApi } from '@/lib/api';
+import { useAuth } from '@shared/hooks/useAuth';
+import { distributionApi, studentAnswerApi, wrongAnswerApi, studentApi } from '@shared/lib/api';
 import { format } from 'date-fns';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Calendar } from '@shared/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import { DateRange } from 'react-day-picker';
 import type { 
   DistributionWithDetails, 
   StudentAnswer, 
   WrongAnswer,
   Profile
-} from '@/types/database';
+} from '@shared/types/database';
 
 interface StudentStats {
   totalProblems: number;

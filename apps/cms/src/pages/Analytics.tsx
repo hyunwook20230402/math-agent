@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Button } from '@shared/ui/button';
+import { Badge } from '@shared/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { 
   BarChart3, 
   TrendingUp, 
@@ -14,9 +14,9 @@ import {
   CheckCircle
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
-import { problemApi, problemSetApi, distributionApi } from '@/lib/api';
-import type { Problem, ProblemSet, DistributionWithDetails } from '@/types/database';
+import { useAuth } from '@shared/hooks/useAuth';
+import { problemApi, problemSetApi, distributionApi } from '@shared/lib/api';
+import type { Problem, ProblemSet, DistributionWithDetails } from '@shared/types/database';
 
 const Analytics = () => {
   const navigate = useNavigate();

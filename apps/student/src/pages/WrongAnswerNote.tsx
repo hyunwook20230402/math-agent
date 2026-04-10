@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { Button } from '@shared/ui/button';
+import { Badge } from '@shared/ui/badge';
 import { 
   BookOpen, 
   AlertCircle, 
@@ -10,9 +10,9 @@ import {
   XCircle,
   ArrowLeft
 } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@shared/hooks/useAuth';
 import { useNavigate, useParams } from 'react-router-dom';
-import { studentAnswerApi, distributionApi } from '@/lib/api';
+import { studentAnswerApi, distributionApi } from '@shared/lib/api';
 
 interface WrongProblem {
   id: string;
