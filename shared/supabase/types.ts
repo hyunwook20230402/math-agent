@@ -23,7 +23,7 @@ export type Database = {
           difficulty: string
           explanation: string | null
           id: string
-          image_url: string
+          image_url: string | null
           problem_number: number
           teacher_id: string
           title: string
@@ -38,7 +38,7 @@ export type Database = {
           difficulty: string
           explanation?: string | null
           id?: string
-          image_url: string
+          image_url?: string | null
           problem_number: number
           teacher_id: string
           title: string
@@ -53,7 +53,7 @@ export type Database = {
           difficulty?: string
           explanation?: string | null
           id?: string
-          image_url?: string
+          image_url?: string | null
           problem_number?: number
           teacher_id?: string
           title?: string
