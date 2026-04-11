@@ -38,6 +38,9 @@ def insert_staging_problems(job_id: str, teacher_id: str, problems: list) -> lis
             "confidence": p.get("confidence", 0.5),
             "category": p.get("category"),
             "status": "pending",
+            "bbox": p.get("bbox"),
+            "source_page_image_url": p.get("source_page_image_url"),
+            "page_number": p.get("page_number"),
         }
         if p.get("textbook_id"):
             row["textbook_id"] = p["textbook_id"]
@@ -73,6 +76,50 @@ def update_staging_status(staging_id: str, status: str, updates: dict | None = N
     result = (
         client.table("problem_staging")
         .update(payload)
+        .eq("id", staging_id)
+        .execute()
+    )
+    return result.data[0] if result.data else {}
+
+
+def get_staging_by_page(job_id: str, page_number: int) -> list:
+    """특정 페이지의 staging 문제 목록 조회"""
+    client = get_client()
+    result = (
+        client.table("problem_staging")
+        .select("*")
+        .eq("job_id", job_id)
+        .eq("page_number", page_number)
+        .order("problem_number")
+        .execute()
+    )
+    return result.data
+
+
+def update_staging_bbox(staging_id: str, bbox: dict, new_image_url: str) -> dict:
+    """staging 문제의 bbox + 이미지 URL 갱신"""
+    client = get_client()
+    result = (
+        client.table("problem_staging")
+        .update({"bbox": bbox, "source_image_url": new_image_url, "status": "modified"})
+        .eq("id", staging_id)
+        .execute()
+    )
+    return result.data[0] if result.data else {}
+
+
+def delete_staging(staging_id: str) -> None:
+    """staging 문제 삭제"""
+    client = get_client()
+    client.table("problem_staging").delete().eq("id", staging_id).execute()
+
+
+def update_staging_image(staging_id: str, new_image_url: str) -> dict:
+    """staging 문제의 이미지 URL 업데이트 (개별 이미지 교체용)"""
+    client = get_client()
+    result = (
+        client.table("problem_staging")
+        .update({"source_image_url": new_image_url, "status": "pending"})
         .eq("id", staging_id)
         .execute()
     )

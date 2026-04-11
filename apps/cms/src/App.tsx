@@ -10,6 +10,7 @@ import TextbookManagementNew from '@/pages/TextbookManagementNew';
 import AddProblem from '@/pages/AddProblem';
 import AddProblemNew from '@/pages/AddProblemNew';
 import PdfReview from '@/pages/PdfReview';
+import ProblemDetail from '@/pages/ProblemDetail';
 
 function AppContent() {
   const { profile, loading } = useAuth();
@@ -34,6 +35,7 @@ function AppContent() {
           <Route path="problems/new" element={<AddProblemNew />} />
           <Route path="problems/:id" element={<AddProblem />} />
           <Route path="import/:jobId" element={<PdfReview />} />
+          <Route path="pdf-review/:jobId/details" element={<ProblemDetail />} />
         </Route>
       )}
 

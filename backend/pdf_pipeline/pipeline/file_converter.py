@@ -18,14 +18,33 @@ def extract_text_from_pdf(pdf_path: str) -> List[Dict]:
     return pages
 
 
-def extract_images_from_pdf(pdf_path: str, output_dir: str, dpi: int = 200) -> List[Dict]:
-    """이미지형 PDF(스캔본)에서 페이지별 이미지 저장"""
+def extract_images_from_pdf(
+    pdf_path: str,
+    output_dir: str,
+    dpi: int = 200,
+    page_start: int = None,
+    page_end: int = None,
+) -> List[Dict]:
+    """이미지형 PDF(스캔본)에서 페이지별 이미지 저장
+
+    Args:
+        page_start: 시작 페이지 (1-indexed, None이면 처음부터)
+        page_end: 끝 페이지 (1-indexed, None이면 마지막까지)
+    """
     doc = fitz.open(pdf_path)
+    total = len(doc)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
+    # 0-indexed 범위 계산
+    start_idx = (page_start - 1) if page_start else 0
+    end_idx = page_end if page_end else total
+    start_idx = max(0, min(start_idx, total - 1))
+    end_idx = max(start_idx + 1, min(end_idx, total))
+
     pages = []
-    for i, page in enumerate(doc):
+    for i in range(start_idx, end_idx):
+        page = doc[i]
         mat = fitz.Matrix(dpi / 72, dpi / 72)
         pix = page.get_pixmap(matrix=mat)
         img_path = str(output_path / f"page_{i + 1:03d}.png")

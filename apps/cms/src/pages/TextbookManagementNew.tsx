@@ -100,6 +100,54 @@ const TextbookManagementNew = () => {
   const [chapterForm, setChapterForm] = useState({ name: '', description: '', sort_order: 1 });
   const [subchapterForm, setSubchapterForm] = useState({ name: '', description: '', sort_order: 1 });
 
+  // 인라인 리네임 상태
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = React.useRef<HTMLInputElement>(null);
+
+  const startRename = (id: string, currentName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRenamingId(id);
+    setRenameValue(currentName);
+    setTimeout(() => renameInputRef.current?.focus(), 50);
+  };
+
+  const cancelRename = () => {
+    setRenamingId(null);
+    setRenameValue('');
+  };
+
+  const commitRename = async (type: 'textbook' | 'chapter' | 'subchapter', id: string) => {
+    const name = renameValue.trim();
+    if (!name) { cancelRename(); return; }
+    const table = type === 'textbook' ? 'textbooks' : type === 'chapter' ? 'chapters' : 'subchapters';
+    const { error } = await supabase.from(table).update({ name }).eq('id', id);
+    if (error) {
+      toast({ title: '오류', description: '이름 변경에 실패했습니다.', variant: 'destructive' });
+    } else {
+      if (type === 'textbook') {
+        setTextbooks(prev => prev.map(t => t.id === id ? { ...t, name } : t));
+        if (selectedTextbook?.id === id) { setSelectedTextbook(prev => prev ? { ...prev, name } : prev); ctxSetTextbook({ ...selectedTextbook!, name }); }
+      } else if (type === 'chapter') {
+        setChapters(prev => {
+          const next = { ...prev };
+          for (const k of Object.keys(next)) next[k] = next[k].map(c => c.id === id ? { ...c, name } : c);
+          return next;
+        });
+        if (selectedChapter?.id === id) { setSelectedChapter(prev => prev ? { ...prev, name } : prev); ctxSetChapter({ ...selectedChapter!, name }); }
+      } else {
+        setSubchapters(prev => {
+          const next = { ...prev };
+          for (const k of Object.keys(next)) next[k] = next[k].map(s => s.id === id ? { ...s, name } : s);
+          return next;
+        });
+        if (selectedSubchapter?.id === id) { setSelectedSubchapter(prev => prev ? { ...prev, name } : prev); ctxSetSubchapter({ ...selectedSubchapter!, name }); }
+      }
+      toast({ title: '변경 완료', description: `이름이 "${name}"으로 변경되었습니다.` });
+    }
+    cancelRename();
+  };
+
   useEffect(() => {
     fetchTextbooks();
   }, []);
@@ -344,10 +392,28 @@ const TextbookManagementNew = () => {
                       <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                     )}
                     <BookOpen className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                    <span className="text-sm truncate flex-1">{textbook.name}</span>
-                    <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100">
-                      {textbook.grade?.replace('학교 ', '')}
-                    </span>
+                    {renamingId === textbook.id ? (
+                      <input
+                        ref={renameInputRef}
+                        className="text-sm flex-1 border-b border-primary bg-transparent outline-none px-0.5"
+                        value={renameValue}
+                        onChange={e => setRenameValue(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') commitRename('textbook', textbook.id); if (e.key === 'Escape') cancelRename(); }}
+                        onBlur={() => commitRename('textbook', textbook.id)}
+                        onClick={e => e.stopPropagation()}
+                      />
+                    ) : (
+                      <>
+                        <span className="text-sm truncate flex-1">{textbook.name}</span>
+                        <button
+                          className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5 rounded transition-opacity"
+                          onClick={e => startRename(textbook.id, textbook.name, e)}
+                          title="이름 변경"
+                        >
+                          <Edit className="h-3 w-3" />
+                        </button>
+                      </>
+                    )}
                   </div>
 
                   {/* 대단원 목록 */}
@@ -370,7 +436,28 @@ const TextbookManagementNew = () => {
                                 <ChevronRight className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
                               )}
                               <FolderOpen className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
-                              <span className="text-sm truncate flex-1">{chapter.name}</span>
+                              {renamingId === chapter.id ? (
+                                <input
+                                  ref={renameInputRef}
+                                  className="text-sm flex-1 border-b border-primary bg-transparent outline-none px-0.5"
+                                  value={renameValue}
+                                  onChange={e => setRenameValue(e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter') commitRename('chapter', chapter.id); if (e.key === 'Escape') cancelRename(); }}
+                                  onBlur={() => commitRename('chapter', chapter.id)}
+                                  onClick={e => e.stopPropagation()}
+                                />
+                              ) : (
+                                <>
+                                  <span className="text-sm truncate flex-1">{chapter.name}</span>
+                                  <button
+                                    className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5 rounded transition-opacity"
+                                    onClick={e => startRename(chapter.id, chapter.name, e)}
+                                    title="이름 변경"
+                                  >
+                                    <Edit className="h-3 w-3" />
+                                  </button>
+                                </>
+                              )}
                             </div>
 
                             {/* 중단원 목록 */}
@@ -379,11 +466,32 @@ const TextbookManagementNew = () => {
                                 {chapterSubchapters.map(sub => (
                                   <div
                                     key={sub.id}
-                                    className={`flex items-center gap-1 pl-14 pr-3 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors text-sm ${selectedSubchapter?.id === sub.id ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'}`}
+                                    className={`flex items-center gap-1 pl-14 pr-3 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors text-sm group ${selectedSubchapter?.id === sub.id ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'}`}
                                     onClick={() => selectSubchapter(sub)}
                                   >
                                     <FileText className="h-3 w-3 flex-shrink-0" />
-                                    <span className="truncate">{sub.name}</span>
+                                    {renamingId === sub.id ? (
+                                      <input
+                                        ref={renameInputRef}
+                                        className="text-sm flex-1 border-b border-primary bg-transparent outline-none px-0.5"
+                                        value={renameValue}
+                                        onChange={e => setRenameValue(e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') commitRename('subchapter', sub.id); if (e.key === 'Escape') cancelRename(); }}
+                                        onBlur={() => commitRename('subchapter', sub.id)}
+                                        onClick={e => e.stopPropagation()}
+                                      />
+                                    ) : (
+                                      <>
+                                        <span className="truncate flex-1">{sub.name}</span>
+                                        <button
+                                          className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5 rounded transition-opacity"
+                                          onClick={e => startRename(sub.id, sub.name, e)}
+                                          title="이름 변경"
+                                        >
+                                          <Edit className="h-3 w-3" />
+                                        </button>
+                                      </>
+                                    )}
                                   </div>
                                 ))}
                                 {/* 중단원 추가 */}

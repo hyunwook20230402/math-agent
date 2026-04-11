@@ -4,10 +4,8 @@ import { useAuth } from '@shared/hooks/useAuth';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@shared/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { toast } from '@shared/hooks/use-toast';
-import { Upload, FileText, Loader2 } from 'lucide-react';
+import { Upload, FileText, Loader2, AlertTriangle } from 'lucide-react';
 import type { Textbook, Chapter } from '@shared/types/database';
 
 const PIPELINE_URL = 'http://localhost:8000';
@@ -28,6 +26,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
   const [pageEnd, setPageEnd] = useState('');
   const [uploading, setUploading] = useState(false);
   const [jobStatus, setJobStatus] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const statusLabel: Record<string, string> = {
     queued: '대기 중',
@@ -45,6 +44,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
     if (!file || !profile) return;
 
     setUploading(true);
+    setErrorMessage(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -69,7 +69,6 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
 
       const data = await res.json();
 
-      // 추출 시작
       const extractRes = await fetch(`${PIPELINE_URL}/api/extract/${data.job_id}`, {
         method: 'POST',
       });
@@ -82,6 +81,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
       toast({ title: '추출 시작', description: '문제 추출 중입니다...' });
       startPolling(data.job_id);
     } catch (e: any) {
+      setErrorMessage(e.message);
       toast({ title: '오류', description: e.message, variant: 'destructive' });
       setUploading(false);
     }
@@ -103,6 +103,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
         } else if (job.status === 'error') {
           clearInterval(interval);
           setUploading(false);
+          setErrorMessage(job.error || '추출 실패');
           toast({ title: '오류', description: job.error || '추출 실패', variant: 'destructive' });
         }
       } catch {
@@ -117,33 +118,41 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
     setPageStart('');
     setPageEnd('');
     setJobStatus(null);
+    setErrorMessage(null);
     setUploading(false);
   };
 
+  if (!open) return null;
+
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!uploading) { onOpenChange(v); if (!v) resetForm(); } }}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>PDF에서 문제 가져오기</DialogTitle>
-          <DialogDescription>
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+      <div
+        className="fixed inset-0 bg-black/80"
+        onClick={() => { if (!uploading) { onOpenChange(false); resetForm(); } }}
+      />
+      <div className="relative z-[10000] bg-background border rounded-lg shadow-lg w-full max-w-md p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold">PDF에서 문제 가져오기</h2>
+          <p className="text-sm text-muted-foreground">
             <span className="font-medium text-foreground">{textbook.name}</span>
             {chapter && <span> &gt; {chapter.name}</span>}
             에 문제를 등록합니다
-          </DialogDescription>
-        </DialogHeader>
+          </p>
+        </div>
 
         <div className="space-y-4">
           <div>
             <Label>교재 종류</Label>
-            <Select value={category} onValueChange={setCategory}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="쎈">쎈</SelectItem>
-                <SelectItem value="모의고사">모의고사</SelectItem>
-                <SelectItem value="연산">연산</SelectItem>
-                <SelectItem value="자작">자작</SelectItem>
-              </SelectContent>
-            </Select>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+            >
+              <option value="쎈">쎈</option>
+              <option value="모의고사">모의고사</option>
+              <option value="연산">연산</option>
+              <option value="자작">자작</option>
+            </select>
           </div>
 
           <div>
@@ -196,9 +205,19 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
               {statusLabel[jobStatus] || jobStatus}
             </div>
           )}
+
+          {errorMessage && (
+            <div className="flex items-start gap-3 p-3 rounded-lg border border-destructive/50 bg-destructive/10 text-destructive text-sm">
+              <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">추출 실패</p>
+                <p className="mt-1">{errorMessage}</p>
+              </div>
+            </div>
+          )}
         </div>
 
-        <DialogFooter>
+        <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={() => { onOpenChange(false); resetForm(); }} disabled={uploading}>
             취소
           </Button>
@@ -209,9 +228,9 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
               <><Upload className="h-4 w-4 mr-2" />업로드 및 추출</>
             )}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      </div>
+    </div>
   );
 };
 

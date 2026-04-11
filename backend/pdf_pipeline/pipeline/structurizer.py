@@ -1,77 +1,160 @@
-"""Qwen2.5-7B (Ollama) 를 사용해 문제 텍스트 → 구조화 JSON"""
+"""크롭 이미지 구조화: Surya OCR + Qwen2.5-7B (Ollama)"""
 import json
+import re
+import tempfile
+
 import httpx
+from PIL import Image
+
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL
 
-SYSTEM_PROMPT = """당신은 수학 문제를 구조화하는 전문가입니다.
-주어진 문제 텍스트를 분석해서 다음 JSON 형식으로 반환하세요.
-반드시 JSON만 반환하고, 다른 텍스트는 포함하지 마세요.
+# 모델 (싱글턴, VRAM 관리)
+_ocr_predictor = None
+_texify_model = None
+_texify_processor = None
 
-{
-  "problem_number": <문제 번호 정수>,
-  "answer_type": "multiple_choice" 또는 "short_answer",
-  "correct_answer": <객관식이면 "1"~"5" 중 하나, 주관식이면 정답 문자열>,
-  "difficulty": "easy" 또는 "medium" 또는 "hard",
-  "unit": <단원명 (알 수 없으면 null)>,
-  "explanation": <해설 텍스트 (없으면 null)>,
-  "confidence": <0.0~1.0, 추출 신뢰도>
-}
+
+def _get_ocr_predictor():
+  global _ocr_predictor
+  if _ocr_predictor is None:
+    from surya.recognition import RecognitionPredictor
+    _ocr_predictor = RecognitionPredictor()
+  return _ocr_predictor
+
+
+def _get_texify():
+  global _texify_model, _texify_processor
+  if _texify_model is None:
+    from texify.model.model import load_model
+    from texify.model.processor import load_processor
+    _texify_model = load_model()
+    _texify_processor = load_processor()
+  return _texify_model, _texify_processor
+
+
+def release_surya_models():
+  """OCR/Texify 모델 VRAM 해제"""
+  global _ocr_predictor, _texify_model, _texify_processor
+  if _ocr_predictor is not None:
+    del _ocr_predictor
+    _ocr_predictor = None
+  if _texify_model is not None:
+    del _texify_model
+    _texify_model = None
+  if _texify_processor is not None:
+    del _texify_processor
+    _texify_processor = None
+  try:
+    import torch
+    if torch.cuda.is_available():
+      torch.cuda.empty_cache()
+  except ImportError:
+    pass
+
+
+def ocr_image(image_path: str) -> str:
+  """Surya OCR로 이미지에서 한국어+영어 텍스트 추출"""
+  predictor = _get_ocr_predictor()
+  img = Image.open(image_path).convert("RGB")
+  predictions = predictor([img], languages=["ko", "en"])
+  if predictions and len(predictions) > 0:
+    lines = [line.text for line in predictions[0].text_lines]
+    return "\n".join(lines)
+  return ""
+
+
+def texify_image(image_path: str) -> str:
+  """Texify로 이미지에서 LaTeX 수식 추출"""
+  from texify.inference import batch_inference
+  model, processor = _get_texify()
+  img = Image.open(image_path).convert("RGB")
+  results = batch_inference([img], model, processor)
+  if results and len(results) > 0:
+    return results[0]
+  return ""
+
+
+def structurize_with_llm(ocr_text: str, latex_text: str) -> dict:
+  """Qwen2.5-7B (Ollama)로 OCR 결과를 구조화 JSON으로 변환"""
+  prompt = f"""다음은 수학 문제의 OCR 결과입니다. JSON으로 정리하세요.
+
+OCR 텍스트:
+{ocr_text}
+
+LaTeX 수식:
+{latex_text}
+
+다음 JSON 형식으로만 응답하세요 (다른 텍스트 없이):
+{{
+  "problem_text": "순수 텍스트 (수식은 자연어로 풀어서 작성)",
+  "problem_latex": "전체 문제 텍스트 (수식은 $..$ LaTeX 표기 사용)",
+  "topic_tags": ["과목", "대단원", "소주제"]
+}}
 
 규칙:
-- answer_type이 multiple_choice이면 correct_answer는 반드시 "1"~"5" 사이 숫자 문자열
-- 보기 내용(①②③④⑤)은 correct_answer에 포함하지 말 것
-- 난이도 판단: 계산 위주=easy, 개념 응용=medium, 종합 사고=hard
-"""
+- 보기 번호(①②③④⑤)와 내용 포함
+- 그래프/도형은 [그래프: y=f(x)] 형태로 기술
+- topic_tags는 한국 수학 교육과정 기준 (공통수학1, 공통수학2, 미적분, 확률과통계, 기하)
+- JSON만 출력하세요"""
+
+  try:
+    resp = httpx.post(
+      f"{OLLAMA_BASE_URL}/api/generate",
+      json={
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.1, "num_predict": 1024},
+      },
+      timeout=120,
+    )
+    resp.raise_for_status()
+    raw = resp.json().get("response", "")
+    return _parse_json_response(raw)
+  except Exception as e:
+    return {
+      "problem_text": ocr_text,
+      "problem_latex": latex_text,
+      "topic_tags": [],
+      "error": str(e),
+    }
 
 
-async def structurize_problem(problem_text: str, problem_number: int) -> dict:
-    """문제 텍스트를 LLM으로 구조화"""
-    prompt = f"다음 수학 문제를 구조화하세요:\n\n{problem_text}"
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "system": SYSTEM_PROMPT,
-                "stream": False,
-                "format": "json",
-            },
-        )
-        response.raise_for_status()
-        result = response.json()
-
+def _parse_json_response(raw: str) -> dict:
+  """LLM 응답에서 JSON 추출"""
+  match = re.search(r'\{[\s\S]*\}', raw)
+  if match:
     try:
-        parsed = json.loads(result["response"])
-    except (json.JSONDecodeError, KeyError):
-        # LLM 응답 파싱 실패 시 기본값
-        parsed = {
-            "problem_number": problem_number,
-            "answer_type": "short_answer",
-            "correct_answer": "",
-            "difficulty": "medium",
-            "unit": None,
-            "explanation": None,
-            "confidence": 0.1,
-        }
-
-    parsed.setdefault("problem_number", problem_number)
-    parsed.setdefault("confidence", 0.5)
-    return parsed
+      return json.loads(match.group())
+    except json.JSONDecodeError:
+      pass
+  return {"problem_text": raw, "problem_latex": "", "topic_tags": []}
 
 
-async def structurize_problems_batch(
-    problems: list,
-    category: str = "기타",
-) -> list:
-    """여러 문제를 순차적으로 구조화"""
-    results = []
-    for p in problems:
-        structured = await structurize_problem(p["text"], p["problem_number"])
-        structured["problem_text"] = p["text"]
-        structured["category"] = category
-        if structured.get("unit") is None:
-            structured["unit"] = "미분류"
-        results.append(structured)
-    return results
+def structurize_problem(image_path: str) -> dict:
+  """단일 문제 이미지 → 구조화 결과
+
+  Args:
+    image_path: 크롭된 문제 이미지 경로
+
+  Returns:
+    {"problem_text": str, "problem_latex": str, "topic_tags": list[str]}
+  """
+  ocr_text = ocr_image(image_path)
+  latex_text = texify_image(image_path)
+  result = structurize_with_llm(ocr_text, latex_text)
+  return {
+    "problem_text": result.get("problem_text", ocr_text),
+    "problem_latex": result.get("problem_latex", latex_text),
+    "topic_tags": result.get("topic_tags", []),
+  }
+
+
+def download_image(url: str) -> str:
+  """Supabase Storage URL에서 이미지 다운로드 → 임시 파일 경로 반환"""
+  resp = httpx.get(url, timeout=30)
+  resp.raise_for_status()
+  tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+  tmp.write(resp.content)
+  tmp.close()
+  return tmp.name

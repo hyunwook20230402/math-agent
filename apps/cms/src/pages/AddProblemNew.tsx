@@ -5,7 +5,6 @@ import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { Textarea } from '@shared/ui/textarea';
 import { Badge } from '@shared/ui/badge';
 import { toast } from '@shared/hooks/use-toast';
@@ -13,6 +12,7 @@ import {
   ArrowLeft,
   Upload,
   Clipboard,
+  Save,
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
 
@@ -727,74 +727,68 @@ const AddProblemNew = () => {
               {/* 교재 */}
               <div>
                 <Label htmlFor="textbook">교재 *</Label>
-                <Select value={formData.textbook} onValueChange={(value) => setFormData({ ...formData, textbook: value })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="교재 선택" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {textbookOptions.map(option => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <select
+                  value={formData.textbook}
+                  onChange={(e) => setFormData({ ...formData, textbook: e.target.value })}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                >
+                  <option value="">교재 선택</option>
+                  {textbookOptions.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* 과목/대단원/중단원 */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="subject">과목 *</Label>
-                  <Select value={formData.subject} onValueChange={handleSubjectChange}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="과목 선택" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {subjectOptions.map(option => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <select
+                    value={formData.subject}
+                    onChange={(e) => handleSubjectChange(e.target.value)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                  >
+                    <option value="">과목 선택</option>
+                    {subjectOptions.map(option => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <Label htmlFor="major_unit">대단원 *</Label>
-                  <Select 
-                    value={formData.major_unit} 
-                    onValueChange={handleMajorUnitChange}
+                  <select
+                    value={formData.major_unit}
+                    onChange={(e) => handleMajorUnitChange(e.target.value)}
                     disabled={!formData.subject}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder={formData.subject ? "대단원 선택" : "먼저 과목을 선택하세요"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableMajorUnits.map(option => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    <option value="">{formData.subject ? "대단원 선택" : "먼저 과목을 선택하세요"}</option>
+                    {availableMajorUnits.map(option => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <Label htmlFor="minor_unit">중단원 *</Label>
-                  <Select 
-                    value={formData.minor_unit} 
-                    onValueChange={(value) => setFormData({ ...formData, minor_unit: value })}
+                  <select
+                    value={formData.minor_unit}
+                    onChange={(e) => setFormData({ ...formData, minor_unit: e.target.value })}
                     disabled={!formData.major_unit}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder={formData.major_unit ? "중단원 선택" : "먼저 대단원을 선택하세요"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableMinorUnits.map(option => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    <option value="">{formData.major_unit ? "중단원 선택" : "먼저 대단원을 선택하세요"}</option>
+                    {availableMinorUnits.map(option => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -828,37 +822,29 @@ const AddProblemNew = () => {
                 </div>
                 <div>
                   <Label htmlFor="difficulty">난이도</Label>
-                  <Select
+                  <select
                     value={formData.difficulty}
-                    onValueChange={(value: 'easy' | 'medium' | 'hard') => setFormData({ ...formData, difficulty: value })}
+                    onChange={(e) => setFormData({ ...formData, difficulty: e.target.value as 'easy' | 'medium' | 'hard' })}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
                   >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="easy">쉬움 (A단계)</SelectItem>
-                      <SelectItem value="medium">보통 (B단계)</SelectItem>
-                      <SelectItem value="hard">어려움 (C단계)</SelectItem>
-                    </SelectContent>
-                  </Select>
+                    <option value="easy">쉬움 (A단계)</option>
+                    <option value="medium">보통 (B단계)</option>
+                    <option value="hard">어려움 (C단계)</option>
+                  </select>
                 </div>
               </div>
 
               <div>
                 <Label htmlFor="problem_type">문제 유형</Label>
-                <Select 
-                  value={formData.problem_type} 
-                  onValueChange={handleProblemTypeChange}
+                <select
+                  value={formData.problem_type}
+                  onChange={(e) => handleProblemTypeChange(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="multiple_choice">객관식</SelectItem>
-                    <SelectItem value="short_answer">주관식</SelectItem>
-                    <SelectItem value="essay">서술형</SelectItem>
-                  </SelectContent>
-                </Select>
+                  <option value="multiple_choice">객관식</option>
+                  <option value="short_answer">주관식</option>
+                  <option value="essay">서술형</option>
+                </select>
               </div>
 
               {/* 정답 (주관식/서술형용) */}
@@ -878,21 +864,18 @@ const AddProblemNew = () => {
               {formData.problem_type === 'multiple_choice' && (
                 <div>
                   <Label htmlFor="correct_answer_choice">정답 번호 *</Label>
-                  <Select
+                  <select
                     value={formData.correct_answer}
-                    onValueChange={(value) => setFormData({ ...formData, correct_answer: value })}
+                    onChange={(e) => setFormData({ ...formData, correct_answer: e.target.value })}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder="정답 번호 선택" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1">1번</SelectItem>
-                      <SelectItem value="2">2번</SelectItem>
-                      <SelectItem value="3">3번</SelectItem>
-                      <SelectItem value="4">4번</SelectItem>
-                      <SelectItem value="5">5번</SelectItem>
-                    </SelectContent>
-                  </Select>
+                    <option value="">정답 번호 선택</option>
+                    <option value="1">1번</option>
+                    <option value="2">2번</option>
+                    <option value="3">3번</option>
+                    <option value="4">4번</option>
+                    <option value="5">5번</option>
+                  </select>
                   <p className="text-xs text-muted-foreground mt-1">
                     보기 내용은 문제 이미지에서 확인합니다
                   </p>
