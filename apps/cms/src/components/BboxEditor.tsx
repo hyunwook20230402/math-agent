@@ -27,6 +27,7 @@ interface Props {
   pageHeight: number;
   items: BboxItem[];
   onChange: (items: BboxItem[]) => void;
+  resetKey?: number; // 값 변경 시 선택 해제
 }
 
 const HANDLE_SIZE = 10; // 모서리 핸들 크기 (px, canvas 좌표)
@@ -43,10 +44,15 @@ type DragMode =
 
 type ResizeHandle = 'tl' | 'tr' | 'bl' | 'br';
 
-export default function BboxEditor({ pageImageUrl, pageWidth, pageHeight, items, onChange }: Props) {
+export default function BboxEditor({ pageImageUrl, pageWidth, pageHeight, items, onChange, resetKey }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [scale, setScale] = useState(1);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+
+  // resetKey 변경 시 선택 해제
+  useEffect(() => {
+    setSelectedIdx(null);
+  }, [resetKey]);
   const dragRef = useRef<DragMode>({ type: 'none' });
   const itemsRef = useRef<BboxItem[]>(items);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -191,13 +197,14 @@ export default function BboxEditor({ pageImageUrl, pageWidth, pageHeight, items,
     const cy = e.clientY - rect.top;
 
     if (e.button === 2) {
-      // 우클릭: 삭제
+      // 우클릭: 박스 위에서만 삭제, 빈 곳 우클릭은 무시
       const hit = hitTest(cx, cy);
       if (hit) {
         const next = reorder(itemsRef.current.filter((_, i) => i !== hit.idx));
         setSelectedIdx(null);
         onChange(next);
       }
+      // hit 없으면 아무것도 안 함 (선택 해제 방지)
       return;
     }
 
@@ -282,6 +289,7 @@ export default function BboxEditor({ pageImageUrl, pageWidth, pageHeight, items,
   };
 
   const onMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.button === 2) return; // 우클릭은 onMouseDown에서만 처리
     const canvas = canvasRef.current;
     const drag = dragRef.current;
     dragRef.current = { type: 'none' };

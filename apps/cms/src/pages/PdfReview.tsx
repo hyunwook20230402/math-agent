@@ -5,7 +5,7 @@ import { Button } from '@shared/ui/button';
 import { Card, CardContent, CardHeader } from '@shared/ui/card';
 import { toast } from '@shared/hooks/use-toast';
 import {
-  ArrowLeft, Check, X, CheckCheck, Loader2, BookOpen, RotateCcw, Download,
+  ArrowLeft, Check, X, Loader2, BookOpen, RotateCcw,
 } from 'lucide-react';
 import { useTextbook } from '@/context/TextbookContext';
 import BboxEditor, { type BboxItem } from '@/components/BboxEditor';
@@ -30,13 +30,6 @@ interface StagingProblem {
   page_number: number | null;
   bbox: { x1: number; y1: number; x2: number; y2: number; page_width?: number; page_height?: number } | null;
 }
-
-const statusColor: Record<string, string> = {
-  pending: 'bg-gray-100 text-gray-700',
-  approved: 'bg-green-100 text-green-700',
-  rejected: 'bg-red-100 text-red-700',
-  modified: 'bg-blue-100 text-blue-700',
-};
 
 function toBboxItems(problems: StagingProblem[]): BboxItem[] {
   return problems
@@ -69,17 +62,23 @@ const PdfReview = () => {
 
   const [pages, setPages] = useState<number[]>([]);
   const [activePage, setActivePage] = useState<number>(0);
+  useEffect(() => { activePageRef.current = activePage; }, [activePage]);
 
   // 페이지별 bbox 캐시: 페이지 이동해도 수정 내용 유지
   const [bboxCache, setBboxCache] = useState<Map<number, BboxItem[]>>(new Map());
 
-  // YOLO 재학습용: bbox가 수정+저장된 페이지 번호 추적
+  // 수정 후 저장 완료된 페이지 (YOLO 학습 대상)
   const [modifiedPages, setModifiedPages] = useState<Set<number>>(new Set());
-  const [exportingYolo, setExportingYolo] = useState(false);
+  // 수정했지만 아직 저장 안 한 페이지
+  const [dirtyPages, setDirtyPages] = useState<Set<number>>(new Set());
+  // 저장 버튼 누른 페이지 (탭 ✓ 표시용)
+  const [savedPages, setSavedPages] = useState<Set<number>>(new Set());
+
   const [savingBbox, setSavingBbox] = useState(false);
-  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [bboxResetKey, setBboxResetKey] = useState(0);
 
   const prevActivePageRef = useRef<number | null>(null);
+  const activePageRef = useRef<number>(0);
 
   useEffect(() => {
     if (jobId) loadProblems();
@@ -99,6 +98,17 @@ const PdfReview = () => {
       if (pageNums.length > 0 && prevActivePageRef.current === null) {
         setActivePage(pageNums[0]);
       }
+
+      // 이미 저장된 페이지 복원 (modified/approved 문제가 있는 페이지)
+      const alreadySaved = new Set(
+        list
+          .filter(p => p.status === 'modified' || p.status === 'approved')
+          .map(p => p.page_number)
+          .filter(Boolean) as number[]
+      );
+      if (alreadySaved.size > 0) {
+        setSavedPages(alreadySaved);
+      }
     } catch (e: any) {
       toast({ title: '오류', description: e.message, variant: 'destructive' });
     } finally {
@@ -106,14 +116,25 @@ const PdfReview = () => {
     }
   };
 
-  // 페이지 전환 시 캐시 저장 및 복원
+  // problems만 조용히 갱신 (bboxCache 유지)
+  const refreshProblems = async () => {
+    try {
+      const res = await fetch(`${PIPELINE_URL}/api/staging/${jobId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setProblems(data.problems);
+    } catch {
+      // 무시
+    }
+  };
+
+  // 페이지 전환 시 캐시 초기화 (캐시 없는 페이지만)
   useEffect(() => {
     if (activePage === 0) return;
     if (prevActivePageRef.current === activePage) return;
     prevActivePageRef.current = activePage;
 
     setBboxCache(prev => {
-      // 캐시에 없으면 DB 원본으로 초기화
       if (!prev.has(activePage)) {
         const pageProblems = problems.filter(p => p.page_number === activePage);
         const next = new Map(prev);
@@ -136,7 +157,7 @@ const PdfReview = () => {
   const pageWidth = activePageProblems[0]?.bbox?.page_width || 3509;
   const pageHeight = activePageProblems[0]?.bbox?.page_height || 4963;
 
-  // 현재 페이지에서 bbox가 수정된 stagingId 집합 (캐시 기준)
+  // 현재 페이지에서 bbox가 원본과 다른 stagingId 집합
   const modifiedStagingIds = useMemo(() => {
     const ids = new Set<string>();
     for (const item of bboxItems) {
@@ -148,7 +169,7 @@ const PdfReview = () => {
     return ids;
   }, [bboxItems, problems]);
 
-  // 전체 페이지 중 수정된 stagingId (캐시 전체 기준, 배지용)
+  // 전체 페이지 중 수정된 stagingId (사이드 카드 배지용)
   const allModifiedStagingIds = useMemo(() => {
     const ids = new Set<string>();
     for (const [, items] of bboxCache) {
@@ -163,14 +184,23 @@ const PdfReview = () => {
   }, [bboxCache, problems]);
 
   const newBboxCount = bboxItems.filter(i => i.stagingId === null).length;
+  const currentPageDirty = modifiedStagingIds.size > 0 || newBboxCount > 0;
 
   const handleBboxChange = useCallback((items: BboxItem[]) => {
+    const pg = activePageRef.current;
     setBboxCache(prev => {
       const next = new Map(prev);
-      next.set(activePage, items);
+      next.set(pg, items);
       return next;
     });
-  }, [activePage]);
+    // 수정 발생 → dirtyPages에 추가, savedPages에서 제거
+    setDirtyPages(prev => new Set([...prev, pg]));
+    setSavedPages(prev => {
+      const next = new Set(prev);
+      next.delete(pg);
+      return next;
+    });
+  }, []);
 
   const handleResetBbox = () => {
     const pageProblems = problems.filter(p => p.page_number === activePage);
@@ -179,9 +209,15 @@ const PdfReview = () => {
       next.set(activePage, toBboxItems(pageProblems));
       return next;
     });
+    // 초기화 시 dirty 해제
+    setDirtyPages(prev => {
+      const next = new Set(prev);
+      next.delete(activePage);
+      return next;
+    });
   };
 
-  // bbox 저장 (재크롭 API 호출) - 현재 페이지만
+  // bbox 저장 (재크롭 API 호출)
   const saveBboxForPage = async (pageNum: number): Promise<boolean> => {
     const items = bboxCache.get(pageNum) ?? [];
     const pageProblem = problems.find(p => p.page_number === pageNum);
@@ -208,50 +244,31 @@ const PdfReview = () => {
     return res.ok;
   };
 
-  // 저장(재크롭) 버튼 - 현재 페이지
+  // 저장 버튼
   const handleSaveBbox = async () => {
     setSavingBbox(true);
     try {
       const ok = await saveBboxForPage(activePage);
       if (!ok) throw new Error('bbox 저장 실패');
       toast({ title: '저장 완료', description: '박스가 재크롭되어 저장되었습니다.' });
+
+      // YOLO 학습 대상 마킹
       setModifiedPages(prev => new Set([...prev, activePage]));
-      await loadProblems();
+      // dirty 해제, saved 표시
+      setDirtyPages(prev => {
+        const next = new Set(prev);
+        next.delete(activePage);
+        return next;
+      });
+      setSavedPages(prev => new Set([...prev, activePage]));
+      setBboxResetKey(k => k + 1); // 선택 해제 (노란 박스 → 빨간 박스)
+
+      // bboxCache는 유지 (재수정 지원), problems만 조용히 갱신
+      await refreshProblems();
     } catch (e: any) {
       toast({ title: '오류', description: e.message, variant: 'destructive' });
     } finally {
       setSavingBbox(false);
-    }
-  };
-
-  // ✓ 버튼: bbox 저장 + approved
-  const handleApprove = async (id: string) => {
-    setApprovingId(id);
-    try {
-      const problem = problems.find(p => p.id === id);
-      const pageNum = problem?.page_number;
-
-      // 현재 페이지에 수정된 bbox가 있으면 먼저 저장
-      if (pageNum && (modifiedStagingIds.size > 0 || bboxItems.some(i => i.stagingId === null))) {
-        const ok = await saveBboxForPage(pageNum);
-        if (ok) {
-          setModifiedPages(prev => new Set([...prev, pageNum]));
-          await loadProblems();
-        }
-      }
-
-      // status approved
-      const res = await fetch(`${PIPELINE_URL}/api/staging/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'approved' }),
-      });
-      if (!res.ok) throw new Error('승인 실패');
-      setProblems(prev => prev.map(p => p.id === id ? { ...p, status: 'approved' } : p));
-    } catch (e: any) {
-      toast({ title: '오류', description: e.message, variant: 'destructive' });
-    } finally {
-      setApprovingId(null);
     }
   };
 
@@ -269,56 +286,19 @@ const PdfReview = () => {
     }
   };
 
-  const handleApproveAll = async () => {
-    try {
-      const pendingIds = problems.filter(p => p.status === 'pending').map(p => p.id);
-      await Promise.all(pendingIds.map(id =>
-        fetch(`${PIPELINE_URL}/api/staging/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'approved' }),
-        })
-      ));
-      setProblems(prev => prev.map(p => p.status === 'pending' ? { ...p, status: 'approved' } : p));
-      toast({ title: '전체 승인 완료', description: `${pendingIds.length}개 문제 승인됨` });
-    } catch (e: any) {
-      toast({ title: '오류', description: e.message, variant: 'destructive' });
-    }
-  };
-
-  // YOLO 재학습 데이터 저장 (수정된 페이지만)
-  const handleExportYolo = async () => {
-    if (modifiedPages.size === 0) {
-      toast({ title: '알림', description: '저장(재크롭)된 수정 페이지가 없습니다.', variant: 'destructive' });
+  // 최종 승인 → 상세 입력 페이지로
+  const handleFinalApprove = async () => {
+    // 미저장 수정 있으면 안내
+    if (dirtyPages.size > 0) {
+      const pageList = [...dirtyPages].sort((a, b) => a - b).join(', ');
+      toast({
+        title: '저장되지 않은 수정이 있습니다',
+        description: `${pageList}페이지를 먼저 저장해주세요.`,
+        variant: 'destructive',
+      });
       return;
     }
-    setExportingYolo(true);
-    try {
-      const res = await fetch(`${PIPELINE_URL}/api/export-training-data`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          job_id: jobId,
-          modified_page_numbers: [...modifiedPages],
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || '내보내기 실패');
-      }
-      const data = await res.json();
-      toast({
-        title: 'YOLO 재학습 저장 완료',
-        description: `${data.exported_count}페이지 저장됨 (train: ${data.train}, val: ${data.val})`,
-      });
-    } catch (e: any) {
-      toast({ title: '오류', description: e.message, variant: 'destructive' });
-    } finally {
-      setExportingYolo(false);
-    }
-  };
 
-  const handleFinalApprove = async () => {
     if (!profile) return;
     setApproving(true);
     try {
@@ -329,7 +309,7 @@ const PdfReview = () => {
       });
       if (!res.ok) throw new Error('등록 실패');
       const data = await res.json();
-      toast({ title: '등록 완료', description: data.message });
+      toast({ title: '검수 완료', description: data.message });
       navigate(`/cms/pdf-review/${jobId}/details`);
     } catch (e: any) {
       toast({ title: '오류', description: e.message, variant: 'destructive' });
@@ -338,11 +318,7 @@ const PdfReview = () => {
     }
   };
 
-  const approvedCount = problems.filter(p => p.status === 'approved').length;
   const totalCount = problems.filter(p => p.status !== 'rejected').length;
-
-  // 현재 페이지에 수정 있는지 (저장 버튼 활성화 기준)
-  const currentPageDirty = modifiedStagingIds.size > 0 || newBboxCount > 0;
 
   if (loading) {
     return (
@@ -371,25 +347,13 @@ const PdfReview = () => {
                 {breadcrumb}
               </p>
             )}
-            <p className="text-xs text-muted-foreground">승인됨: {approvedCount} / {totalCount}개</p>
+            <p className="text-xs text-muted-foreground">총 {totalCount}개 문제</p>
           </div>
         </div>
-        <div className="flex gap-2">
-          {modifiedPages.size > 0 && (
-            <Button variant="outline" size="sm" onClick={handleExportYolo} disabled={exportingYolo}>
-              {exportingYolo ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
-              YOLO 재학습 저장 ({modifiedPages.size}페이지)
-            </Button>
-          )}
-          <Button variant="outline" size="sm" onClick={handleApproveAll}>
-            <CheckCheck className="h-4 w-4 mr-1" />
-            전체 승인
-          </Button>
-          <Button size="sm" onClick={handleFinalApprove} disabled={approving || approvedCount === 0}>
-            {approving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
-            상세 입력 ({approvedCount}개)
-          </Button>
-        </div>
+        <Button size="sm" onClick={handleFinalApprove} disabled={approving}>
+          {approving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
+          검수 완료 →
+        </Button>
       </div>
 
       {hasBboxData ? (
@@ -400,12 +364,8 @@ const PdfReview = () => {
             <div className="flex gap-1 px-3 py-2 border-b bg-gray-50 overflow-x-auto shrink-0">
               {pages.map(pg => {
                 const pgProblems = problems.filter(p => p.page_number === pg);
-                const pgItems = bboxCache.get(pg) ?? toBboxItems(pgProblems);
-                const pgModified = pgItems.some(item => {
-                  if (item.stagingId === null) return true;
-                  const orig = problems.find(p => p.id === item.stagingId);
-                  return orig?.bbox ? bboxChanged(item.bbox, orig.bbox) : false;
-                });
+                const isSaved = savedPages.has(pg);
+                const isDirty = dirtyPages.has(pg);
                 return (
                   <button
                     key={pg}
@@ -420,11 +380,11 @@ const PdfReview = () => {
                     <span className="ml-1 text-xs opacity-70">
                       ({pgProblems.length}문제)
                     </span>
-                    {modifiedPages.has(pg) && (
-                      <span className="ml-1 text-xs text-orange-500">✏</span>
+                    {isSaved && !isDirty && (
+                      <span className="ml-1 text-xs text-green-500">✓</span>
                     )}
-                    {pgModified && !modifiedPages.has(pg) && (
-                      <span className="ml-1 text-xs text-yellow-500">●</span>
+                    {isDirty && (
+                      <span className="ml-1 text-xs text-orange-400">●</span>
                     )}
                   </button>
                 );
@@ -457,7 +417,7 @@ const PdfReview = () => {
                         disabled={!currentPageDirty || savingBbox}
                       >
                         {savingBbox ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
-                        저장 (재크롭)
+                        저장
                       </Button>
                     </div>
                   </div>
@@ -467,6 +427,7 @@ const PdfReview = () => {
                     pageHeight={pageHeight}
                     items={bboxItems}
                     onChange={handleBboxChange}
+                    resetKey={bboxResetKey}
                   />
                 </>
               ) : (
@@ -478,73 +439,93 @@ const PdfReview = () => {
           </div>
 
           {/* 우측: 현재 페이지 문제 목록 */}
-          <div className="w-72 flex flex-col overflow-hidden shrink-0">
+          <div className="w-64 flex flex-col overflow-hidden shrink-0">
             <div className="px-3 py-2 border-b bg-gray-50 shrink-0">
               <p className="text-sm font-medium">{activePage}페이지 문제 목록</p>
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-2">
-              {activePageProblems.map(p => {
-                const isBboxModified = allModifiedStagingIds.has(p.id);
-                const isApprovingThis = approvingId === p.id;
-                return (
-                  <Card
-                    key={p.id}
-                    className={`text-sm ${p.status === 'rejected' ? 'opacity-40' : ''}`}
-                  >
-                    <CardHeader className="py-2 px-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1 flex-wrap">
-                          <span className="font-semibold">{p.problem_number}번</span>
-                          <span className={`text-xs px-1.5 py-0.5 rounded-full ${statusColor[p.status]}`}>
-                            {p.status}
-                          </span>
-                          {isBboxModified && (
-                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700">
-                              ✏ bbox수정
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex gap-1">
+              {activePageProblems
+                .filter(p => p.status !== 'rejected')
+                .map(p => {
+                  const isBboxModified = allModifiedStagingIds.has(p.id);
+                  return (
+                    <Card key={p.id} className="text-sm">
+                      <CardHeader className="py-2 px-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span className="font-semibold">{p.problem_number}번</span>
+                            {isBboxModified && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">
+                                ✏ 수정
+                              </span>
+                            )}
+                            {p.confidence < 0.7 && (
+                              <span className="text-xs text-red-500">
+                                {(p.confidence * 100).toFixed(0)}%
+                              </span>
+                            )}
+                          </div>
+                          {/* 거부 버튼만 유지 */}
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-6 px-2 text-green-600"
-                            onClick={() => handleApprove(p.id)}
-                            disabled={p.status === 'approved' || isApprovingThis}
-                          >
-                            {isApprovingThis ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-6 px-2 text-red-600"
+                            className="h-6 px-2 text-red-400 hover:text-red-600"
                             onClick={() => handleReject(p.id)}
-                            disabled={p.status === 'rejected'}
+                            title="이 문제 제외"
                           >
                             <X className="h-3 w-3" />
                           </Button>
                         </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="py-1 px-3">
-                      <div className="text-xs text-muted-foreground">
-                        {p.confidence < 0.7 && (
-                          <span className="text-red-500">신뢰도: {(p.confidence * 100).toFixed(0)}%</span>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+                      </CardHeader>
+                    </Card>
+                  );
+                })}
+              {/* 거부된 문제 (접혀서 표시) */}
+              {activePageProblems.filter(p => p.status === 'rejected').map(p => (
+                <Card key={p.id} className="text-sm opacity-30">
+                  <CardHeader className="py-2 px-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-xs line-through">{p.problem_number}번 (제외됨)</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-gray-400"
+                        onClick={async () => {
+                          const res = await fetch(`${PIPELINE_URL}/api/staging/${p.id}`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ status: 'pending' }),
+                          });
+                          if (res.ok) setProblems(prev => prev.map(x => x.id === p.id ? { ...x, status: 'pending' } : x));
+                        }}
+                        title="제외 취소"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </CardHeader>
+                </Card>
+              ))}
               {/* 새로 추가된 bbox */}
               {bboxItems.filter(i => i.stagingId === null).map((item, idx) => (
                 <Card key={`new-${idx}`} className="text-sm border-blue-200">
                   <CardHeader className="py-2 px-3">
-                    <div className="flex items-center gap-1">
-                      <span className="font-semibold">{item.number}번</span>
-                      <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                        + 신규
-                      </span>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1">
+                        <span className="font-semibold">{item.number}번</span>
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                          + 신규
+                        </span>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-red-400 hover:text-red-600"
+                        onClick={() => handleBboxChange(bboxItems.filter(i => i !== item))}
+                        title="이 박스 삭제"
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
                     </div>
                   </CardHeader>
                 </Card>
@@ -568,15 +549,9 @@ const PdfReview = () => {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xs px-2 py-1 rounded-full ${statusColor[p.status]}`}>{p.status}</span>
-                      <Button size="sm" variant="ghost" className="text-green-600" onClick={() => handleApprove(p.id)} disabled={p.status === 'approved'}>
-                        <Check className="h-4 w-4" />
-                      </Button>
-                      <Button size="sm" variant="ghost" className="text-red-600" onClick={() => handleReject(p.id)} disabled={p.status === 'rejected'}>
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    <Button size="sm" variant="ghost" className="text-red-600" onClick={() => handleReject(p.id)} disabled={p.status === 'rejected'}>
+                      <X className="h-4 w-4" />
+                    </Button>
                   </div>
                 </CardHeader>
                 <CardContent>
@@ -588,6 +563,12 @@ const PdfReview = () => {
                 </CardContent>
               </Card>
             ))}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <Button onClick={handleFinalApprove} disabled={approving}>
+              {approving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
+              검수 완료 →
+            </Button>
           </div>
         </div>
       )}
