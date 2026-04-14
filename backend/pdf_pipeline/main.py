@@ -627,3 +627,398 @@ async def export_training_data(body: ExportRequest):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ── 해설지 파이프라인 ────────────────────────────────────────────
+
+solution_jobs: Dict[str, dict] = {}  # 메모리 진행 상태 캐시
+
+
+class SolutionMatchRequest(BaseModel):
+    problem_job_id: str
+
+
+class SolutionApplyRequest(BaseModel):
+    problem_job_id: str
+    overrides: Optional[list] = None  # [{staging_id, answer, answer_type}, ...]
+
+
+async def _run_solution_extraction(
+    solution_job_id: str,
+    pdf_path: str,
+    teacher_id: str,
+    problem_job_id: Optional[str],
+):
+    """해설지 파이프라인 백그라운드 작업
+
+    1. PDF → 페이지 이미지
+    2. 정답 파싱 (정답표 우선, 없으면 인라인)
+    3. 해설 크롭 + 페이지 걸침 병합
+    4. 해설 이미지 Supabase Storage 업로드
+    5. Qwen2.5-VL 태깅 (progress 업데이트)
+    6. solution_jobs 완료 상태 저장
+    """
+    from pipeline.solution_parser import extract_answers, crop_solutions, merge_cross_page_solutions
+    from pipeline.solution_tagger import tag_all_solutions
+    from storage.supabase_client import update_solution_job
+    from storage.image_uploader import upload_cropped_images
+
+    import tempfile
+
+    def _progress(processed, total, current_number):
+        solution_jobs[solution_job_id]["progress"] = {
+            "processed": processed,
+            "total": total,
+            "current_number": current_number,
+        }
+        update_solution_job(
+            solution_job_id,
+            status="tagging",
+            progress=solution_jobs[solution_job_id]["progress"],
+        )
+
+    try:
+        # 1. 정답 추출
+        solution_jobs[solution_job_id]["status"] = "extracting"
+        update_solution_job(solution_job_id, status="extracting")
+
+        loop = asyncio.get_event_loop()
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            answers = await loop.run_in_executor(
+                executor, extract_answers, pdf_path
+            )
+
+        solution_jobs[solution_job_id]["answers"] = answers
+
+        # 2. 해설 크롭 + 걸침 병합
+        solution_jobs[solution_job_id]["status"] = "cropping"
+        update_solution_job(solution_job_id, status="cropping")
+
+        crop_dir = str(Path(pdf_path).parent / "solution_crops")
+        merged_dir = str(Path(pdf_path).parent / "solution_merged")
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            raw_crops = await loop.run_in_executor(
+                executor, crop_solutions, pdf_path, crop_dir
+            )
+
+        merged_images = await loop.run_in_executor(
+            None, merge_cross_page_solutions, raw_crops, merged_dir
+        )
+
+        # 3. 해설 이미지 Supabase Storage 업로드
+        solution_jobs[solution_job_id]["status"] = "uploading"
+        update_solution_job(solution_job_id, status="uploading")
+
+        upload_items = [
+            {"number": num, "cropped_path": path, "page": 0}
+            for num, path in merged_images.items()
+        ]
+        uploaded = await loop.run_in_executor(
+            None, upload_cropped_images, upload_items, f"solution_{solution_job_id}"
+        )
+        solution_image_urls = {
+            item["number"]: item["source_image_url"]
+            for item in uploaded
+        }
+        solution_jobs[solution_job_id]["solution_image_urls"] = solution_image_urls
+
+        # 4. Qwen2.5-VL 태깅
+        solution_jobs[solution_job_id]["status"] = "tagging"
+        update_solution_job(
+            solution_job_id, status="tagging",
+            progress={"processed": 0, "total": len(merged_images), "current_number": 0}
+        )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            tag_results = await loop.run_in_executor(
+                executor, tag_all_solutions, merged_images, _progress
+            )
+
+        solution_jobs[solution_job_id]["tag_results"] = tag_results
+
+        # 5. 완료
+        update_solution_job(
+            solution_job_id, status="done",
+            progress={"processed": len(merged_images), "total": len(merged_images)}
+        )
+        solution_jobs[solution_job_id]["status"] = "done"
+
+    except Exception as e:
+        solution_jobs[solution_job_id]["status"] = "error"
+        solution_jobs[solution_job_id]["error"] = str(e)
+        update_solution_job(solution_job_id, status="error", error=str(e))
+        raise
+
+
+@app.get("/api/staging/{staging_id}/tags")
+async def get_staging_tags(staging_id: str):
+    """staging 문제의 태그 목록 조회"""
+    from storage.supabase_client import get_problem_tags
+    tags = get_problem_tags(staging_id=staging_id)
+    return tags
+
+
+class TagsUpdateRequest(BaseModel):
+    tags: list  # [{"tag": str, "tag_type": str, "confidence": float, "source": str}]
+
+
+@app.put("/api/staging/{staging_id}/tags")
+async def update_staging_tags(staging_id: str, body: TagsUpdateRequest):
+    """staging 문제의 태그 전체 교체 (수동 편집 포함)"""
+    from storage.supabase_client import upsert_problem_tags, get_client
+
+    # 기존 태그 전체 삭제 후 재삽입
+    client = get_client()
+    client.table("problem_tags").delete().eq("staging_id", staging_id).execute()
+
+    inserted = upsert_problem_tags(body.tags, staging_id=staging_id)
+    return {"count": len(inserted), "tags": inserted}
+
+
+@app.post("/api/solution/upload")
+async def solution_upload(
+    file: UploadFile = File(...),
+    teacher_id: str = Form(...),
+    problem_job_id: Optional[str] = Form(None),
+):
+    """해설지 PDF 업로드 → solution_job_id 반환"""
+    if not file.filename:
+        raise HTTPException(400, "파일명이 없습니다.")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext != ".pdf":
+        raise HTTPException(400, "PDF 파일만 지원합니다.")
+
+    from storage.supabase_client import create_solution_job
+
+    # solution_jobs DB 레코드 생성
+    sol_job = create_solution_job(teacher_id, problem_job_id)
+    solution_job_id = sol_job["id"]
+
+    # 파일 저장
+    save_dir = Path(UPLOAD_DIR) / f"solution_{solution_job_id}"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / file.filename
+
+    content = await file.read()
+    with open(save_path, "wb") as f:
+        f.write(content)
+
+    from storage.supabase_client import update_solution_job
+    update_solution_job(solution_job_id, status="uploaded", pdf_path=str(save_path))
+
+    solution_jobs[solution_job_id] = {
+        "solution_job_id": solution_job_id,
+        "status": "uploaded",
+        "filename": file.filename,
+        "file_path": str(save_path),
+        "teacher_id": teacher_id,
+        "problem_job_id": problem_job_id,
+        "answers": {},
+        "solution_image_urls": {},
+        "tag_results": {},
+        "progress": {},
+        "error": None,
+    }
+
+    return {"solution_job_id": solution_job_id, "filename": file.filename}
+
+
+@app.post("/api/solution/extract/{solution_job_id}")
+async def solution_extract(solution_job_id: str, background_tasks: BackgroundTasks):
+    """해설지 추출 파이프라인 시작 (백그라운드)"""
+    if solution_job_id not in solution_jobs:
+        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+
+    job = solution_jobs[solution_job_id]
+    if job["status"] not in ["uploaded", "error"]:
+        raise HTTPException(400, f"이미 처리 중입니다. 현재 상태: {job['status']}")
+
+    background_tasks.add_task(
+        _run_solution_extraction,
+        solution_job_id,
+        job["file_path"],
+        job["teacher_id"],
+        job.get("problem_job_id"),
+    )
+    solution_jobs[solution_job_id]["status"] = "queued"
+    return {"message": "해설지 추출 시작됨", "solution_job_id": solution_job_id}
+
+
+@app.get("/api/solution/status/{solution_job_id}")
+async def solution_status(solution_job_id: str):
+    """해설지 파이프라인 진행 상황 조회"""
+    if solution_job_id not in solution_jobs:
+        from storage.supabase_client import get_solution_job
+        db_job = get_solution_job(solution_job_id)
+        if not db_job:
+            raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+        return db_job
+    return solution_jobs[solution_job_id]
+
+
+@app.post("/api/solution/match/{solution_job_id}")
+async def solution_match(solution_job_id: str, body: SolutionMatchRequest):
+    """문제 staging ↔ 해설 매칭 결과 미리보기 (DB 반영 없음)"""
+    if solution_job_id not in solution_jobs:
+        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+
+    job = solution_jobs[solution_job_id]
+    if job["status"] != "done":
+        raise HTTPException(400, f"해설지 추출이 완료되지 않았습니다. 현재 상태: {job['status']}")
+
+    from pipeline.solution_matcher import match_solutions_to_problems, summarize_match_results
+    from storage.supabase_client import get_staging_by_job
+
+    staging = get_staging_by_job(body.problem_job_id)
+    if not staging:
+        raise HTTPException(404, "문제 staging 데이터를 찾을 수 없습니다.")
+
+    match_results = match_solutions_to_problems(
+        staging_problems=staging,
+        answers=job["answers"],
+        solution_images={num: "" for num in job["solution_image_urls"]},
+        tag_results=job["tag_results"],
+    )
+
+    # URL 포함 버전으로 교체
+    for sid, data in match_results.items():
+        num = data["problem_number"]
+        data["solution_image_url"] = job["solution_image_urls"].get(num)
+        data.pop("solution_image_local_path", None)
+
+    summary = summarize_match_results(match_results)
+    return {"match_results": match_results, "summary": summary}
+
+
+@app.post("/api/solution/apply/{solution_job_id}")
+async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
+    """매칭 결과를 problem_staging에 반영 + problem_tags 삽입
+
+    overrides가 있으면 해당 staging_id의 answer/answer_type을 override 값으로 사용.
+    """
+    if solution_job_id not in solution_jobs:
+        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+
+    job = solution_jobs[solution_job_id]
+    if job["status"] != "done":
+        raise HTTPException(400, f"해설지 추출이 완료되지 않았습니다. 현재 상태: {job['status']}")
+
+    from pipeline.solution_matcher import match_solutions_to_problems
+    from storage.supabase_client import (
+        get_staging_by_job, update_staging_solution, upsert_problem_tags
+    )
+
+    staging = get_staging_by_job(body.problem_job_id)
+    if not staging:
+        raise HTTPException(404, "문제 staging 데이터를 찾을 수 없습니다.")
+
+    match_results = match_solutions_to_problems(
+        staging_problems=staging,
+        answers=job["answers"],
+        solution_images={num: "" for num in job["solution_image_urls"]},
+        tag_results=job["tag_results"],
+    )
+
+    # override 딕셔너리 생성
+    override_map: dict = {}
+    if body.overrides:
+        for ov in body.overrides:
+            sid = ov.get("staging_id")
+            if sid:
+                override_map[sid] = ov
+
+    applied = 0
+    for sid, data in match_results.items():
+        num = data["problem_number"]
+        sol_url = job["solution_image_urls"].get(num)
+
+        # override 적용
+        ov = override_map.get(sid, {})
+        answer = ov.get("answer", data.get("answer"))
+        answer_type = ov.get("answer_type", data.get("answer_type"))
+
+        # staging 업데이트
+        update_staging_solution(
+            staging_id=sid,
+            solution_image_url=sol_url,
+            solution_summary=data.get("solution_summary"),
+            solution_job_id=solution_job_id,
+            match_confidence=data.get("match_confidence"),
+            correct_answer=answer,
+            answer_type=answer_type,
+        )
+
+        # 태그 삽입
+        tags = []
+        for t in data.get("concept_tags", []):
+            tags.append({
+                "tag": t["tag"],
+                "tag_type": "concept",
+                "confidence": t.get("confidence", 0.5),
+                "source": "ai",
+            })
+        for t in data.get("skill_tags", []):
+            tags.append({
+                "tag": t["tag"],
+                "tag_type": "skill",
+                "confidence": t.get("confidence", 0.5),
+                "source": "ai",
+            })
+        if tags:
+            upsert_problem_tags(tags, staging_id=sid)
+
+        applied += 1
+
+    return {"applied": applied, "message": f"{applied}개 문제에 해설/태그 적용 완료"}
+
+
+@app.post("/api/solution/tag-from-problem/{staging_id}")
+async def tag_from_problem(staging_id: str, background_tasks: BackgroundTasks):
+    """해설 없이 문제 이미지만으로 AI 태깅 (문제 이미지 기반, confidence 낮음)"""
+    from storage.supabase_client import get_client, upsert_problem_tags
+
+    client = get_client()
+    result = (
+        client.table("problem_staging")
+        .select("id, source_image_url, problem_number")
+        .eq("id", staging_id)
+        .single()
+        .execute()
+    )
+    staging = result.data
+    if not staging:
+        raise HTTPException(404, "staging 문제를 찾을 수 없습니다.")
+
+    image_url = staging.get("source_image_url")
+    if not image_url:
+        raise HTTPException(400, "문제 이미지가 없습니다.")
+
+    async def _do_tag():
+        from pipeline.solution_tagger import extract_tags_from_image
+        from pipeline.structurizer import download_image
+        import os
+
+        try:
+            img_path = download_image(image_url)
+            result_data = extract_tags_from_image(img_path, has_solution=False)
+            os.unlink(img_path)
+
+            tags = []
+            for t in result_data.get("concept_tags", []):
+                tags.append({"tag": t["tag"], "tag_type": "concept",
+                              "confidence": t["confidence"], "source": "ai"})
+            for t in result_data.get("skill_tags", []):
+                tags.append({"tag": t["tag"], "tag_type": "skill",
+                              "confidence": t["confidence"], "source": "ai"})
+            if tags:
+                upsert_problem_tags(tags, staging_id=staging_id)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"문제 이미지 태깅 실패 {staging_id}: {e}")
+
+    background_tasks.add_task(_do_tag)
+    return {"message": "태깅 시작됨 (백그라운드)", "staging_id": staging_id}
