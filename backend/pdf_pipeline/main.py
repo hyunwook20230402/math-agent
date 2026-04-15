@@ -1,6 +1,7 @@
 """PDF 문제 자동 추출 파이프라인 — FastAPI 서버 (포트 8000)"""
 import os
 import uuid
+import json
 import asyncio
 from pathlib import Path
 from typing import Dict, Optional
@@ -138,7 +139,8 @@ async def _run_extraction(
                     page_url = upload_page_image(job_id, pnum, ipath)
                     page_image_urls[pnum] = page_url
 
-                    dets = yolo_detect(model, ipath, page_width=pw, conf=0.5, start_number=num)
+                    debug_dir = str(Path(crop_dir).parent / "yolo_debug")
+                    dets = yolo_detect(model, ipath, page_width=pw, conf=0.3, start_number=num, debug_dir=debug_dir)
                     if not dets:
                         continue
 
@@ -381,12 +383,20 @@ async def update_bboxes(job_id: str, body: UpdateBboxesRequest):
     from PIL import Image as PILImage
     from storage.image_uploader import upload_cropped_images
 
-    if job_id not in jobs:
-        raise HTTPException(404, "작업을 찾을 수 없습니다.")
+    # job 메타 조회 (메모리에 없으면 DB staging에서 복원)
+    job = jobs.get(job_id)
+    if job is None:
+        all_staging = get_staging_by_job(job_id)
+        if not all_staging:
+            raise HTTPException(404, "작업을 찾을 수 없습니다.")
+        sample = all_staging[0]
+        job = {
+            "file_path": sample.get("source_pdf", ""),
+            "teacher_id": sample.get("teacher_id", ""),
+            "category": sample.get("category", "모의고사"),
+        }
 
-    job = jobs[job_id]
-
-    # 현재 페이지의 기존 staging 목록
+    # 현재 페이지의 기존 staging 목록 (DB 기반 — 메모리 재시작 후에도 동작)
     existing = get_staging_by_page(job_id, body.page_number)
     existing_ids = {s["id"] for s in existing}
     request_ids = {p.staging_id for p in body.problems if p.staging_id}
@@ -415,14 +425,10 @@ async def update_bboxes(job_id: str, body: UpdateBboxesRequest):
     )
     ordered_problems = left_col + right_col
 
-    # 페이지 내 시작 번호 계산 (기존 staging에서 최소 문제 번호 기준)
-    if existing:
-        page_start_num = min(s["problem_number"] for s in existing)
-    else:
-        # 전체 job staging에서 페이지 이전까지의 수 계산
-        all_staging = get_staging_by_job(job_id)
-        prev_count = sum(1 for s in all_staging if (s.get("page_number") or 0) < body.page_number)
-        page_start_num = prev_count + 1
+    # 페이지 내 시작 번호 계산: 이전 페이지들의 최신 문제 수 합산 (항상 DB에서 재계산)
+    all_staging = get_staging_by_job(job_id)
+    prev_count = sum(1 for s in all_staging if (s.get("page_number") or 0) < body.page_number)
+    page_start_num = prev_count + 1
 
     crop_dir = str(Path(job["file_path"]).parent / "cropped")
     Path(crop_dir).mkdir(parents=True, exist_ok=True)
@@ -607,6 +613,34 @@ class ExportRequest(BaseModel):
     job_id: str
     split_ratio: float = 0.8
     modified_page_numbers: list[int] | None = None  # None이면 전체 페이지
+    force: bool = False  # True면 중복 체크 무시
+
+
+# export 기록 파일 경로 (백엔드 재시작해도 유지)
+_EXPORT_LOG_PATH = Path(__file__).parent / "yolo_training" / "export_log.json"
+
+
+def _load_export_log() -> dict:
+    if _EXPORT_LOG_PATH.exists():
+        try:
+            return json.loads(_EXPORT_LOG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_export_log(log: dict):
+    _EXPORT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _EXPORT_LOG_PATH.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@app.get("/api/export-training-data/{job_id}/status")
+async def get_export_status(job_id: str):
+    """이 job이 이미 export됐는지 확인"""
+    log = _load_export_log()
+    if job_id in log:
+        return {"exported": True, "exported_at": log[job_id]["exported_at"], "image_count": log[job_id].get("image_count", 0)}
+    return {"exported": False}
 
 
 @app.post("/api/export-training-data")
@@ -615,18 +649,156 @@ async def export_training_data(body: ExportRequest):
 
     modified_page_numbers를 지정하면 해당 페이지만 내보냄 (None이면 전체).
     yolo_training/dataset_new/ 에 images/train, images/val, labels/train, labels/val 생성
+    force=True면 중복 체크 없이 재export.
     """
+    # 중복 export 체크
+    if not body.force:
+        log = _load_export_log()
+        if body.job_id in log:
+            entry = log[body.job_id]
+            return {
+                "already_exported": True,
+                "exported_at": entry["exported_at"],
+                "image_count": entry.get("image_count", 0),
+                "message": f"이미 {entry['exported_at']} 에 export됨. force=true로 재export 가능.",
+            }
+
     from pipeline.yolo_exporter import export_to_yolo
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None, export_to_yolo, body.job_id, body.split_ratio, body.modified_page_numbers
     )
+
+    # export 기록 저장
+    from datetime import datetime as _dt
+    log = _load_export_log()
+    log[body.job_id] = {
+        "exported_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "image_count": result.get("total_images", 0),
+        "job_id": body.job_id,
+    }
+    _save_export_log(log)
+
     return result
 
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ── YOLO 재학습 API ──────────────────────────────────────────────
+
+retrain_jobs: Dict[str, dict] = {}  # 재학습 진행 상태 캐시
+
+_YOLO_TRAINING_DIR = Path(__file__).parent / "yolo_training"
+_YOLO_MODEL_PATH = Path(__file__).parent / "models" / "exam_problem_detector.pt"
+
+
+class RetrainRequest(BaseModel):
+    base_weights: str = "runs/exam_finetune_v2/weights/best.pt"
+    epochs: int = 50
+    run_name: str | None = None  # None이면 자동 생성
+
+
+@app.post("/api/retrain")
+async def start_retrain(body: RetrainRequest):
+    """YOLO 재학습 시작 (백그라운드)
+
+    완료 시 best.pt를 models/exam_problem_detector.pt로 자동 교체.
+    """
+    import re
+    # 자동 run_name 생성 (exam_finetune_v{N+1})
+    run_name = body.run_name
+    if run_name is None:
+        runs_dir = _YOLO_TRAINING_DIR / "runs"
+        existing = [d.name for d in runs_dir.glob("exam_finetune_v*")] if runs_dir.exists() else []
+        nums = [int(m.group(1)) for d in existing if (m := re.search(r"v(\d+)$", d))]
+        next_v = max(nums, default=2) + 1
+        run_name = f"exam_finetune_v{next_v}"
+
+    retrain_id = str(uuid.uuid4())
+    retrain_jobs[retrain_id] = {"status": "pending", "run_name": run_name, "progress": ""}
+
+    asyncio.create_task(_run_retrain(retrain_id, body.base_weights, body.epochs, run_name))
+    return {"retrain_id": retrain_id, "run_name": run_name, "status": "pending"}
+
+
+@app.get("/api/retrain/{retrain_id}")
+async def get_retrain_status(retrain_id: str):
+    if retrain_id not in retrain_jobs:
+        raise HTTPException(status_code=404, detail="재학습 작업을 찾을 수 없습니다")
+    return retrain_jobs[retrain_id]
+
+
+async def _run_retrain(retrain_id: str, base_weights: str, epochs: int, run_name: str):
+    import shutil
+    import subprocess
+    from datetime import datetime
+
+    retrain_jobs[retrain_id]["status"] = "training"
+
+    base_weights_path = _YOLO_TRAINING_DIR / base_weights
+    if not base_weights_path.exists():
+        retrain_jobs[retrain_id] = {"status": "error", "message": f"가중치 파일 없음: {base_weights_path}"}
+        return
+
+    venv_python = _YOLO_TRAINING_DIR.parent / "venv" / "Scripts" / "python.exe"
+    python_bin = str(venv_python) if venv_python.exists() else "python"
+
+    cmd = [
+        python_bin,
+        str(_YOLO_TRAINING_DIR / "train_finetune.py"),
+        "--base-weights", str(base_weights_path),
+        "--epochs", str(epochs),
+        "--run-name", run_name,
+    ]
+
+    try:
+        loop = asyncio.get_event_loop()
+        proc = await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(cmd, cwd=str(_YOLO_TRAINING_DIR), capture_output=True, text=True)
+        )
+
+        if proc.returncode != 0:
+            retrain_jobs[retrain_id] = {
+                "status": "error",
+                "message": proc.stderr[-2000:] if proc.stderr else "알 수 없는 오류",
+            }
+            return
+
+        # best.pt 경로 파싱
+        best_pt = None
+        for line in proc.stdout.splitlines():
+            if line.startswith("BEST_MODEL_PATH="):
+                best_pt = Path(line.split("=", 1)[1].strip())
+                break
+
+        if best_pt is None or not best_pt.exists():
+            best_pt = _YOLO_TRAINING_DIR / "runs" / run_name / "weights" / "best.pt"
+
+        if not best_pt.exists():
+            retrain_jobs[retrain_id] = {"status": "error", "message": "best.pt를 찾을 수 없습니다"}
+            return
+
+        # 기존 모델 백업 후 교체
+        if _YOLO_MODEL_PATH.exists():
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            bak = _YOLO_MODEL_PATH.with_name(f"exam_problem_detector.bak_{ts}.pt")
+            shutil.copy2(_YOLO_MODEL_PATH, bak)
+
+        shutil.copy2(best_pt, _YOLO_MODEL_PATH)
+
+        retrain_jobs[retrain_id] = {
+            "status": "done",
+            "run_name": run_name,
+            "best_pt": str(best_pt),
+            "model_updated": str(_YOLO_MODEL_PATH),
+        }
+
+    except Exception as e:
+        retrain_jobs[retrain_id] = {"status": "error", "message": str(e)}
 
 
 # ── 해설지 파이프라인 ────────────────────────────────────────────
@@ -850,8 +1022,19 @@ async def solution_extract(solution_job_id: str):
         solution_jobs[solution_job_id]["answers"] = answers
         solution_jobs[solution_job_id]["fragments"] = fragments
         solution_jobs[solution_job_id]["page_bboxes"] = page_bboxes
+        solution_jobs[solution_job_id]["modified_pages"] = []
         solution_jobs[solution_job_id]["status"] = "reviewing"
-        update_solution_job(solution_job_id, status="reviewing")
+        # DB progress에도 저장 → 서버 재시작 후 복구 가능
+        update_solution_job(
+            solution_job_id,
+            status="reviewing",
+            progress={
+                "page_bboxes": page_bboxes,
+                "answers": answers,
+                "fragments": fragments,
+                "modified_pages": [],
+            },
+        )
 
         total_numbers = len(fragments)
         return {
@@ -861,15 +1044,20 @@ async def solution_extract(solution_job_id: str):
             "total_numbers": total_numbers,
         }
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
         solution_jobs[solution_job_id]["status"] = "error"
         solution_jobs[solution_job_id]["error"] = str(e)
+        solution_jobs[solution_job_id]["traceback"] = tb
         update_solution_job(solution_job_id, status="error", error=str(e))
-        raise HTTPException(500, f"추출 실패: {e}")
+        raise HTTPException(500, f"추출 실패: {e}\n\n{tb}")
 
 
 class SolutionBboxUpdateItem(BaseModel):
     number: int
     bbox: Dict[str, float]  # {x1, y1, x2, y2}
+    group_id: str | None = None  # L자/cross-page 묶기용 그룹 ID
+    box_type: str = "solution"  # 'solution' | 'answer_table' (YOLO 2-클래스)
 
 
 class SolutionUpdateBboxesRequest(BaseModel):
@@ -881,7 +1069,27 @@ class SolutionUpdateBboxesRequest(BaseModel):
 async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxesRequest):
     """사용자가 수정한 페이지별 bbox로 재크롭. fragments/page_bboxes 갱신."""
     if solution_job_id not in solution_jobs:
-        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+        # 서버 재시작 후 메모리가 비어있을 수 있음 → DB에서 hydrate
+        from storage.supabase_client import get_solution_job
+        db_job = get_solution_job(solution_job_id)
+        if not db_job:
+            raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+        progress = db_job.get("progress") or {}
+        solution_jobs[solution_job_id] = {
+            "solution_job_id": solution_job_id,
+            "status": db_job.get("status", "reviewing"),
+            "teacher_id": db_job.get("teacher_id"),
+            "problem_job_id": db_job.get("problem_job_id"),
+            "file_path": db_job.get("pdf_path"),
+            "answers": progress.get("answers", {}),
+            "fragments": progress.get("fragments", {}),
+            "page_bboxes": progress.get("page_bboxes", {}),
+            "modified_pages": progress.get("modified_pages", []),
+            "solution_image_urls": progress.get("solution_image_urls", {}),
+            "tag_results": progress.get("tag_results", {}),
+            "progress": progress,
+            "error": db_job.get("error"),
+        }
 
     job = solution_jobs[solution_job_id]
     page_bboxes = job.get("page_bboxes", {})
@@ -894,16 +1102,18 @@ async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxe
 
     # 기존 해당 페이지 조각들을 fragments에서 제거
     old_items = page_data.get("items", [])
-    old_paths_by_num: dict[int, list[str]] = {}
+    old_paths: list[str] = []
     for it in old_items:
-        old_paths_by_num.setdefault(it["number"], []).append(it["cropped_path"])
+        cp = it.get("cropped_path")
+        if cp:
+            old_paths.append(cp)
 
+    # fragments 전역에서 이 페이지의 이전 경로들을 제거 (key가 int든 str이든 무관)
     fragments: dict = job.get("fragments", {})
-    for num, paths in old_paths_by_num.items():
-        if num in fragments:
-            fragments[num] = [p for p in fragments[num] if p not in paths]
-            if not fragments[num]:
-                del fragments[num]
+    for key in list(fragments.keys()):
+        fragments[key] = [p for p in fragments[key] if p not in old_paths]
+        if not fragments[key]:
+            del fragments[key]
 
     # 새 bbox로 재크롭
     pdf_parent = Path(job["file_path"]).parent
@@ -925,21 +1135,42 @@ async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxe
     for idx, it in enumerate(body.items):
         num = it["number"] if isinstance(it, dict) else it.number
         bbox = it["bbox"] if isinstance(it, dict) else it.bbox
+        box_type = (it.get("box_type") if isinstance(it, dict) else getattr(it, "box_type", None)) or "solution"
+        group_id = it.get("group_id") if isinstance(it, dict) else getattr(it, "group_id", None)
+
         x1, y1 = int(bbox["x1"]), int(bbox["y1"])
         x2, y2 = int(bbox["x2"]), int(bbox["y2"])
         if x2 <= x1 or y2 <= y1:
             continue
+
+        # 정답표는 라벨 메타만 저장, 크롭/fragments 제외 (해설 파이프라인 오염 방지)
+        if box_type == "answer_table":
+            new_items.append({
+                "number": num,
+                "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                "cropped_path": None,
+                "is_fragment": False,
+                "group_id": group_id,
+                "box_type": "answer_table",
+            })
+            continue
+
         cropped = img.crop((x1, y1, x2, y2))
         cropped = _trim_whitespace(cropped)
-        save_path = str(crop_dir / f"page_{body.page_number:03d}_{num:04d}_edit_{idx}.png")
+        # num이 None(OCR 미확정)이면 파일명/fragments key는 idx 기반 placeholder 사용
+        num_token = f"{num:04d}" if isinstance(num, int) and num > 0 else f"none_{idx:02d}"
+        save_path = str(crop_dir / f"page_{body.page_number:03d}_{num_token}_edit_{idx}.png")
         cropped.save(save_path)
 
-        fragments.setdefault(num, []).append(save_path)
+        frag_key = num if isinstance(num, int) and num > 0 else f"__page{body.page_number}_idx{idx}"
+        fragments.setdefault(frag_key, []).append(save_path)
         new_items.append({
             "number": num,
             "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
             "cropped_path": save_path,
             "is_fragment": False,
+            "group_id": group_id,
+            "box_type": "solution",
         })
     img.close()
 
@@ -947,6 +1178,22 @@ async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxe
     page_data["items"] = new_items
     job["fragments"] = fragments
     job["page_bboxes"][body.page_number] = page_data
+    modified = set(job.get("modified_pages", []) or [])
+    modified.add(body.page_number)
+    job["modified_pages"] = sorted(modified)
+
+    # DB progress 갱신 → 서버 재시작 후 복구 가능
+    from storage.supabase_client import update_solution_job as _update_sj
+    _update_sj(
+        solution_job_id,
+        status=job.get("status", "reviewing"),
+        progress={
+            "page_bboxes": job["page_bboxes"],
+            "answers": job.get("answers", {}),
+            "fragments": job.get("fragments", {}),
+            "modified_pages": job["modified_pages"],
+        },
+    )
 
     return {"ok": True, "items": new_items, "fragments_count": len(fragments)}
 
@@ -970,13 +1217,31 @@ async def solution_upload_and_tag(solution_job_id: str, background_tasks: Backgr
 
 @app.get("/api/solution/status/{solution_job_id}")
 async def solution_status(solution_job_id: str):
-    """해설지 파이프라인 진행 상황 조회"""
+    """해설지 파이프라인 진행 상황 조회. 메모리에 없으면 DB에서 복구(hydrate)한다."""
     if solution_job_id not in solution_jobs:
         from storage.supabase_client import get_solution_job
         db_job = get_solution_job(solution_job_id)
         if not db_job:
             raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
-        return db_job
+
+        # DB progress에 저장된 page_bboxes/answers/fragments를 메모리로 복구
+        progress = db_job.get("progress") or {}
+        solution_jobs[solution_job_id] = {
+            "solution_job_id": solution_job_id,
+            "status": db_job.get("status", "reviewing"),
+            "teacher_id": db_job.get("teacher_id"),
+            "problem_job_id": db_job.get("problem_job_id"),
+            "file_path": db_job.get("pdf_path"),
+            "answers": progress.get("answers", {}),
+            "fragments": progress.get("fragments", {}),
+            "page_bboxes": progress.get("page_bboxes", {}),
+            "modified_pages": progress.get("modified_pages", []),
+            "solution_image_urls": progress.get("solution_image_urls", {}),
+            "tag_results": progress.get("tag_results", {}),
+            "progress": progress,
+            "error": db_job.get("error"),
+        }
+        return solution_jobs[solution_job_id]
     return solution_jobs[solution_job_id]
 
 
@@ -1094,6 +1359,210 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
         applied += 1
 
     return {"applied": applied, "message": f"{applied}개 문제에 해설/태그 적용 완료"}
+
+
+# ── 해설지 YOLO 학습 인프라 ─────────────────────────────────────
+
+_SOLUTION_MODEL_PATH = Path(__file__).parent / "models" / "solution_detector.pt"
+_SOLUTION_EXPORT_LOG_PATH = Path(__file__).parent / "yolo_training" / "solution_export_log.json"
+
+retrain_solution_jobs: Dict[str, dict] = {}  # 해설지 재학습 진행 상태
+
+
+def _load_solution_export_log() -> dict:
+    if _SOLUTION_EXPORT_LOG_PATH.exists():
+        try:
+            return json.loads(_SOLUTION_EXPORT_LOG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_solution_export_log(log: dict):
+    _SOLUTION_EXPORT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _SOLUTION_EXPORT_LOG_PATH.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class SolutionExportRequest(BaseModel):
+    solution_job_id: str
+    split_ratio: float = 0.8
+    force: bool = False
+
+
+@app.post("/api/solution/export-training-data")
+async def export_solution_training_data(body: SolutionExportRequest):
+    """검수 완료된 해설지 page_bboxes → YOLO 라벨 역수출
+
+    solution_dataset/{images,labels,metadata}/{train,val}/ 에 저장.
+    is_negative_page=True 페이지: 빈 라벨 (hard negative).
+    박스 0개 + negative 아님: 제외 (실수 방지).
+    """
+    if not body.force:
+        log = _load_solution_export_log()
+        if body.solution_job_id in log:
+            entry = log[body.solution_job_id]
+            return {
+                "already_exported": True,
+                "exported_at": entry.get("exported_at"),
+                "message": f"이미 {entry.get('exported_at')} 에 export됨. force=true로 재export 가능.",
+            }
+
+    if body.solution_job_id not in solution_jobs:
+        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다. 서버 재시작 후에는 CLI(solution_labels.py)를 사용하세요.")
+
+    job = solution_jobs[body.solution_job_id]
+    page_bboxes = job.get("page_bboxes", {})
+    if not page_bboxes:
+        raise HTTPException(400, "page_bboxes 데이터 없음. 검수 완료 후 실행하세요.")
+
+    pdf_path = Path(job.get("file_path", ""))
+    pages_tmp_dir = pdf_path.parent / "solution_crops" / "_pages"
+    if not pages_tmp_dir.exists():
+        raise HTTPException(500, f"페이지 이미지 디렉토리 없음: {pages_tmp_dir}")
+
+    from yolo_training.solution_labels import export_solution_labels
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,
+        lambda: export_solution_labels(
+            body.solution_job_id, page_bboxes, pages_tmp_dir,
+            split_ratio=body.split_ratio, force=body.force,
+        )
+    )
+
+    # export 기록 저장
+    from datetime import datetime as _dt
+    log = _load_solution_export_log()
+    log[body.solution_job_id] = {
+        "exported_at": _dt.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "exported_pages": result.get("exported", 0),
+        "train": result.get("train", 0),
+        "val": result.get("val", 0),
+    }
+    _save_solution_export_log(log)
+
+    return result
+
+
+@app.get("/api/solution/export-training-data/{solution_job_id}/status")
+async def get_solution_export_status(solution_job_id: str):
+    """해설지 job의 export 여부 확인"""
+    log = _load_solution_export_log()
+    if solution_job_id in log:
+        return {"exported": True, **log[solution_job_id]}
+    return {"exported": False}
+
+
+class RetrainSolutionRequest(BaseModel):
+    base_weights: str = "models/yolov8n.pt"  # 첫 학습은 pretrained에서 시작
+    epochs: int = 100
+    run_name: str | None = None
+
+
+@app.post("/api/retrain-solution")
+async def start_retrain_solution(body: RetrainSolutionRequest):
+    """해설지 YOLO 재학습 시작 (백그라운드)
+
+    완료 시 best.pt를 models/solution_detector.pt로 자동 교체.
+    """
+    import re
+    run_name = body.run_name
+    if run_name is None:
+        runs_dir = _YOLO_TRAINING_DIR / "runs"
+        existing = [d.name for d in runs_dir.glob("solution_finetune_v*")] if runs_dir.exists() else []
+        nums = [int(m.group(1)) for d in existing if (m := re.search(r"v(\d+)$", d))]
+        next_v = max(nums, default=0) + 1
+        run_name = f"solution_finetune_v{next_v}"
+
+    retrain_id = str(uuid.uuid4())
+    retrain_solution_jobs[retrain_id] = {"status": "pending", "run_name": run_name, "progress": ""}
+
+    asyncio.create_task(_run_retrain_solution(retrain_id, body.base_weights, body.epochs, run_name))
+    return {"retrain_id": retrain_id, "run_name": run_name, "status": "pending"}
+
+
+@app.get("/api/retrain-solution/{retrain_id}")
+async def get_retrain_solution_status(retrain_id: str):
+    if retrain_id not in retrain_solution_jobs:
+        raise HTTPException(status_code=404, detail="해설지 재학습 작업을 찾을 수 없습니다")
+    return retrain_solution_jobs[retrain_id]
+
+
+async def _run_retrain_solution(retrain_id: str, base_weights: str, epochs: int, run_name: str):
+    import shutil
+    import subprocess
+    from datetime import datetime
+
+    retrain_solution_jobs[retrain_id]["status"] = "training"
+
+    # base_weights가 상대경로면 training dir 기준, 절대경로면 그대로
+    base_weights_path = Path(base_weights)
+    if not base_weights_path.is_absolute():
+        base_weights_path = _YOLO_TRAINING_DIR.parent / base_weights
+
+    if not base_weights_path.exists():
+        retrain_solution_jobs[retrain_id] = {
+            "status": "error",
+            "message": f"가중치 파일 없음: {base_weights_path}",
+        }
+        return
+
+    venv_python = _YOLO_TRAINING_DIR.parent / "venv" / "Scripts" / "python.exe"
+    python_bin = str(venv_python) if venv_python.exists() else "python"
+
+    cmd = [
+        python_bin,
+        str(_YOLO_TRAINING_DIR / "train_solution_finetune.py"),
+        "--base-weights", str(base_weights_path),
+        "--epochs", str(epochs),
+        "--run-name", run_name,
+    ]
+
+    try:
+        loop = asyncio.get_event_loop()
+        proc = await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(cmd, cwd=str(_YOLO_TRAINING_DIR), capture_output=True, text=True)
+        )
+
+        if proc.returncode != 0:
+            retrain_solution_jobs[retrain_id] = {
+                "status": "error",
+                "message": proc.stderr[-2000:] if proc.stderr else "알 수 없는 오류",
+            }
+            return
+
+        # best.pt 경로 파싱
+        best_pt = None
+        for line in proc.stdout.splitlines():
+            if line.startswith("BEST_MODEL_PATH="):
+                best_pt = Path(line.split("=", 1)[1].strip())
+                break
+
+        if best_pt is None or not best_pt.exists():
+            best_pt = _YOLO_TRAINING_DIR / "runs" / run_name / "weights" / "best.pt"
+
+        if not best_pt.exists():
+            retrain_solution_jobs[retrain_id] = {"status": "error", "message": "best.pt를 찾을 수 없습니다"}
+            return
+
+        # 기존 모델 백업 후 원자적 교체
+        if _SOLUTION_MODEL_PATH.exists():
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            bak = _SOLUTION_MODEL_PATH.with_name(f"solution_detector.bak_{ts}.pt")
+            shutil.copy2(_SOLUTION_MODEL_PATH, bak)
+
+        shutil.copy2(best_pt, _SOLUTION_MODEL_PATH)
+
+        retrain_solution_jobs[retrain_id] = {
+            "status": "done",
+            "run_name": run_name,
+            "best_pt": str(best_pt),
+            "model_updated": str(_SOLUTION_MODEL_PATH),
+        }
+
+    except Exception as e:
+        retrain_solution_jobs[retrain_id] = {"status": "error", "message": str(e)}
 
 
 @app.post("/api/solution/tag-from-problem/{staging_id}")
