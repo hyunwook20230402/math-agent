@@ -20,12 +20,9 @@ export type BoxType = 'solution' | 'answer_table';
 export interface BboxItem {
   stagingId: string | null; // null = 신규
   bbox: Bbox;
-  number: number; // 표시용 문제 번호 (1-based, 에디터 내부 순서)
+  number: number; // 문제 번호 — 사이드바 표시값이 곧 저장값. 정답표는 0.
   groupId?: string | null; // 같은 번호로 묶인 박스들의 공통 id (L자/cross-page 해설)
   boxType?: BoxType; // 'solution'(기본) | 'answer_table' — YOLO 2-클래스 학습용
-  // true = DB/OCR 실제값 또는 사용자 직접 입력값 (저장 대상)
-  // false = fallback 자동 번호 (표시용, 저장 시 null로 변환)
-  numberExplicit?: boolean;
 }
 
 interface Props {
@@ -383,9 +380,6 @@ export default function BboxEditor({
           bbox: { x1: Math.round(ix1), y1: Math.round(iy1), x2: Math.round(ix2), y2: Math.round(iy2) },
           number: nextNum,
           boxType: 'solution',
-          // 새로 그린 박스도 "자동 번호"이므로 fallback 취급.
-          // 사용자가 번호 입력창에서 직접 고쳐야 explicit=true 전환됨.
-          numberExplicit: false,
         };
         const next = reorder([...itemsRef.current, newItem]);
         onChange(next);

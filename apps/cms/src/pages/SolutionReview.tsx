@@ -66,20 +66,18 @@ function itemsToBboxItems(items: SolutionItem[], startNumber = 1): BboxItem[] {
         number: 0,
         groupId: it.group_id ?? null,
         boxType,
-        numberExplicit: true, // 정답표는 저장 필요 (number=0 고정값)
       };
     }
     const hasNum = typeof it.number === 'number' && it.number > 0;
     const num = hasNum ? (it.number as number) : counter;
     if (!hasNum) counter += 1;
-    else counter = Math.max(counter, num + 1); // 실제값 뒤에 이어지는 fallback도 중복 없이
+    else counter = Math.max(counter, num + 1);
     return {
       stagingId: null,
       bbox: { ...it.bbox },
       number: num,
       groupId: it.group_id ?? null,
       boxType,
-      numberExplicit: hasNum, // DB/OCR 실제값만 explicit=true, fallback은 false
     };
   });
 }
@@ -109,6 +107,13 @@ export default function SolutionReview() {
   const [mergeAnchorIdx, setMergeAnchorIdx] = useState<number | null>(null);
   /** 페이지별 사용자 지정 시작 번호 (입력 전엔 computeStartNumber fallback) */
   const [pageStartNumbers, setPageStartNumbers] = useState<Record<number, number>>({});
+
+  // YOLO 학습 데이터 export / 재학습 상태
+  const [exporting, setExporting] = useState(false);
+  const [exportedAt, setExportedAt] = useState<string | null>(null);
+  const [exportInfo, setExportInfo] = useState<{ train?: number; val?: number } | null>(null);
+  const [retraining, setRetraining] = useState(false);
+  const [uploadFolder, setUploadFolder] = useState<string | null>(null);
 
   // ── 박스 편집 핸들러 ─────────────────────────────────────────────
 
@@ -184,11 +189,10 @@ export default function SolutionReview() {
       if (!anchor || !target) return prev;
 
       const gid = anchor.groupId || target.groupId || genGroupId();
-      // 앵커 번호를 정답 번호로 통일 (explicit도 승계)
+      // 앵커 번호를 정답 번호로 통일
       const mergedNumber = anchor.number;
-      const mergedExplicit = anchor.numberExplicit ?? false;
       items[mergeAnchorIdx] = { ...anchor, groupId: gid };
-      items[idx] = { ...target, groupId: gid, number: mergedNumber, numberExplicit: mergedExplicit };
+      items[idx] = { ...target, groupId: gid, number: mergedNumber };
       return items;
     });
     setMergeAnchorIdx(null);
@@ -225,7 +229,7 @@ export default function SolutionReview() {
       const items = [...prev];
       const item = items[selectedBboxIdx];
       if (!item) return prev;
-      items[selectedBboxIdx] = { ...item, number: newNum, numberExplicit: true };
+      items[selectedBboxIdx] = { ...item, number: newNum };
       return items;
     });
   }, [selectedBboxIdx, updateCurrentPageBboxes]);
@@ -282,6 +286,31 @@ export default function SolutionReview() {
   const pageStartNumbersRef = useRef<Record<number, number>>({});
   useEffect(() => { pageStartNumbersRef.current = pageStartNumbers; }, [pageStartNumbers]);
 
+  // 진입 시 ?sj가 없으면 problem_job_id(jobId)로 solution_jobs 역조회 → URL에 주입
+  // (PdfReview에서 "다음: 해설지 크롭 검수"로 들어올 때 ?sj 가 안 붙기 때문)
+  useEffect(() => {
+    const sj = searchParams.get('sj');
+    if (sj || !jobId || solutionJobId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${PIPELINE_URL}/api/solution/by-problem/${jobId}`);
+        if (!res.ok) return;
+        const job = await res.json();
+        if (cancelled || !job?.id) return;
+        setSearchParams(prev => {
+          const next = new URLSearchParams(prev);
+          next.set('sj', job.id);
+          return next;
+        }, { replace: true });
+      } catch {
+        // 조용히 무시 (업로드 화면으로 폴백)
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId]);
+
   // 새로고침 복구: URL에 ?sj=<id>가 있으면 백엔드에서 page_bboxes 복원
   useEffect(() => {
     const sj = searchParams.get('sj');
@@ -321,7 +350,7 @@ export default function SolutionReview() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [searchParams]);
 
   // 현재 페이지 bbox (캐시 우선)
   const bboxItems: BboxItem[] = useMemo(() => {
@@ -444,8 +473,8 @@ export default function SolutionReview() {
         body: JSON.stringify({
           page_number: activePage,
           items: items.map(it => ({
-            // fallback 값은 DB 오염 방지 위해 null 전송
-            number: it.numberExplicit ? it.number : null,
+            // 표시번호 = 저장번호. 정답표만 0, 그 외는 사이드바에 보이는 값 그대로.
+            number: it.boxType === 'answer_table' ? 0 : it.number,
             bbox: it.bbox,
             group_id: it.groupId ?? null,
             box_type: it.boxType ?? 'solution',
@@ -517,6 +546,99 @@ export default function SolutionReview() {
     return () => clearInterval(timer);
   }, [stage, solutionJobId]);
 
+  // YOLO export 상태 초기 조회
+  useEffect(() => {
+    if (!solutionJobId) return;
+    (async () => {
+      try {
+        const res = await fetch(`${PIPELINE_URL}/api/solution/export-training-data/${solutionJobId}/status`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.exported) {
+          setExportedAt(data.exported_at ?? null);
+          setExportInfo({ train: data.train, val: data.val });
+        }
+      } catch {}
+    })();
+  }, [solutionJobId]);
+
+  // pdf_path에서 업로드 폴더 추출 (UI 표시용)
+  useEffect(() => {
+    if (!solutionJobId) return;
+    (async () => {
+      try {
+        const res = await fetch(`${PIPELINE_URL}/api/solution/status/${solutionJobId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const pdfPath: string | undefined = data.file_path ?? data.pdf_path;
+        if (!pdfPath) return;
+        // uploads/solutions/<폴더명>/ 만 추출
+        const m = pdfPath.match(/uploads[\\/]+solutions[\\/]+([^\\/]+)/);
+        if (m) setUploadFolder(`uploads/solutions/${m[1]}/`);
+      } catch {}
+    })();
+  }, [solutionJobId]);
+
+  // YOLO 학습 데이터 export
+  const handleExportTrainingData = async (force = false) => {
+    if (!solutionJobId) return;
+    setExporting(true);
+    try {
+      const res = await fetch(`${PIPELINE_URL}/api/solution/export-training-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ solution_job_id: solutionJobId, split_ratio: 0.8, force }),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Export 실패: ${res.status} ${txt}`);
+      }
+      const data = await res.json();
+      if (data.already_exported && !force) {
+        if (confirm(`이미 ${data.exported_at}에 export됨. 다시 export할까요?`)) {
+          await handleExportTrainingData(true);
+        }
+        return;
+      }
+      setExportedAt(new Date().toISOString().slice(0, 19).replace('T', ' '));
+      setExportInfo({ train: data.train, val: data.val });
+      toast({
+        title: 'Export 완료',
+        description: `train: ${data.train ?? 0}, val: ${data.val ?? 0} 페이지`,
+      });
+    } catch (e: any) {
+      toast({ title: '오류', description: e.message, variant: 'destructive' });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // YOLO 재학습 시작
+  const handleRetrainSolution = async () => {
+    if (!confirm('YOLO 재학습을 시작합니다. 오래 걸리고 백그라운드로 실행됩니다. 계속할까요?')) return;
+    setRetraining(true);
+    try {
+      const res = await fetch(`${PIPELINE_URL}/api/retrain-solution`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ epochs: 100 }),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`재학습 시작 실패: ${txt}`);
+      }
+      const data = await res.json();
+      toast({
+        title: '재학습 시작됨',
+        description: data.run_name ? `run: ${data.run_name}` : '백그라운드 실행 중',
+      });
+    } catch (e: any) {
+      toast({ title: '오류', description: e.message, variant: 'destructive' });
+    } finally {
+      setRetraining(false);
+    }
+  };
+
   // 6. 문제 staging에 적용
   const handleApply = async () => {
     if (!solutionJobId || !jobId) return;
@@ -570,10 +692,32 @@ export default function SolutionReview() {
 
         <div className="flex items-center gap-3">
           {stage === 'reviewing' && (
-            <Button onClick={handleStartTagging}>
-              <Check className="h-4 w-4 mr-1" />
-              검수 완료 — AI 태깅 시작
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                onClick={() => handleExportTrainingData(false)}
+                disabled={exporting}
+                title="검수한 bbox를 YOLO 학습 데이터셋으로 내보냅니다"
+              >
+                {exporting ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                {exportedAt ? 'YOLO 재Export' : 'YOLO 학습 데이터로 Export'}
+              </Button>
+              {exportedAt && (
+                <Button
+                  variant="outline"
+                  onClick={handleRetrainSolution}
+                  disabled={retraining}
+                  title="오래 걸림. 백그라운드 실행."
+                >
+                  {retraining ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                  YOLO 재학습 시작
+                </Button>
+              )}
+              <Button onClick={handleStartTagging}>
+                <Check className="h-4 w-4 mr-1" />
+                검수 완료 — AI 태깅 시작
+              </Button>
+            </>
           )}
           {stage === 'done' && (
             <Button onClick={handleApply} disabled={applying}>
@@ -590,6 +734,25 @@ export default function SolutionReview() {
           </Button>
         </div>
       </div>
+
+      {/* Export 상태 + 업로드 경로 표시 (검수 모드에서만) */}
+      {stage === 'reviewing' && (uploadFolder || exportedAt) && (
+        <div className="px-4 py-2 border-b bg-blue-50/30 text-xs text-muted-foreground flex items-center gap-4 flex-wrap">
+          {uploadFolder && (
+            <span>
+              업로드 폴더: <code className="px-1 py-0.5 bg-white border rounded">{uploadFolder}</code>
+            </span>
+          )}
+          {exportedAt && (
+            <span>
+              최근 Export: <strong>{exportedAt}</strong>
+              {exportInfo && (
+                <> (train: {exportInfo.train ?? 0}, val: {exportInfo.val ?? 0})</>
+              )}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* 본문 */}
       {stage === 'idle' || stage === 'uploading' || stage === 'extracting' ? (
@@ -702,7 +865,7 @@ export default function SolutionReview() {
           <div className="flex flex-col flex-1 overflow-hidden border-r">
             <div className="flex gap-1.5 px-3 py-2 border-b bg-gray-50 overflow-x-auto shrink-0">
               {pages.map(pg => {
-                const pgItems = pageData[pg]?.items ?? [];
+                const pgItems = bboxCache.get(pg) ?? pageData[pg]?.items ?? [];
                 const isSaved = savedPages.has(pg);
                 const isDirty = dirtyPages.has(pg);
                 return (
