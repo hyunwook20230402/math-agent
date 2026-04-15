@@ -22,7 +22,8 @@ math/
 │   ├── types/        # 공통 타입
 │   └── lib/          # api.ts, utils.ts
 └── backend/
-    └── pdf_pipeline/ # PDF 문제 자동 추출 파이프라인 (운영 중)
+    ├── pdf_pipeline/ # PDF 문제/해설 자동 추출 파이프라인 (운영 중)
+    └── deeptutor/    # AI 튜터링 (디렉토리만 존재, 코드 0)
 ```
 
 ---
@@ -141,17 +142,38 @@ import type { Database } from '@shared/types/database';
 
 ---
 
+## 슬래시 커맨드
+
+`.claude/commands/` 아래 정의. 반복 작업 자동화용.
+
+| 커맨드 | 용도 |
+|--------|------|
+| `/pdf-import` | 문제/해설지 PDF 업로드 → 추출 → 검수 → 승인 흐름 안내 |
+| `/register-problems` | 수동 문제 등록 (⚠️ 대량은 `/pdf-import` 가 주력) |
+| `/solution-tagging-status` | 해설 태깅 진행도 조회 + 이어서 태깅 명령 생성 |
+| `/migration-safety` | 마이그레이션 적용 전 Supabase advisor 체크 |
+| `/bbox-verify` | `problem_staging.bbox` 이상치 탐지 |
+| `/cms-dev-check` | CMS 빌드 오류 + 금지 패턴 (Radix Portal, user.id 오용) 점검 |
+
+---
+
 ## 현재 완성된 기능
 
 - [x] CMS 탭 기반 레이아웃 (교재 목록, 문제 검수, 상세 입력)
 - [x] PDF 교재 문제 자동 추출 (쎈 OCR 기반, 모의고사 YOLO 기반)
-- [x] bbox 편집기 (크롭 검수 UI)
+- [x] bbox 편집기 (크롭 검수 UI, 수동 편집 전용)
 - [x] 해설지 PDF 파이프라인 (정답 파싱 + 해설 크롭 + AI 태깅)
 - [x] 문제별 개념/스킬 태그 (problem_tags 테이블, Qwen2.5-VL)
+- [x] 해설 태깅 샘플/이어서 모드 (4개 먼저 → 나머지 26개)
+- [x] 4단 단원 계통도 (공통수학1/2, 대수, 미적분I, 확률과 통계)
+- [x] unit/difficulty/pitfall 자동 추출 + 환각 차단 (`validate_unit`)
+- [x] SolutionReview 같은 번호 묶기 + 그룹 확정 UI
+- [x] Supabase 마이그레이션 006 까지 적용 (`solution_jobs`, `problem_tags`, `problem_staging.pitfall`)
 
 ## 향후 작업
 
-- [ ] 005 마이그레이션 실행 (solution_jobs, problem_tags 테이블)
-- [ ] DeepTutor AI 튜터링 (`backend/deeptutor/`)
+- [ ] DeepTutor AI 튜터링 (`backend/deeptutor/` — 현재 코드 0, 디렉토리만 존재)
   - problem_tags + solution_summary → RAG 검색
   - LangGraph 기반 오답 원인 분석, 유사 문제 추천
+- [ ] teacher 앱 숙제 배포/분석 완성도 ↑ (현재 기초 구현 60~70%)
+- [ ] student 앱 오답노트 고도화
