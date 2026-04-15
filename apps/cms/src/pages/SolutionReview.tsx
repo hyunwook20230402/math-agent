@@ -255,8 +255,15 @@ export default function SolutionReview() {
   // 묶기 모드: 두 번째 박스 클릭 감지
   const handleSelectionChange = useCallback((idx: number | null) => {
     setSelectedBboxIdx(idx);
-    if (mergeAnchorIdx !== null && idx !== null) {
-      handleMergeSelect(idx);
+    // 묶기 모드 중 박스를 클릭했을 때만 묶기 실행
+    // idx === null 이면 새 박스가 추가된 것이므로 묶기 모드 취소
+    if (mergeAnchorIdx !== null) {
+      if (idx === null) {
+        // 새 박스 추가(빈 공간 드래그 후) → 묶기 모드 자동 취소
+        setMergeAnchorIdx(null);
+      } else {
+        handleMergeSelect(idx);
+      }
     }
   }, [mergeAnchorIdx, handleMergeSelect]);
 
@@ -723,131 +730,136 @@ export default function SolutionReview() {
               })}
             </div>
 
+            {/* 상태바 + 툴바: 스크롤해도 고정 */}
+            {pageImageUrl && (
+              <div className="shrink-0 px-3 pt-3 pb-2 border-b bg-white">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-base text-muted-foreground">
+                    {activePage}페이지 — {bboxItems.length}개 해설 박스
+                    {currentPageDirty && (
+                      <span className="ml-2 text-orange-600 font-medium">(수정됨 — 미저장)</span>
+                    )}
+                  </p>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={handleAutoGroup} title="같은 번호 박스를 한 번에 그룹화">
+                      같은 번호 자동 묶기
+                    </Button>
+                    <Button variant="outline" onClick={handleUnmergeAll} title="이 페이지 모든 그룹 해제">
+                      전체 그룹 해제
+                    </Button>
+                    {currentPageDirty && (
+                      <Button variant="outline" onClick={handleResetBbox}>
+                        <RotateCcw className="h-4 w-4 mr-1" />
+                        초기화
+                      </Button>
+                    )}
+                    <Button
+                      onClick={handleSaveBbox}
+                      disabled={!currentPageDirty || savingBbox}
+                    >
+                      {savingBbox ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
+                      저장
+                    </Button>
+                  </div>
+                </div>
+
+                {/* 선택 박스 툴바 */}
+                {selectedBboxIdx !== null && bboxItems[selectedBboxIdx] && (() => {
+                  const sel = bboxItems[selectedBboxIdx];
+                  const isTable = sel.boxType === 'answer_table';
+                  return (
+                    <div className="flex items-center gap-2 px-1 py-1.5 bg-yellow-50 border border-yellow-200 rounded text-sm flex-wrap">
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        박스 선택됨
+                      </span>
+
+                      {/* 유형 토글 */}
+                      <span className="text-xs shrink-0">유형:</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className={`h-6 text-xs px-2 ${
+                          isTable
+                            ? 'bg-gray-100 text-gray-700 border-gray-400'
+                            : 'bg-red-50 text-red-700 border-red-300'
+                        }`}
+                        onClick={handleToggleBoxType}
+                        title="해설 / 정답표 전환"
+                      >
+                        {isTable ? '정답표' : '해설'} ⇄
+                      </Button>
+
+                      {/* 해설일 때만 번호/묶기 UI */}
+                      {!isTable && (
+                        <>
+                          <span className="text-xs shrink-0">번호:</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={99}
+                            value={sel.number}
+                            onChange={e => handleChangeNumber(Number(e.target.value))}
+                            className="w-14 text-xs border rounded px-1 py-0.5 text-center"
+                          />
+                          {mergeAnchorIdx === null ? (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 text-xs px-2"
+                                onClick={handleStartMerge}
+                                title="이 박스를 앵커로 설정한 뒤 다른 박스를 클릭하면 같은 번호로 묶입니다"
+                              >
+                                같은 번호로 묶기
+                              </Button>
+                              {sel.groupId && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-6 text-xs px-2 text-red-600 border-red-300"
+                                  onClick={handleUnmerge}
+                                >
+                                  그룹 해제
+                                </Button>
+                              )}
+                            </>
+                          ) : (
+                            <span className="flex items-center gap-2">
+                              <span className="text-xs text-orange-600 font-medium animate-pulse">
+                                묶을 박스를 클릭하세요 (ESC: 취소)
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 text-xs px-2"
+                                onClick={handleCancelMerge}
+                              >
+                                취소
+                              </Button>
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* 에디터 스크롤 영역 */}
             <div className="flex-1 overflow-auto p-3">
               {pageImageUrl ? (
-                <>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-base text-muted-foreground">
-                      {activePage}페이지 — {bboxItems.length}개 해설 박스
-                      {currentPageDirty && (
-                        <span className="ml-2 text-orange-600 font-medium">(수정됨 — 미저장)</span>
-                      )}
-                    </p>
-                    <div className="flex gap-2">
-                      <Button variant="outline" onClick={handleAutoGroup} title="같은 번호 박스를 한 번에 그룹화">
-                        같은 번호 자동 묶기
-                      </Button>
-                      <Button variant="outline" onClick={handleUnmergeAll} title="이 페이지 모든 그룹 해제">
-                        전체 그룹 해제
-                      </Button>
-                      {currentPageDirty && (
-                        <Button variant="outline" onClick={handleResetBbox}>
-                          <RotateCcw className="h-4 w-4 mr-1" />
-                          초기화
-                        </Button>
-                      )}
-                      <Button
-                        onClick={handleSaveBbox}
-                        disabled={!currentPageDirty || savingBbox}
-                      >
-                        {savingBbox ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
-                        저장
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* 선택 박스 툴바 */}
-                  {selectedBboxIdx !== null && bboxItems[selectedBboxIdx] && (() => {
-                    const sel = bboxItems[selectedBboxIdx];
-                    const isTable = sel.boxType === 'answer_table';
-                    return (
-                      <div className="flex items-center gap-2 mb-2 px-1 py-1.5 bg-yellow-50 border border-yellow-200 rounded text-sm flex-wrap">
-                        <span className="text-xs text-muted-foreground shrink-0">
-                          박스 선택됨
-                        </span>
-
-                        {/* 유형 토글 */}
-                        <span className="text-xs shrink-0">유형:</span>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className={`h-6 text-xs px-2 ${
-                            isTable
-                              ? 'bg-gray-100 text-gray-700 border-gray-400'
-                              : 'bg-red-50 text-red-700 border-red-300'
-                          }`}
-                          onClick={handleToggleBoxType}
-                          title="해설 / 정답표 전환"
-                        >
-                          {isTable ? '정답표' : '해설'} ⇄
-                        </Button>
-
-                        {/* 해설일 때만 번호/묶기 UI */}
-                        {!isTable && (
-                          <>
-                            <span className="text-xs shrink-0">번호:</span>
-                            <input
-                              type="number"
-                              min={1}
-                              max={99}
-                              value={sel.number}
-                              onChange={e => handleChangeNumber(Number(e.target.value))}
-                              className="w-14 text-xs border rounded px-1 py-0.5 text-center"
-                            />
-                            {mergeAnchorIdx === null ? (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-6 text-xs px-2"
-                                  onClick={handleStartMerge}
-                                  title="이 박스를 앵커로 설정한 뒤 다른 박스를 클릭하면 같은 번호로 묶입니다"
-                                >
-                                  같은 번호로 묶기
-                                </Button>
-                                {sel.groupId && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-6 text-xs px-2 text-red-600 border-red-300"
-                                    onClick={handleUnmerge}
-                                  >
-                                    그룹 해제
-                                  </Button>
-                                )}
-                              </>
-                            ) : (
-                              <span className="flex items-center gap-2">
-                                <span className="text-xs text-orange-600 font-medium animate-pulse">
-                                  묶을 박스를 클릭하세요 (ESC: 취소)
-                                </span>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-6 text-xs px-2"
-                                  onClick={handleCancelMerge}
-                                >
-                                  취소
-                                </Button>
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    );
-                  })()}
-                  <BboxEditor
-                    pageImageUrl={pageImageUrl}
-                    pageWidth={pageWidth}
-                    pageHeight={pageHeight}
-                    items={bboxItems}
-                    onChange={handleBboxChange}
-                    resetKey={bboxResetKey}
-                    preserveNumbers={true}
-                    onSelectionChange={handleSelectionChange}
-                    fallbackStartNumber={pageStartNumbers[activePage] ?? computeStartNumber(activePage)}
-                  />
-                </>
+                <BboxEditor
+                  pageImageUrl={pageImageUrl}
+                  pageWidth={pageWidth}
+                  pageHeight={pageHeight}
+                  items={bboxItems}
+                  onChange={handleBboxChange}
+                  resetKey={bboxResetKey}
+                  preserveNumbers={true}
+                  onSelectionChange={handleSelectionChange}
+                  fallbackStartNumber={pageStartNumbers[activePage] ?? computeStartNumber(activePage)}
+                />
               ) : (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
                   페이지 이미지 로드 중...

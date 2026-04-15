@@ -370,6 +370,8 @@ export default function BboxEditor({
       const { x: ix1, y: iy1 } = toImgCoord(Math.min(drag.startX, cx), Math.min(drag.startY, cy));
       const { x: ix2, y: iy2 } = toImgCoord(Math.max(drag.startX, cx), Math.max(drag.startY, cy));
       if (ix2 - ix1 >= MIN_BOX_SIZE && iy2 - iy1 >= MIN_BOX_SIZE) {
+        // 새 박스 추가 전에 선택 해제 → 부모에서 묶기 모드 자동 취소
+        setSelectedIdx(null);
         pushHistory();
         const solutionNums = itemsRef.current
           .filter(it => it.boxType !== 'answer_table')
