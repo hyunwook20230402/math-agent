@@ -8,7 +8,7 @@ import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { toast } from '@shared/hooks/use-toast';
-import { ArrowLeft, Loader2, Save, Check, Tag, Upload, X, Bot, Zap } from 'lucide-react';
+import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap } from 'lucide-react';
 
 const PIPELINE_URL = 'http://localhost:8000';
 
@@ -135,34 +135,11 @@ const ProblemDetail = () => {
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'problem' | 'solution'>('problem');
 
-  // 해설지 업로드 상태
-  const [solutionJobId, setSolutionJobId] = useState<string | null>(null);
-  const [solutionStatus, setSolutionStatus] = useState<string>('');
-  const [solutionUploading, setSolutionUploading] = useState(false);
-  const [solutionProgress, setSolutionProgress] = useState<{ processed: number; total: number } | null>(null);
-  const [applyingTags, setApplyingTags] = useState(false);
   const [taggingProblemId, setTaggingProblemId] = useState<string | null>(null);
 
   useEffect(() => {
     if (jobId) loadProblems();
   }, [jobId]);
-
-  // 해설지 추출 진행 상황 폴링
-  useEffect(() => {
-    if (!solutionJobId || ['done', 'error', ''].includes(solutionStatus)) return;
-    const timer = setInterval(async () => {
-      try {
-        const res = await fetch(`${PIPELINE_URL}/api/solution/status/${solutionJobId}`);
-        if (res.ok) {
-          const data = await res.json();
-          setSolutionStatus(data.status);
-          if (data.progress) setSolutionProgress(data.progress);
-          if (data.status === 'done') clearInterval(timer);
-        }
-      } catch {}
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [solutionJobId, solutionStatus]);
 
   const loadProblems = async () => {
     setLoading(true);
@@ -253,57 +230,6 @@ const ProblemDetail = () => {
     }
   };
 
-  const handleSolutionUpload = async (file: File) => {
-    if (!jobId) return;
-    setSolutionUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('teacher_id', 'placeholder'); // TODO: 실제 teacher_id
-      formData.append('problem_job_id', jobId);
-
-      const res = await fetch(`${PIPELINE_URL}/api/solution/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) throw new Error('업로드 실패');
-      const data = await res.json();
-      setSolutionJobId(data.solution_job_id);
-      setSolutionStatus('uploaded');
-
-      // 즉시 추출 시작
-      await fetch(`${PIPELINE_URL}/api/solution/extract/${data.solution_job_id}`, {
-        method: 'POST',
-      });
-      setSolutionStatus('extracting');
-      toast({ title: '해설지 업로드 완료', description: '추출 중...' });
-    } catch (e: any) {
-      toast({ title: '오류', description: e.message, variant: 'destructive' });
-    } finally {
-      setSolutionUploading(false);
-    }
-  };
-
-  const handleApplySolution = async () => {
-    if (!solutionJobId || !jobId) return;
-    setApplyingTags(true);
-    try {
-      const res = await fetch(`${PIPELINE_URL}/api/solution/apply/${solutionJobId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ problem_job_id: jobId }),
-      });
-      if (!res.ok) throw new Error('적용 실패');
-      const data = await res.json();
-      toast({ title: '해설 적용 완료', description: data.message });
-      await loadProblems();
-    } catch (e: any) {
-      toast({ title: '오류', description: e.message, variant: 'destructive' });
-    } finally {
-      setApplyingTags(false);
-    }
-  };
-
   const handleTagFromProblem = async (stagingId: string) => {
     setTaggingProblemId(stagingId);
     try {
@@ -325,16 +251,6 @@ const ProblemDetail = () => {
   };
 
   const selectedProblem = problems.find(p => p.id === selectedId);
-
-  const solutionStatusLabel: Record<string, string> = {
-    uploaded: '업로드됨',
-    extracting: '정답 추출 중...',
-    cropping: '해설 크롭 중...',
-    uploading: '이미지 업로드 중...',
-    tagging: 'AI 태깅 중...',
-    done: '완료',
-    error: '오류 발생',
-  };
 
   if (loading) {
     return (
@@ -361,70 +277,13 @@ const ProblemDetail = () => {
           </div>
         </div>
 
-        {/* 해설지 연결 영역 */}
-        <div className="flex items-center gap-2">
-          {solutionJobId ? (
-            <div className="flex items-center gap-2 text-sm">
-              <span className={`px-2 py-1 rounded text-xs ${
-                solutionStatus === 'done' ? 'bg-green-100 text-green-700' :
-                solutionStatus === 'error' ? 'bg-red-100 text-red-700' :
-                'bg-blue-100 text-blue-700'
-              }`}>
-                해설지: {solutionStatusLabel[solutionStatus] || solutionStatus}
-                {solutionProgress && solutionStatus === 'tagging' && (
-                  <> ({solutionProgress.processed}/{solutionProgress.total})</>
-                )}
-              </span>
-              {solutionStatus === 'done' && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleApplySolution}
-                  disabled={applyingTags}
-                  className="text-xs h-7"
-                >
-                  {applyingTags ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
-                  문제에 적용
-                </Button>
-              )}
-            </div>
-          ) : (
-            <label className="cursor-pointer">
-              <input
-                type="file"
-                accept=".pdf"
-                className="hidden"
-                onChange={e => {
-                  const f = e.target.files?.[0];
-                  if (f) handleSolutionUpload(f);
-                }}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={solutionUploading}
-                asChild
-              >
-                <span>
-                  {solutionUploading ? (
-                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                  ) : (
-                    <Upload className="h-4 w-4 mr-1" />
-                  )}
-                  해설지 PDF 업로드
-                </span>
-              </Button>
-            </label>
-          )}
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate('/cms/textbooks')}
-          >
-            교재 목록으로
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => navigate('/cms/textbooks')}
+        >
+          교재 목록으로
+        </Button>
       </div>
 
       <div className="flex flex-1 overflow-hidden">

@@ -310,7 +310,7 @@ const PdfReview = () => {
       if (!res.ok) throw new Error('등록 실패');
       const data = await res.json();
       toast({ title: '검수 완료', description: data.message });
-      navigate(`/cms/pdf-review/${jobId}/details`);
+      navigate(`/cms/solution/${jobId}`);
     } catch (e: any) {
       toast({ title: '오류', description: e.message, variant: 'destructive' });
     } finally {
@@ -350,10 +350,46 @@ const PdfReview = () => {
             <p className="text-xs text-muted-foreground">총 {totalCount}개 문제</p>
           </div>
         </div>
-        <Button size="sm" onClick={handleFinalApprove} disabled={approving}>
-          {approving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
-          검수 완료 →
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={async () => {
+              if (dirtyPages.size > 0) {
+                toast({
+                  title: '미저장 수정 있음',
+                  description: `${[...dirtyPages].join(', ')}페이지를 저장하세요.`,
+                  variant: 'destructive',
+                });
+                return;
+              }
+              if (!profile) return;
+              setApproving(true);
+              try {
+                const res = await fetch(`${PIPELINE_URL}/api/staging/${jobId}/approve-all`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ teacher_id: profile.id }),
+                });
+                if (!res.ok) throw new Error('등록 실패');
+                const data = await res.json();
+                toast({ title: '검수 완료', description: data.message });
+                navigate(`/cms/pdf-review/${jobId}/details`);
+              } catch (e: any) {
+                toast({ title: '오류', description: e.message, variant: 'destructive' });
+              } finally {
+                setApproving(false);
+              }
+            }}
+            disabled={approving}
+          >
+            해설지 없이 바로 상세 입력
+          </Button>
+          <Button size="sm" onClick={handleFinalApprove} disabled={approving}>
+            {approving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
+            다음: 해설지 크롭 검수 →
+          </Button>
+        </div>
       </div>
 
       {hasBboxData ? (
