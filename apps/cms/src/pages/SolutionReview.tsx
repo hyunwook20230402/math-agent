@@ -150,10 +150,25 @@ export default function SolutionReview() {
     toast({ title: '두 번째 박스를 클릭하면 같은 번호로 묶입니다.' });
   }, [selectedBboxIdx]);
 
-  /** 묶기 취소 */
+  /** 묶기 취소 — 앵커 그대로, 아무것도 안 하고 종료 */
   const handleCancelMerge = useCallback(() => {
     setMergeAnchorIdx(null);
   }, []);
+
+  /** 그룹 확정 — 앵커 박스에 groupId 부여 후 묶기 모드 종료 (두 번째 박스 없이 끝낼 때) */
+  const handleConfirmMerge = useCallback(() => {
+    if (mergeAnchorIdx === null) return;
+    updateCurrentPageBboxes(prev => {
+      const items = [...prev];
+      const anchor = items[mergeAnchorIdx];
+      if (!anchor) return prev;
+      const gid = anchor.groupId || genGroupId();
+      items[mergeAnchorIdx] = { ...anchor, groupId: gid };
+      return items;
+    });
+    setMergeAnchorIdx(null);
+    toast({ title: '그룹 확정', description: '박스에 그룹 ID가 부여되었습니다.' });
+  }, [mergeAnchorIdx, updateCurrentPageBboxes]);
 
   /** 두 번째 박스 클릭 → 앵커와 같은 groupId 부여 */
   const handleMergeSelect = useCallback((idx: number) => {
@@ -826,8 +841,16 @@ export default function SolutionReview() {
                           ) : (
                             <span className="flex items-center gap-2">
                               <span className="text-xs text-orange-600 font-medium animate-pulse">
-                                묶을 박스를 클릭하세요 (ESC: 취소)
+                                묶을 박스를 클릭하세요
                               </span>
+                              <Button
+                                size="sm"
+                                variant="default"
+                                className="h-6 text-xs px-2"
+                                onClick={handleConfirmMerge}
+                              >
+                                그룹 확정
+                              </Button>
                               <Button
                                 size="sm"
                                 variant="outline"
