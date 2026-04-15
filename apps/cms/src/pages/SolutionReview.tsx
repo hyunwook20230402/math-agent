@@ -191,6 +191,30 @@ export default function SolutionReview() {
     });
   }, [selectedBboxIdx, updateCurrentPageBboxes]);
 
+  /** 같은 번호 자동 묶기 — 현재 페이지에서 번호가 같은 박스를 한 번에 그룹화 */
+  const handleAutoGroup = useCallback(() => {
+    updateCurrentPageBboxes(prev => {
+      const items = [...prev];
+      // 번호별로 묶기 (answer_table 제외)
+      const numToGid: Record<number, string> = {};
+      return items.map(it => {
+        if (it.boxType === 'answer_table' || !it.number) return it;
+        // 이미 그룹이 있으면 그 번호의 대표 gid로 통일
+        if (!numToGid[it.number]) {
+          numToGid[it.number] = it.groupId || genGroupId();
+        }
+        return { ...it, groupId: numToGid[it.number] };
+      });
+    });
+    toast({ title: '자동 묶기 완료', description: '같은 번호 박스를 모두 그룹화했습니다.' });
+  }, [updateCurrentPageBboxes]);
+
+  /** 전체 그룹 해제 — 현재 페이지 모든 groupId 제거 */
+  const handleUnmergeAll = useCallback(() => {
+    updateCurrentPageBboxes(prev => prev.map(it => ({ ...it, groupId: null })));
+    toast({ title: '전체 그룹 해제 완료' });
+  }, [updateCurrentPageBboxes]);
+
   /** 특정 idx 박스 삭제 */
   const handleDeleteBox = useCallback((idx: number) => {
     updateCurrentPageBboxes(prev => prev.filter((_, i) => i !== idx));
@@ -711,6 +735,12 @@ export default function SolutionReview() {
                       )}
                     </p>
                     <div className="flex gap-2">
+                      <Button variant="outline" onClick={handleAutoGroup} title="같은 번호 박스를 한 번에 그룹화">
+                        같은 번호 자동 묶기
+                      </Button>
+                      <Button variant="outline" onClick={handleUnmergeAll} title="이 페이지 모든 그룹 해제">
+                        전체 그룹 해제
+                      </Button>
                       {currentPageDirty && (
                         <Button variant="outline" onClick={handleResetBbox}>
                           <RotateCcw className="h-4 w-4 mr-1" />
