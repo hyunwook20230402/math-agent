@@ -1,0 +1,6 @@
+path: C:/Users/user/workspaces/math/backend/pdf_pipeline/yolo_training/dataset
+train: images/train
+val: images/val
+
+nc: 1
+names: ['problem']

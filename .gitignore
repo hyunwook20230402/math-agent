@@ -61,3 +61,10 @@ dist/
 
 # 임시 폴더 (이전 작업용, 삭제 예정)
 temp-repo/
+
+# YOLO 학습 산출물 (대용량, 재현 가능)
+backend/pdf_pipeline/yolo_training/runs/
+backend/pdf_pipeline/yolo_training/models/
+backend/pdf_pipeline/yolo_training/dataset_new/
+backend/pdf_pipeline/yolo_training/debug_user_labels/
+*.pt

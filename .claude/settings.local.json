@@ -63,7 +63,9 @@
       "Bash(grep -v \"^$\")",
       "Bash(xargs grep:*)",
       "Bash(grep -n \"PdfUploadDialog\\\\|textbook\" /c/Users/user/workspaces/math/apps/cms/src/pages/*.tsx)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(pip check:*)",
+      "Bash(du -sh backend/pdf_pipeline/yolo_training/*/)"
     ]
   },
   "hooks": {
