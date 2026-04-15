@@ -837,13 +837,12 @@ export default function SolutionReview() {
               <div className="flex items-center gap-2">
                 <label className="text-sm text-muted-foreground shrink-0">첫 해설 번호</label>
                 <input
-                  type="number"
-                  min={1}
-                  max={999}
+                  type="text"
+                  inputMode="numeric"
                   placeholder={String(computeStartNumber(activePage))}
                   value={pageStartNumbers[activePage] ?? ''}
                   onChange={e => {
-                    const val = e.target.value;
+                    const val = e.target.value.replace(/[^0-9]/g, '');
                     if (val === '') {
                       setPageStartNumbers(prev => {
                         const next = { ...prev };
