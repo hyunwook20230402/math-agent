@@ -6,5 +6,18 @@
       "Bash(npm install)",
       "Bash(git *)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/check_path_hook.py write"
+          }
+        ]
+      }
+    ]
   }
 }
