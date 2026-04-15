@@ -12,6 +12,7 @@ build/
 .env
 .env.local
 .env.*.local
+.mcp.json
 .env.development.local
 .env.test.local
 .env.production.local
