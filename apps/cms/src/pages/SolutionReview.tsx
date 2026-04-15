@@ -483,6 +483,7 @@ export default function SolutionReview() {
       });
       setSavedPages(prev => new Set([...prev, activePage]));
       setBboxResetKey(k => k + 1);
+      setSelectedBboxIdx(null); // 저장 완료 후 선택 툴바 닫기
     } catch (e: any) {
       toast({ title: '오류', description: e.message, variant: 'destructive' });
     } finally {
