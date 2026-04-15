@@ -98,6 +98,9 @@ def match_solutions_to_problems(
             "concept_tags": tags.get("concept_tags", []),
             "skill_tags": tags.get("skill_tags", []),
             "solution_summary": tags.get("solution_summary"),
+            "unit": tags.get("unit") or "",
+            "difficulty": tags.get("difficulty") or "",
+            "pitfall": tags.get("pitfall"),
             "match_confidence": confidence,
         }
 

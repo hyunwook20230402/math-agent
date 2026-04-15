@@ -275,6 +275,20 @@ def _normalize_solution_progress(progress: dict) -> dict:
                 new_pb[nk] = pdata
         out["page_bboxes"] = new_pb
 
+    tag_results = progress.get("tag_results")
+    if isinstance(tag_results, dict):
+        out["tag_results"] = {_coerce_int_key(k): v for k, v in tag_results.items()}
+
+    solution_image_urls = progress.get("solution_image_urls")
+    if isinstance(solution_image_urls, dict):
+        out["solution_image_urls"] = {
+            _coerce_int_key(k): v for k, v in solution_image_urls.items()
+        }
+
+    answers = progress.get("answers")
+    if isinstance(answers, dict):
+        out["answers"] = {_coerce_int_key(k): v for k, v in answers.items()}
+
     return out
 
 
@@ -382,6 +396,9 @@ def update_staging_solution(
     match_confidence: float | None = None,
     correct_answer: str | None = None,
     answer_type: str | None = None,
+    pitfall: str | None = None,
+    unit: str | None = None,
+    difficulty: str | None = None,
 ) -> dict:
     """staging 레코드에 해설 정보 업데이트"""
     client = get_client()
@@ -398,6 +415,12 @@ def update_staging_solution(
         payload["correct_answer"] = correct_answer
     if answer_type is not None:
         payload["answer_type"] = answer_type
+    if pitfall is not None:
+        payload["pitfall"] = pitfall
+    if unit is not None:
+        payload["unit"] = unit
+    if difficulty is not None:
+        payload["difficulty"] = difficulty
     if not payload:
         return {}
     result = (
