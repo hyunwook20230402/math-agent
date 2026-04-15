@@ -4,8 +4,11 @@ import re
 import uuid
 import json
 import asyncio
+import logging
 from pathlib import Path
 from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -901,11 +904,20 @@ class SolutionApplyRequest(BaseModel):
     overrides: Optional[list] = None  # [{staging_id, answer, answer_type}, ...]
 
 
-async def _run_solution_upload_and_tag(solution_job_id: str):
+async def _run_solution_upload_and_tag(
+    solution_job_id: str,
+    sample_count: int | None = None,
+    mode: str = "fresh",
+):
     """해설지 병합 + Storage 업로드 + AI 태깅 (백그라운드)
 
     extract 단계에서 크롭 + 정답 추출은 이미 완료되어 있음.
     여기서는 fragments를 병합하여 최종 해설 이미지 생성 → 업로드 → Qwen 태깅.
+
+    Args:
+      sample_count: 앞 N개만 태깅 (fresh 모드에서 샘플 검증용). None 이면 대상 전체.
+      mode: 'fresh' = 기존 tag_results 덮어쓰기(부분 업데이트), 'continue' = 이미 tag_results
+            에 있는 번호 제외하고 나머지만 태깅.
     """
     from pipeline.solution_parser import merge_cross_page_solutions
     from pipeline.solution_tagger import tag_all_solutions
@@ -942,51 +954,89 @@ async def _run_solution_upload_and_tag(solution_job_id: str):
         loop = asyncio.get_event_loop()
         from concurrent.futures import ThreadPoolExecutor
 
-        # 1. 페이지 걸침 병합
+        # 1. 페이지 걸침 병합 (전체 번호 대상)
         merged_dir = str(Path(pdf_path).parent / "solution_merged")
         merged_images = await loop.run_in_executor(
             None, merge_cross_page_solutions, fragments, merged_dir, 10, pdf_path
         )
 
-        # 2. Supabase Storage 업로드
+        # 1-1. 타겟 번호 결정 (mode + sample_count)
+        existing_tag_results = dict(job.get("tag_results") or {})
+        existing_tag_numbers = {
+            int(k) for k in existing_tag_results.keys()
+            if isinstance(k, int) or (isinstance(k, str) and k.isdigit())
+        }
+        all_numbers_sorted = sorted(int(n) for n in merged_images.keys())
+
+        if mode == "continue":
+            target_numbers = [n for n in all_numbers_sorted if n not in existing_tag_numbers]
+        else:  # fresh
+            target_numbers = list(all_numbers_sorted)
+
+        if sample_count is not None and sample_count > 0:
+            target_numbers = target_numbers[:sample_count]
+
+        target_set = set(target_numbers)
+        logger.info(
+            f"태깅 대상: mode={mode} sample_count={sample_count} "
+            f"→ {len(target_set)}개 / 전체 {len(all_numbers_sorted)}개"
+        )
+
+        # 2. Supabase Storage 업로드 — 타겟 번호만 (기존 url 은 보존/병합)
         solution_jobs[solution_job_id]["status"] = "uploading"
         update_solution_job(solution_job_id, status="uploading")
 
         upload_items = [
             {"number": num, "cropped_path": path, "page": 0}
             for num, path in merged_images.items()
+            if num in target_set
         ]
         uploaded = await loop.run_in_executor(
             None, upload_cropped_images, upload_items, f"solution_{solution_job_id}"
         )
-        solution_image_urls = {
+        new_urls = {
             item["number"]: item["source_image_url"] for item in uploaded
         }
-        solution_jobs[solution_job_id]["solution_image_urls"] = solution_image_urls
+        merged_urls = dict(job.get("solution_image_urls") or {})
+        merged_urls.update(new_urls)
+        solution_jobs[solution_job_id]["solution_image_urls"] = merged_urls
 
-        # 3. Qwen2.5-VL 태깅
+        # 3. Qwen2.5-VL 태깅 — 타겟 번호만
         solution_jobs[solution_job_id]["status"] = "tagging"
         update_solution_job(
             solution_job_id, status="tagging",
             progress=_merged_progress({
                 "processed": 0,
-                "total": len(merged_images),
+                "total": len(target_set),
                 "current_number": 0,
             }),
         )
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            tag_results = await loop.run_in_executor(
-                executor, tag_all_solutions, merged_images, _progress
+        def _tag_runner():
+            return tag_all_solutions(
+                merged_images, _progress, numbers_filter=target_set
             )
-        solution_jobs[solution_job_id]["tag_results"] = tag_results
 
-        # 4. 완료
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            new_tag_results = await loop.run_in_executor(executor, _tag_runner)
+
+        # raw_response 제거 (JSONB 비대화 방지) — 디버깅용이라 DB 저장 불필요
+        def _strip_raw(d: dict) -> dict:
+            return {k: v for k, v in d.items() if k != "raw_response"}
+
+        slim_new = {num: _strip_raw(r) for num, r in new_tag_results.items() if isinstance(r, dict)}
+        merged_tag_results = dict(existing_tag_results)
+        merged_tag_results.update(slim_new)
+        solution_jobs[solution_job_id]["tag_results"] = merged_tag_results
+
+        # 4. 완료 — progress 에 병합된 tag_results/solution_image_urls 도 저장
         update_solution_job(
             solution_job_id, status="done",
             progress=_merged_progress({
-                "processed": len(merged_images),
-                "total": len(merged_images),
+                "processed": len(target_set),
+                "total": len(target_set),
+                "tag_results": merged_tag_results,
+                "solution_image_urls": merged_urls,
             }),
         )
         solution_jobs[solution_job_id]["status"] = "done"
@@ -1297,21 +1347,45 @@ async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxe
 
 
 @app.post("/api/solution/{solution_job_id}/upload-and-tag")
-async def solution_upload_and_tag(solution_job_id: str, background_tasks: BackgroundTasks):
-    """검수 완료 후 병합 + Storage 업로드 + Qwen 태깅 (백그라운드)"""
+async def solution_upload_and_tag(
+    solution_job_id: str,
+    background_tasks: BackgroundTasks,
+    sample_count: int | None = None,
+    mode: str = "fresh",
+):
+    """검수 완료 후 병합 + Storage 업로드 + Qwen 태깅 (백그라운드)
+
+    쿼리 파라미터:
+      sample_count: 앞 N개만 태깅 (예: 4) — 샘플 검증용. None 이면 대상 전체.
+      mode: 'fresh'(기본) | 'continue'
+            - fresh: 대상 번호를 앞에서부터 (sample_count 있으면 N개). 이미 태그 있어도 덮어쓰기.
+            - continue: 아직 tag_results 에 없는 번호만 태깅 (이어서).
+    """
+    if mode not in ("fresh", "continue"):
+        raise HTTPException(400, f"mode 값이 잘못됨: {mode}")
+
     if solution_job_id not in solution_jobs:
         if _hydrate_solution_job(solution_job_id) is None:
             raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
 
     job = solution_jobs[solution_job_id]
-    if job["status"] not in ["reviewing", "error"]:
-        raise HTTPException(400, f"업로드 가능 상태 아님: {job['status']}")
+    # continue 모드는 done 상태에서도 허용 (이미 일부 끝난 상태에서 이어서)
+    allowed_statuses = {"reviewing", "error", "done"} if mode == "continue" else {"reviewing", "error", "done"}
+    if job["status"] not in allowed_statuses:
+        raise HTTPException(400, f"태깅 가능 상태 아님: {job['status']}")
     if not job.get("fragments"):
         raise HTTPException(400, "크롭 결과가 없습니다. extract부터 실행하세요.")
 
-    background_tasks.add_task(_run_solution_upload_and_tag, solution_job_id)
+    background_tasks.add_task(
+        _run_solution_upload_and_tag, solution_job_id, sample_count, mode
+    )
     solution_jobs[solution_job_id]["status"] = "queued"
-    return {"message": "AI 태깅 시작됨", "solution_job_id": solution_job_id}
+    return {
+        "message": "AI 태깅 시작됨",
+        "solution_job_id": solution_job_id,
+        "sample_count": sample_count,
+        "mode": mode,
+    }
 
 
 @app.get("/api/solution/by-problem/{problem_job_id}")
@@ -1401,6 +1475,9 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
             if sid:
                 override_map[sid] = ov
 
+    # staging 기존 값 맵 — unit/difficulty 는 기존값 비어있을 때만 덮어쓰기
+    staging_map = {row["id"]: row for row in staging}
+
     applied = 0
     for sid, data in match_results.items():
         num = data["problem_number"]
@@ -1411,6 +1488,19 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
         answer = ov.get("answer", data.get("answer"))
         answer_type = ov.get("answer_type", data.get("answer_type"))
 
+        # unit/difficulty 는 override > 기존 staging 값이 비어있을 때만 AI 결과로
+        existing_row = staging_map.get(sid, {})
+        ai_unit = data.get("unit") or None
+        ai_difficulty = data.get("difficulty") or None
+
+        unit_val = ov.get("unit")
+        if unit_val is None and not (existing_row.get("unit") or "").strip() and ai_unit:
+            unit_val = ai_unit
+
+        diff_val = ov.get("difficulty")
+        if diff_val is None and not (existing_row.get("difficulty") or "").strip() and ai_difficulty:
+            diff_val = ai_difficulty
+
         # staging 업데이트
         update_staging_solution(
             staging_id=sid,
@@ -1420,6 +1510,9 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
             match_confidence=data.get("match_confidence"),
             correct_answer=answer,
             answer_type=answer_type,
+            pitfall=data.get("pitfall"),
+            unit=unit_val,
+            difficulty=diff_val,
         )
 
         # 태그 삽입

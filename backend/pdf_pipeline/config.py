@@ -1,8 +1,11 @@
+import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://grukqugorspbwsxqdhru.supabase.co")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")  # service_role 키 필요
@@ -66,6 +69,9 @@ def resolve_upload_path(path_str: str, pdf_path_hint: str | Path | None = None) 
             if pdf_path_hint:
                 return Path(pdf_path_hint).parent / tail
             # hint 없으면 UPLOAD_DIR/solutions 아래 어디든 시도 — 호출측 책임
+            logger.warning(
+                f"resolve_upload_path: hint 없이 legacy 상대경로 fallback — {path_str!r}"
+            )
             return _UP / tail
         return _UP / p
 
@@ -81,5 +87,8 @@ def resolve_upload_path(path_str: str, pdf_path_hint: str | Path | None = None) 
                 tail = Path(*parts[i + 1:])  # solution_crops/<file>
                 if pdf_path_hint:
                     return Path(pdf_path_hint).parent / tail
+                logger.warning(
+                    f"resolve_upload_path: hint 없이 legacy 절대경로 fallback — {path_str!r}"
+                )
                 return _UP / tail
         return p
