@@ -36,10 +36,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PIPELINE_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(PIPELINE_DIR))
 
-DATASET_DIR = SCRIPT_DIR / "solution_dataset"
-
-_SPLIT_KEY = "solution_export_log.json"
-_EXPORT_LOG_PATH = SCRIPT_DIR / _SPLIT_KEY
+from config import SOLUTION_DATASET_DIR as DATASET_DIR
+from config import SOLUTION_EXPORT_LOG as _EXPORT_LOG_PATH
 
 
 def _load_log() -> dict:
@@ -139,8 +137,12 @@ def export_solution_labels(
         # train/val 분리
         split = "train" if random.random() < split_ratio else "val"
 
-        # 이미지 크기
-        with PILImage.open(page_img_path) as im:
+        # 이미지 크기 — ultralytics 가 PIL.Image.open 을 monkey-patch 해서
+        # 한글 경로를 cp949 로 해석하다 실패하므로, 바이트로 읽어 BytesIO 경유.
+        import io
+        with open(page_img_path, "rb") as f:
+            _buf = f.read()
+        with PILImage.open(io.BytesIO(_buf)) as im:
             img_w, img_h = im.size
 
         # 파일명 (solution_job_id 앞 8자 + 페이지번호)

@@ -15,7 +15,7 @@ const PIPELINE_URL = 'http://localhost:8000';
 interface StagingProblem {
   id: string;
   job_id: string;
-  problem_number: number;
+  problem_number: number | null;
   title: string;
   unit: string;
   difficulty: 'easy' | 'medium' | 'hard';
@@ -31,14 +31,19 @@ interface StagingProblem {
   bbox: { x1: number; y1: number; x2: number; y2: number; page_width?: number; page_height?: number } | null;
 }
 
-function toBboxItems(problems: StagingProblem[]): BboxItem[] {
-  return problems
-    .filter(p => p.bbox)
-    .map((p, i) => ({
-      stagingId: p.id,
-      bbox: { x1: p.bbox!.x1, y1: p.bbox!.y1, x2: p.bbox!.x2, y2: p.bbox!.y2 },
-      number: i + 1,
-    }));
+function toBboxItems(problems: StagingProblem[], startNumber: number): BboxItem[] {
+  const sorted = problems.filter(p => p.bbox).slice();
+  sorted.sort((a, b) => {
+    const an = a.problem_number ?? 0;
+    const bn = b.problem_number ?? 0;
+    if (an && bn) return an - bn;
+    return (a.bbox!.y1 ?? 0) - (b.bbox!.y1 ?? 0);
+  });
+  return sorted.map((p, i) => ({
+    stagingId: p.id,
+    bbox: { x1: p.bbox!.x1, y1: p.bbox!.y1, x2: p.bbox!.x2, y2: p.bbox!.y2 },
+    number: p.problem_number ?? (startNumber + i),
+  }));
 }
 
 function bboxChanged(a: BboxItem['bbox'], b: { x1: number; y1: number; x2: number; y2: number }): boolean {
@@ -157,10 +162,11 @@ const PdfReview = () => {
         setActivePage(pageNums[0]);
       }
 
-      // 이미 저장된 페이지 복원 (modified/approved 문제가 있는 페이지)
+      // 새로고침 후에도 저장 완료 ✓ 유지: 재크롭 저장한 페이지('modified')만 복원.
+      // 'approved'는 최종 승인 대상이고, 초기 YOLO 감지 결과도 'approved'로 저장돼 있을 수 있어 제외.
       const alreadySaved = new Set(
         list
-          .filter(p => p.status === 'modified' || p.status === 'approved')
+          .filter(p => p.status === 'modified')
           .map(p => p.page_number)
           .filter(Boolean) as number[]
       );
@@ -186,6 +192,18 @@ const PdfReview = () => {
     }
   };
 
+  // 앞선 페이지들의 박스 수 누적 → 현재 페이지 시작 번호 (DB problem_number 없을 때 fallback)
+  const computeStartNumber = useCallback((targetPage: number): number => {
+    const prior = pages.filter(p => p < targetPage);
+    let count = 0;
+    for (const p of prior) {
+      const cached = bboxCache.get(p);
+      if (cached) count += cached.length;
+      else count += problems.filter(pr => pr.page_number === p && pr.bbox).length;
+    }
+    return count + 1;
+  }, [pages, bboxCache, problems]);
+
   // 페이지 전환 시 캐시 초기화 (캐시 없는 페이지만)
   useEffect(() => {
     if (activePage === 0) return;
@@ -196,19 +214,19 @@ const PdfReview = () => {
       if (!prev.has(activePage)) {
         const pageProblems = problems.filter(p => p.page_number === activePage);
         const next = new Map(prev);
-        next.set(activePage, toBboxItems(pageProblems));
+        next.set(activePage, toBboxItems(pageProblems, computeStartNumber(activePage)));
         return next;
       }
       return prev;
     });
-  }, [activePage, problems]);
+  }, [activePage, problems, computeStartNumber]);
 
   // 현재 페이지 bbox (캐시 우선)
   const bboxItems: BboxItem[] = useMemo(() => {
     if (bboxCache.has(activePage)) return bboxCache.get(activePage)!;
     const pageProblems = problems.filter(p => p.page_number === activePage);
-    return toBboxItems(pageProblems);
-  }, [activePage, bboxCache, problems]);
+    return toBboxItems(pageProblems, computeStartNumber(activePage));
+  }, [activePage, bboxCache, problems, computeStartNumber]);
 
   const activePageProblems = problems.filter(p => p.page_number === activePage);
   const pageImageUrl = activePageProblems[0]?.source_page_image_url || null;
@@ -264,7 +282,7 @@ const PdfReview = () => {
     const pageProblems = problems.filter(p => p.page_number === activePage);
     setBboxCache(prev => {
       const next = new Map(prev);
-      next.set(activePage, toBboxItems(pageProblems));
+      next.set(activePage, toBboxItems(pageProblems, computeStartNumber(activePage)));
       return next;
     });
     // 초기화 시 dirty 해제
@@ -301,17 +319,14 @@ const PdfReview = () => {
     });
     if (!res.ok) return false;
 
-    // 저장 후 서버 응답으로 bboxCache 동기화 (신규 박스에 stagingId 부여)
+    // 서버 응답이 전체 staging → problems 전체 교체 + bboxCache 무효화
+    // (뒤 페이지 번호가 시프트되었을 수 있음)
     try {
       const data = await res.json();
-      const savedProblems: StagingProblem[] = data.problems ?? [];
-      if (savedProblems.length > 0) {
-        const updatedItems = toBboxItems(savedProblems.filter(p => p.page_number === pageNum));
-        setBboxCache(prev => {
-          const next = new Map(prev);
-          next.set(pageNum, updatedItems);
-          return next;
-        });
+      const refreshed: StagingProblem[] = data.problems ?? [];
+      if (refreshed.length > 0) {
+        setProblems(refreshed);
+        setBboxCache(new Map());
       }
     } catch {
       // 응답 파싱 실패해도 저장 자체는 성공
@@ -556,6 +571,8 @@ const PdfReview = () => {
                     items={bboxItems}
                     onChange={handleBboxChange}
                     resetKey={bboxResetKey}
+                    preserveNumbers={true}
+                    fallbackStartNumber={computeStartNumber(activePage) + bboxItems.length}
                   />
                 </>
               ) : (

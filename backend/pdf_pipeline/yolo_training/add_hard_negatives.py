@@ -12,10 +12,15 @@ YOLO가 이런 영역을 문제로 오감지하지 않도록 학습.
 """
 import random
 import shutil
+import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DATASET_DIR = SCRIPT_DIR / "dataset_new"
+PIPELINE_DIR = SCRIPT_DIR.parent
+sys.path.insert(0, str(PIPELINE_DIR))
+
+from config import PROBLEM_DATASET_DIR as DATASET_DIR
+
 SOURCE_DIR = SCRIPT_DIR / "hard_negatives_raw"
 
 

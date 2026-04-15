@@ -2,7 +2,7 @@
 
 사용법:
   POST /api/export-training-data  {"job_id": "uuid"}
-  → yolo_training/dataset_new/ 에 images/train, images/val, labels/train, labels/val 생성
+  → uploads/problems/dataset/ 에 images/train, images/val, labels/train, labels/val 생성
 """
 import io
 import random
@@ -11,8 +11,7 @@ from pathlib import Path
 from typing import List
 
 from storage.supabase_client import get_client
-
-DATASET_DIR = Path(__file__).parent.parent / "yolo_training" / "dataset_new"
+from config import PROBLEM_DATASET_DIR as DATASET_DIR
 
 
 def export_to_yolo(job_id: str, split_ratio: float = 0.8, page_numbers: list | None = None) -> dict:

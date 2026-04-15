@@ -17,7 +17,9 @@ from typing import List, Dict, Optional
 
 from ultralytics import YOLO
 
-_DEFAULT_MODEL_PATH = str(Path(__file__).parent.parent / "models" / "solution_detector.pt")
+from config import SOLUTION_MODEL_PATH
+
+_DEFAULT_MODEL_PATH = str(SOLUTION_MODEL_PATH)
 
 
 def load_model(model_path: str = None) -> YOLO:

@@ -15,8 +15,9 @@ from typing import List, Dict, Optional
 
 from ultralytics import YOLO
 
-# 기본 모델 경로
-_DEFAULT_MODEL_PATH = str(Path(__file__).parent.parent / "models" / "exam_problem_detector.pt")
+from config import PROBLEM_MODEL_PATH
+
+_DEFAULT_MODEL_PATH = str(PROBLEM_MODEL_PATH)
 
 
 def load_model(model_path: str = None) -> YOLO:

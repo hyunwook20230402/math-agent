@@ -1,4 +1,4 @@
-path: C:/Users/user/workspaces/math/backend/pdf_pipeline/yolo_training/dataset_new
+path: C:/Users/user/workspaces/math/backend/pdf_pipeline/uploads/problems/dataset
 train: images/train
 val: images/val
 nc: 1

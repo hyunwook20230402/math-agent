@@ -64,6 +64,10 @@ def main():
     print(f"BEST_MODEL_PATH={best_pt}")
     print(f"\n학습 완료! Best model: {best_pt}")
 
+    # 학습 직후 추론용 models/ 로 자동 복사
+    from promote_model import promote
+    promote(SCRIPT_DIR / "runs" / args.run_name, "solution")
+
 
 if __name__ == "__main__":
     main()
