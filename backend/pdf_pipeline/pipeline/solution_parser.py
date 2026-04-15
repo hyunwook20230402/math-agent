@@ -11,6 +11,7 @@ from pathlib import Path
 from PIL import Image
 
 from pipeline.file_converter import extract_images_from_pdf
+from pipeline.ocr_engine import ocr_detect_boxes
 
 logger = logging.getLogger(__name__)
 
