@@ -171,53 +171,64 @@ def crop_solutions(
       dpi: PDF→이미지 변환 해상도
 
     Returns:
-      {번호: ["page001_0001.png", "page002_0001.png", ...]} (조각 목록)
+      {
+        "pages": {
+          page_num: {
+            "page_image_path": str,
+            "page_width": int, "page_height": int,
+            "items": [{"number","bbox","cropped_path","is_fragment"}]
+          }
+        },
+        "fragments": {번호: [조각경로, ...]}
+      }
     """
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    import tempfile
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        page_images = extract_images_from_pdf(pdf_path, tmp_dir, dpi=dpi)
+    pages_tmp_dir = out_dir / "_pages"
+    pages_tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        crops_by_number: dict[int, list[str]] = {}
-        seen_numbers: set[int] = set()
+    page_images = extract_images_from_pdf(pdf_path, str(pages_tmp_dir), dpi=dpi)
 
-        for pi in page_images:
-            img_path = pi["image_path"]
-            page_num = pi["page"]
+    pages_data: dict = {}
+    fragments: dict[int, list[str]] = {}
 
-            ocr_results = ocr_detect_boxes(img_path)
+    for pi in page_images:
+        img_path = pi["image_path"]
+        page_num = pi["page"]
 
-            from PIL import Image as PILImage
-            img = PILImage.open(img_path)
-            w, h = img.size
-            img.close()
+        ocr_results = ocr_detect_boxes(img_path)
 
-            # 해설지 번호 패턴: 1~3자리 숫자 (페이지 걸침이 있어 skip_numbers 사용 안 함)
-            # 단, 이미 완전히 추출한 번호와 동일한 페이지에서 재등장하는 건 같은 번호의 연속
-            detections = detect_problem_numbers(
-                ocr_results,
-                pattern=_SOLUTION_NUMBER_PATTERN,
-                page_height=h,
-                page_width=w,
-                layout="auto",
-                # skip_numbers 사용 안 함 — 걸침 번호가 다음 페이지 첫 번호로 재등장
-            )
+        img = Image.open(img_path)
+        w, h = img.size
+        img.close()
 
-            if not detections:
-                # 번호 감지 실패 시 — 이전 페이지 마지막 번호의 연속으로 간주
-                # 이미지 전체를 마지막 번호의 추가 조각으로 저장
-                if crops_by_number:
-                    last_num = max(crops_by_number.keys())
-                    frag_path = str(out_dir / f"page_{page_num:03d}_{last_num:04d}_frag.png")
-                    whole_img = PILImage.open(img_path)
-                    trimmed = _trim_whitespace(whole_img)
-                    trimmed.save(frag_path)
-                    whole_img.close()
-                    crops_by_number[last_num].append(frag_path)
-                continue
+        detections = detect_problem_numbers(
+            ocr_results,
+            pattern=_SOLUTION_NUMBER_PATTERN,
+            page_height=h,
+            page_width=w,
+            layout="auto",
+        )
 
+        page_items: list[dict] = []
+
+        if not detections:
+            if fragments:
+                last_num = max(fragments.keys())
+                frag_path = str(out_dir / f"page_{page_num:03d}_{last_num:04d}_frag.png")
+                whole_img = Image.open(img_path)
+                trimmed = _trim_whitespace(whole_img)
+                trimmed.save(frag_path)
+                whole_img.close()
+                fragments[last_num].append(frag_path)
+                page_items.append({
+                    "number": last_num,
+                    "bbox": {"x1": 0, "y1": 0, "x2": w, "y2": h},
+                    "cropped_path": frag_path,
+                    "is_fragment": True,
+                })
+        else:
             footer = detect_footer_y(ocr_results, h)
             regions = compute_crop_regions(
                 detections, w, h,
@@ -227,14 +238,27 @@ def crop_solutions(
             )
             cropped = crop_and_save(img_path, regions, str(out_dir), page_num)
 
+            region_by_num = {r["number"]: r["crop_box"] for r in regions}
             for item in cropped:
                 num = item["number"]
                 path = item["cropped_path"]
-                if num not in crops_by_number:
-                    crops_by_number[num] = []
-                crops_by_number[num].append(path)
+                x1, y1, x2, y2 = region_by_num.get(num, (0, 0, w, h))
+                fragments.setdefault(num, []).append(path)
+                page_items.append({
+                    "number": num,
+                    "bbox": {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)},
+                    "cropped_path": path,
+                    "is_fragment": False,
+                })
 
-        return crops_by_number
+        pages_data[page_num] = {
+            "page_image_path": img_path,
+            "page_width": w,
+            "page_height": h,
+            "items": page_items,
+        }
+
+    return {"pages": pages_data, "fragments": fragments}
 
 
 def merge_cross_page_solutions(

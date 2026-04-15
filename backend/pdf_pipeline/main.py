@@ -643,27 +643,16 @@ class SolutionApplyRequest(BaseModel):
     overrides: Optional[list] = None  # [{staging_id, answer, answer_type}, ...]
 
 
-async def _run_solution_extraction(
-    solution_job_id: str,
-    pdf_path: str,
-    teacher_id: str,
-    problem_job_id: Optional[str],
-):
-    """해설지 파이프라인 백그라운드 작업
+async def _run_solution_upload_and_tag(solution_job_id: str):
+    """해설지 병합 + Storage 업로드 + AI 태깅 (백그라운드)
 
-    1. PDF → 페이지 이미지
-    2. 정답 파싱 (정답표 우선, 없으면 인라인)
-    3. 해설 크롭 + 페이지 걸침 병합
-    4. 해설 이미지 Supabase Storage 업로드
-    5. Qwen2.5-VL 태깅 (progress 업데이트)
-    6. solution_jobs 완료 상태 저장
+    extract 단계에서 크롭 + 정답 추출은 이미 완료되어 있음.
+    여기서는 fragments를 병합하여 최종 해설 이미지 생성 → 업로드 → Qwen 태깅.
     """
-    from pipeline.solution_parser import extract_answers, crop_solutions, merge_cross_page_solutions
+    from pipeline.solution_parser import merge_cross_page_solutions
     from pipeline.solution_tagger import tag_all_solutions
     from storage.supabase_client import update_solution_job
     from storage.image_uploader import upload_cropped_images
-
-    import tempfile
 
     def _progress(processed, total, current_number):
         solution_jobs[solution_job_id]["progress"] = {
@@ -678,37 +667,23 @@ async def _run_solution_extraction(
         )
 
     try:
-        # 1. 정답 추출
-        solution_jobs[solution_job_id]["status"] = "extracting"
-        update_solution_job(solution_job_id, status="extracting")
+        job = solution_jobs[solution_job_id]
+        pdf_path = job["file_path"]
+        fragments = job.get("fragments", {})
+
+        if not fragments:
+            raise RuntimeError("해설 크롭 결과가 없습니다. 먼저 /api/solution/extract를 호출하세요.")
 
         loop = asyncio.get_event_loop()
         from concurrent.futures import ThreadPoolExecutor
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            answers = await loop.run_in_executor(
-                executor, extract_answers, pdf_path
-            )
-
-        solution_jobs[solution_job_id]["answers"] = answers
-
-        # 2. 해설 크롭 + 걸침 병합
-        solution_jobs[solution_job_id]["status"] = "cropping"
-        update_solution_job(solution_job_id, status="cropping")
-
-        crop_dir = str(Path(pdf_path).parent / "solution_crops")
+        # 1. 페이지 걸침 병합
         merged_dir = str(Path(pdf_path).parent / "solution_merged")
-
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            raw_crops = await loop.run_in_executor(
-                executor, crop_solutions, pdf_path, crop_dir
-            )
-
         merged_images = await loop.run_in_executor(
-            None, merge_cross_page_solutions, raw_crops, merged_dir
+            None, merge_cross_page_solutions, fragments, merged_dir
         )
 
-        # 3. 해설 이미지 Supabase Storage 업로드
+        # 2. Supabase Storage 업로드
         solution_jobs[solution_job_id]["status"] = "uploading"
         update_solution_job(solution_job_id, status="uploading")
 
@@ -720,12 +695,11 @@ async def _run_solution_extraction(
             None, upload_cropped_images, upload_items, f"solution_{solution_job_id}"
         )
         solution_image_urls = {
-            item["number"]: item["source_image_url"]
-            for item in uploaded
+            item["number"]: item["source_image_url"] for item in uploaded
         }
         solution_jobs[solution_job_id]["solution_image_urls"] = solution_image_urls
 
-        # 4. Qwen2.5-VL 태깅
+        # 3. Qwen2.5-VL 태깅
         solution_jobs[solution_job_id]["status"] = "tagging"
         update_solution_job(
             solution_job_id, status="tagging",
@@ -736,10 +710,9 @@ async def _run_solution_extraction(
             tag_results = await loop.run_in_executor(
                 executor, tag_all_solutions, merged_images, _progress
             )
-
         solution_jobs[solution_job_id]["tag_results"] = tag_results
 
-        # 5. 완료
+        # 4. 완료
         update_solution_job(
             solution_job_id, status="done",
             progress={"processed": len(merged_images), "total": len(merged_images)}
@@ -828,24 +801,171 @@ async def solution_upload(
 
 
 @app.post("/api/solution/extract/{solution_job_id}")
-async def solution_extract(solution_job_id: str, background_tasks: BackgroundTasks):
-    """해설지 추출 파이프라인 시작 (백그라운드)"""
+async def solution_extract(solution_job_id: str):
+    """해설 크롭 + 정답 추출 (동기). 검수용 page_bboxes를 반환.
+
+    업로드 + AI 태깅은 /api/solution/{id}/upload-and-tag에서 별도 처리.
+    """
     if solution_job_id not in solution_jobs:
         raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
 
     job = solution_jobs[solution_job_id]
-    if job["status"] not in ["uploaded", "error"]:
-        raise HTTPException(400, f"이미 처리 중입니다. 현재 상태: {job['status']}")
+    if job["status"] not in ["uploaded", "error", "reviewing"]:
+        raise HTTPException(400, f"처리할 수 없는 상태: {job['status']}")
 
-    background_tasks.add_task(
-        _run_solution_extraction,
-        solution_job_id,
-        job["file_path"],
-        job["teacher_id"],
-        job.get("problem_job_id"),
-    )
+    from pipeline.solution_parser import extract_answers, crop_solutions
+    from storage.supabase_client import update_solution_job
+    from storage.image_uploader import upload_page_image
+    from concurrent.futures import ThreadPoolExecutor
+
+    pdf_path = job["file_path"]
+    crop_dir = str(Path(pdf_path).parent / "solution_crops")
+
+    solution_jobs[solution_job_id]["status"] = "extracting"
+    update_solution_job(solution_job_id, status="extracting")
+
+    loop = asyncio.get_event_loop()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            answers = await loop.run_in_executor(executor, extract_answers, pdf_path)
+            crop_result = await loop.run_in_executor(executor, crop_solutions, pdf_path, crop_dir)
+
+        pages = crop_result.get("pages", {})
+        fragments = crop_result.get("fragments", {})
+
+        # 페이지 원본 이미지를 Storage에 업로드해서 검수 UI에서 로드 가능하게
+        page_bboxes: dict = {}
+        for page_num, pdata in pages.items():
+            page_img_path = pdata["page_image_path"]
+            page_url = await loop.run_in_executor(
+                None, upload_page_image, f"solution_{solution_job_id}", page_num, page_img_path
+            )
+            page_bboxes[page_num] = {
+                "page_image_url": page_url,
+                "page_width": pdata["page_width"],
+                "page_height": pdata["page_height"],
+                "items": pdata["items"],
+            }
+
+        solution_jobs[solution_job_id]["answers"] = answers
+        solution_jobs[solution_job_id]["fragments"] = fragments
+        solution_jobs[solution_job_id]["page_bboxes"] = page_bboxes
+        solution_jobs[solution_job_id]["status"] = "reviewing"
+        update_solution_job(solution_job_id, status="reviewing")
+
+        total_numbers = len(fragments)
+        return {
+            "solution_job_id": solution_job_id,
+            "page_bboxes": page_bboxes,
+            "answers": answers,
+            "total_numbers": total_numbers,
+        }
+    except Exception as e:
+        solution_jobs[solution_job_id]["status"] = "error"
+        solution_jobs[solution_job_id]["error"] = str(e)
+        update_solution_job(solution_job_id, status="error", error=str(e))
+        raise HTTPException(500, f"추출 실패: {e}")
+
+
+class SolutionBboxUpdateItem(BaseModel):
+    number: int
+    bbox: Dict[str, float]  # {x1, y1, x2, y2}
+
+
+class SolutionUpdateBboxesRequest(BaseModel):
+    page_number: int
+    items: list  # [SolutionBboxUpdateItem]
+
+
+@app.put("/api/solution/{solution_job_id}/update-bboxes")
+async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxesRequest):
+    """사용자가 수정한 페이지별 bbox로 재크롭. fragments/page_bboxes 갱신."""
+    if solution_job_id not in solution_jobs:
+        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+
+    job = solution_jobs[solution_job_id]
+    page_bboxes = job.get("page_bboxes", {})
+    page_data = page_bboxes.get(body.page_number) or page_bboxes.get(str(body.page_number))
+    if not page_data:
+        raise HTTPException(404, f"{body.page_number}페이지 데이터 없음")
+
+    from PIL import Image as PILImage
+    from pipeline.image_cropper import _trim_whitespace
+
+    # 기존 해당 페이지 조각들을 fragments에서 제거
+    old_items = page_data.get("items", [])
+    old_paths_by_num: dict[int, list[str]] = {}
+    for it in old_items:
+        old_paths_by_num.setdefault(it["number"], []).append(it["cropped_path"])
+
+    fragments: dict = job.get("fragments", {})
+    for num, paths in old_paths_by_num.items():
+        if num in fragments:
+            fragments[num] = [p for p in fragments[num] if p not in paths]
+            if not fragments[num]:
+                del fragments[num]
+
+    # 새 bbox로 재크롭
+    pdf_parent = Path(job["file_path"]).parent
+    crop_dir = pdf_parent / "solution_crops"
+    crop_dir.mkdir(parents=True, exist_ok=True)
+
+    # page_image_url이 아닌 로컬 페이지 원본 사용 — extract 시 pages_tmp_dir에 저장됨
+    pages_tmp_dir = crop_dir / "_pages"
+    # 페이지 원본 찾기
+    local_page_imgs = sorted(pages_tmp_dir.glob("*.png"))
+    page_img_path = None
+    if body.page_number - 1 < len(local_page_imgs):
+        page_img_path = str(local_page_imgs[body.page_number - 1])
+    if not page_img_path or not Path(page_img_path).exists():
+        raise HTTPException(500, "페이지 원본 이미지를 찾을 수 없습니다.")
+
+    img = PILImage.open(page_img_path)
+    new_items: list = []
+    for idx, it in enumerate(body.items):
+        num = it["number"] if isinstance(it, dict) else it.number
+        bbox = it["bbox"] if isinstance(it, dict) else it.bbox
+        x1, y1 = int(bbox["x1"]), int(bbox["y1"])
+        x2, y2 = int(bbox["x2"]), int(bbox["y2"])
+        if x2 <= x1 or y2 <= y1:
+            continue
+        cropped = img.crop((x1, y1, x2, y2))
+        cropped = _trim_whitespace(cropped)
+        save_path = str(crop_dir / f"page_{body.page_number:03d}_{num:04d}_edit_{idx}.png")
+        cropped.save(save_path)
+
+        fragments.setdefault(num, []).append(save_path)
+        new_items.append({
+            "number": num,
+            "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+            "cropped_path": save_path,
+            "is_fragment": False,
+        })
+    img.close()
+
+    # 메모리 갱신
+    page_data["items"] = new_items
+    job["fragments"] = fragments
+    job["page_bboxes"][body.page_number] = page_data
+
+    return {"ok": True, "items": new_items, "fragments_count": len(fragments)}
+
+
+@app.post("/api/solution/{solution_job_id}/upload-and-tag")
+async def solution_upload_and_tag(solution_job_id: str, background_tasks: BackgroundTasks):
+    """검수 완료 후 병합 + Storage 업로드 + Qwen 태깅 (백그라운드)"""
+    if solution_job_id not in solution_jobs:
+        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+
+    job = solution_jobs[solution_job_id]
+    if job["status"] not in ["reviewing", "error"]:
+        raise HTTPException(400, f"업로드 가능 상태 아님: {job['status']}")
+    if not job.get("fragments"):
+        raise HTTPException(400, "크롭 결과가 없습니다. extract부터 실행하세요.")
+
+    background_tasks.add_task(_run_solution_upload_and_tag, solution_job_id)
     solution_jobs[solution_job_id]["status"] = "queued"
-    return {"message": "해설지 추출 시작됨", "solution_job_id": solution_job_id}
+    return {"message": "AI 태깅 시작됨", "solution_job_id": solution_job_id}
 
 
 @app.get("/api/solution/status/{solution_job_id}")
