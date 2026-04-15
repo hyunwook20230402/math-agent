@@ -279,6 +279,9 @@ export default function SolutionReview() {
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
   const [applying, setApplying] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [tagResults, setTagResults] = useState<Record<string, any>>({});
+  const [expandedTagNumber, setExpandedTagNumber] = useState<number | null>(null);
+  const [taggingMode, setTaggingMode] = useState<'sample' | 'continue' | 'full' | null>(null);
 
   const activePageRef = useRef<number>(0);
   useEffect(() => { activePageRef.current = activePage; }, [activePage]);
@@ -342,6 +345,7 @@ export default function SolutionReview() {
         const modified: number[] = (job.modified_pages ?? job.progress?.modified_pages ?? []).map(Number);
         setSavedPages(new Set(modified));
         setAnswers(job.answers ?? {});
+        setTagResults(job.tag_results ?? job.progress?.tag_results ?? {});
         setStage(job.status === 'done' ? 'done' : job.status === 'queued' || job.status === 'processing' ? 'tagging' : 'reviewing');
         toast({ title: '작업 복구됨', description: `${pageNums.length}페이지 불러옴` });
       } catch (e) {
@@ -499,7 +503,13 @@ export default function SolutionReview() {
   };
 
   // 4. AI 태깅 시작 (백그라운드)
-  const handleStartTagging = async () => {
+  //    mode:
+  //      - 'sample' : fresh + sample_count=4 (앞 4개 덮어쓰기)
+  //      - 'full'   : fresh 전체 (기존 tag_results 있어도 덮어쓰기)
+  //      - 'continue': 아직 tag_results 없는 번호만 이어서
+  const handleStartTagging = async (
+    mode: 'sample' | 'continue' | 'full' = 'full',
+  ) => {
     if (!solutionJobId) return;
     if (dirtyPages.size > 0) {
       toast({
@@ -510,15 +520,29 @@ export default function SolutionReview() {
       return;
     }
     try {
-      const res = await fetch(`${PIPELINE_URL}/api/solution/${solutionJobId}/upload-and-tag`, {
-        method: 'POST',
-      });
+      const qs = new URLSearchParams();
+      if (mode === 'sample') {
+        qs.set('sample_count', '4');
+        qs.set('mode', 'fresh');
+      } else if (mode === 'continue') {
+        qs.set('mode', 'continue');
+      } else {
+        qs.set('mode', 'fresh');
+      }
+      const res = await fetch(
+        `${PIPELINE_URL}/api/solution/${solutionJobId}/upload-and-tag?${qs.toString()}`,
+        { method: 'POST' },
+      );
       if (!res.ok) {
         const txt = await res.text();
         throw new Error(`태깅 시작 실패: ${txt}`);
       }
       setStage('tagging');
-      toast({ title: 'AI 태깅 시작', description: '해설 이미지 병합 + Qwen 태깅 중...' });
+      setTaggingMode(mode);
+      const label = mode === 'sample' ? '샘플 4개'
+        : mode === 'continue' ? '남은 문제 이어서'
+        : '전체 태깅';
+      toast({ title: `AI 태깅 시작 (${label})`, description: 'Qwen 태깅 진행 중. 중간 종료 말고 기다려 주세요.' });
     } catch (e: any) {
       toast({ title: '오류', description: e.message, variant: 'destructive' });
     }
@@ -533,12 +557,17 @@ export default function SolutionReview() {
         if (!res.ok) return;
         const data = await res.json();
         if (data.progress) setProgress(data.progress);
+        if (data.tag_results || data.progress?.tag_results) {
+          setTagResults(data.tag_results ?? data.progress?.tag_results ?? {});
+        }
         if (data.status === 'done') {
           setStage('done');
+          setTaggingMode(null);
           clearInterval(timer);
         } else if (data.status === 'error') {
           setStage('error');
           setErrorMsg(data.error || '태깅 실패');
+          setTaggingMode(null);
           clearInterval(timer);
         }
       } catch {}
@@ -602,10 +631,19 @@ export default function SolutionReview() {
       }
       setExportedAt(new Date().toISOString().slice(0, 19).replace('T', ' '));
       setExportInfo({ train: data.train, val: data.val });
-      toast({
-        title: 'Export 완료',
-        description: `train: ${data.train ?? 0}, val: ${data.val ?? 0} 페이지`,
-      });
+      const warnings: string[] = Array.isArray(data.warnings) ? data.warnings : [];
+      if (warnings.length > 0) {
+        toast({
+          title: `Export 완료 (경고 ${warnings.length}건)`,
+          description: `train: ${data.train ?? 0}, val: ${data.val ?? 0}\n${warnings.join('\n')}`,
+          variant: 'destructive',
+        });
+      } else {
+        toast({
+          title: 'Export 완료',
+          description: `train: ${data.train ?? 0}, val: ${data.val ?? 0} 페이지`,
+        });
+      }
     } catch (e: any) {
       toast({ title: '오류', description: e.message, variant: 'destructive' });
     } finally {
@@ -713,17 +751,49 @@ export default function SolutionReview() {
                   YOLO 재학습 시작
                 </Button>
               )}
-              <Button onClick={handleStartTagging}>
+              <Button
+                variant="outline"
+                onClick={() => handleStartTagging('sample')}
+                title="앞 4개만 태깅해 결과 확인. 프롬프트/taxonomy 조정 후 재호출 가능."
+              >
                 <Check className="h-4 w-4 mr-1" />
-                검수 완료 — AI 태깅 시작
+                샘플 태깅 (앞 4개)
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => handleStartTagging('continue')}
+                disabled={Object.keys(tagResults).length === 0}
+                title="tag_results에 아직 없는 번호만 이어서 태깅"
+              >
+                남은 문제 이어서 태깅
+              </Button>
+              <Button onClick={() => handleStartTagging('full')}>
+                <Check className="h-4 w-4 mr-1" />
+                검수 완료 — 전체 AI 태깅
               </Button>
             </>
           )}
           {stage === 'done' && (
-            <Button onClick={handleApply} disabled={applying}>
-              {applying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
-              문제에 적용 → 상세 입력
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                onClick={() => handleStartTagging('sample')}
+                title="샘플 재태깅"
+              >
+                샘플 재태깅 (앞 4개)
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => handleStartTagging('continue')}
+                title="아직 안 된 번호만 이어서"
+              >
+                남은 문제 이어서 태깅
+              </Button>
+              <Button onClick={handleApply} disabled={applying}>
+                {applying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
+                문제에 적용 → 상세 입력
+              </Button>
+            </>
           )}
           <Button
             variant="outline"
@@ -800,7 +870,11 @@ export default function SolutionReview() {
         <div className="flex-1 flex items-center justify-center bg-gray-50">
           <div className="text-center space-y-4">
             <Loader2 className="h-12 w-12 mx-auto animate-spin text-primary" />
-            <p className="text-lg font-semibold">AI 태깅 진행 중</p>
+            <p className="text-lg font-semibold">
+              AI 태깅 진행 중
+              {taggingMode === 'sample' && ' (샘플 4개)'}
+              {taggingMode === 'continue' && ' (남은 문제 이어서)'}
+            </p>
             {progress && (
               <p className="text-sm text-muted-foreground">
                 {progress.processed} / {progress.total}개 처리 중
@@ -814,19 +888,80 @@ export default function SolutionReview() {
           </div>
         </div>
       ) : stage === 'done' ? (
-        <div className="flex-1 flex items-center justify-center bg-gray-50">
-          <div className="max-w-md w-full p-8 bg-white rounded-lg shadow-sm border text-center">
-            <Check className="h-12 w-12 mx-auto mb-4 text-green-500" />
-            <h2 className="text-lg font-semibold mb-2">AI 태깅 완료</h2>
-            <p className="text-sm text-muted-foreground mb-4">
-              정답 + 해설 이미지 + 개념/스킬 태그 + 풀이 요약이 생성되었습니다.
-              <br />
-              "문제에 적용" 버튼을 누르면 문제 staging에 반영됩니다.
-            </p>
-            <Button onClick={handleApply} disabled={applying}>
-              {applying ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
-              문제에 적용 → 상세 입력
-            </Button>
+        <div className="flex-1 overflow-y-auto bg-gray-50 p-6">
+          <div className="max-w-3xl mx-auto space-y-4">
+            <div className="bg-white rounded-lg shadow-sm border p-6 flex items-start gap-4">
+              <Check className="h-8 w-8 text-green-500 flex-shrink-0 mt-1" />
+              <div className="flex-1">
+                <h2 className="text-lg font-semibold mb-1">AI 태깅 결과 미리보기</h2>
+                <p className="text-sm text-muted-foreground">
+                  처리됨 <strong>{Object.keys(tagResults).length}</strong> 문제. 아래 카드를 클릭하면 상세 태그를 볼 수 있습니다.
+                  <br />
+                  결과가 맘에 안 들면 상단 버튼으로 <strong>샘플 재태깅 / 이어서</strong> 하세요.
+                </p>
+              </div>
+            </div>
+
+            {Object.entries(tagResults)
+              .map(([k, v]) => [Number(k), v] as [number, any])
+              .sort((a, b) => a[0] - b[0])
+              .map(([num, r]) => {
+                const expanded = expandedTagNumber === num;
+                return (
+                  <div key={num} className="bg-white rounded-lg border overflow-hidden">
+                    <button
+                      type="button"
+                      className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
+                      onClick={() => setExpandedTagNumber(expanded ? null : num)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono text-sm text-muted-foreground w-10">{num}번</span>
+                        <span className="text-xs text-muted-foreground truncate max-w-md">
+                          {r?.unit || '(단원 없음)'}
+                        </span>
+                        {r?.difficulty && (
+                          <span className="text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700">
+                            {r.difficulty}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-muted-foreground">{expanded ? '▲' : '▼'}</span>
+                    </button>
+                    {expanded && (
+                      <div className="px-4 py-3 border-t bg-gray-50/50 text-sm space-y-2">
+                        <div><strong className="text-xs text-muted-foreground">단원:</strong> {r?.unit || '-'}</div>
+                        <div><strong className="text-xs text-muted-foreground">난이도:</strong> {r?.difficulty || '-'}</div>
+                        <div>
+                          <strong className="text-xs text-muted-foreground">개념:</strong>{' '}
+                          {Array.isArray(r?.concept_tags) && r.concept_tags.length > 0
+                            ? r.concept_tags.map((t: any) => `${t.tag}(${t.confidence?.toFixed?.(2) ?? ''})`).join(', ')
+                            : '-'}
+                        </div>
+                        <div>
+                          <strong className="text-xs text-muted-foreground">스킬:</strong>{' '}
+                          {Array.isArray(r?.skill_tags) && r.skill_tags.length > 0
+                            ? r.skill_tags.map((t: any) => `${t.tag}(${t.confidence?.toFixed?.(2) ?? ''})`).join(', ')
+                            : '-'}
+                        </div>
+                        <div className="whitespace-pre-wrap">
+                          <strong className="text-xs text-muted-foreground">풀이 요약:</strong>{' '}
+                          {r?.solution_summary || '-'}
+                        </div>
+                        <div className="whitespace-pre-wrap">
+                          <strong className="text-xs text-muted-foreground">오답 포인트:</strong>{' '}
+                          {r?.pitfall || '-'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+            {Object.keys(tagResults).length === 0 && (
+              <div className="bg-white rounded-lg border p-6 text-center text-muted-foreground text-sm">
+                태깅된 문제가 없습니다.
+              </div>
+            )}
           </div>
         </div>
       ) : stage === 'error' ? (
