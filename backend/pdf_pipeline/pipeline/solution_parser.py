@@ -8,25 +8,11 @@
 import re
 import logging
 from pathlib import Path
-from typing import Optional
-
 from PIL import Image
 
 from pipeline.file_converter import extract_images_from_pdf
-from pipeline.ocr_engine import ocr_detect_boxes
-from pipeline.image_cropper import (
-    detect_problem_numbers,
-    compute_crop_regions,
-    crop_and_save,
-    detect_footer_y,
-    _trim_whitespace,
-)
 
 logger = logging.getLogger(__name__)
-
-# 해설지 문제 번호 패턴: "1)", "17)", "100)" 등
-# 해설지는 N) 형식 — 교재(0038 형식)와 다름
-_SOLUTION_NUMBER_PATTERN = r"^\d{1,3}$"
 
 # 정답표 OCR 텍스트 패턴: "정답" 또는 "답" 포함 + 근처에 번호 나열
 _ANSWER_TABLE_KEYWORDS = ["정답", "정 답", "답안"]
@@ -160,14 +146,15 @@ def crop_solutions(
     output_dir: str,
     dpi: int = 300,
 ) -> dict:
-    """해설지 PDF에서 문제번호별 해설 이미지 크롭
+    """해설지 PDF에서 페이지 이미지 추출 (초기 자동 크롭 없음)
 
-    해설지는 "N)" 형식 번호 사용. 기존 detect_problem_numbers 재사용.
-    페이지 걸침(cross-page)이 있으므로 같은 번호의 조각을 모두 수집.
+    OCR 기반 자동 크롭은 누락이 심해 사용하지 않음.
+    각 페이지의 이미지만 추출하고, items는 빈 리스트로 반환.
+    사용자가 CMS UI에서 직접 박스를 그려 검수한다.
 
     Args:
       pdf_path: 해설지 PDF 경로
-      output_dir: 크롭 이미지 저장 디렉토리
+      output_dir: 페이지 이미지 저장 디렉토리
       dpi: PDF→이미지 변환 해상도
 
     Returns:
@@ -176,10 +163,10 @@ def crop_solutions(
           page_num: {
             "page_image_path": str,
             "page_width": int, "page_height": int,
-            "items": [{"number","bbox","cropped_path","is_fragment"}]
+            "items": []   # 항상 빈 리스트 — UI에서 직접 그리기
           }
         },
-        "fragments": {번호: [조각경로, ...]}
+        "fragments": {}   # 항상 빈 dict
       }
     """
     out_dir = Path(output_dir)
@@ -191,74 +178,23 @@ def crop_solutions(
     page_images = extract_images_from_pdf(pdf_path, str(pages_tmp_dir), dpi=dpi)
 
     pages_data: dict = {}
-    fragments: dict[int, list[str]] = {}
 
     for pi in page_images:
         img_path = pi["image_path"]
         page_num = pi["page"]
 
-        ocr_results = ocr_detect_boxes(img_path)
-
         img = Image.open(img_path)
         w, h = img.size
         img.close()
-
-        detections = detect_problem_numbers(
-            ocr_results,
-            pattern=_SOLUTION_NUMBER_PATTERN,
-            page_height=h,
-            page_width=w,
-            layout="auto",
-        )
-
-        page_items: list[dict] = []
-
-        if not detections:
-            if fragments:
-                last_num = max(fragments.keys())
-                frag_path = str(out_dir / f"page_{page_num:03d}_{last_num:04d}_frag.png")
-                whole_img = Image.open(img_path)
-                trimmed = _trim_whitespace(whole_img)
-                trimmed.save(frag_path)
-                whole_img.close()
-                fragments[last_num].append(frag_path)
-                page_items.append({
-                    "number": last_num,
-                    "bbox": {"x1": 0, "y1": 0, "x2": w, "y2": h},
-                    "cropped_path": frag_path,
-                    "is_fragment": True,
-                })
-        else:
-            footer = detect_footer_y(ocr_results, h)
-            regions = compute_crop_regions(
-                detections, w, h,
-                layout="auto",
-                footer_y=footer,
-                ocr_results=ocr_results,
-            )
-            cropped = crop_and_save(img_path, regions, str(out_dir), page_num)
-
-            region_by_num = {r["number"]: r["crop_box"] for r in regions}
-            for item in cropped:
-                num = item["number"]
-                path = item["cropped_path"]
-                x1, y1, x2, y2 = region_by_num.get(num, (0, 0, w, h))
-                fragments.setdefault(num, []).append(path)
-                page_items.append({
-                    "number": num,
-                    "bbox": {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)},
-                    "cropped_path": path,
-                    "is_fragment": False,
-                })
 
         pages_data[page_num] = {
             "page_image_path": img_path,
             "page_width": w,
             "page_height": h,
-            "items": page_items,
+            "items": [],
         }
 
-    return {"pages": pages_data, "fragments": fragments}
+    return {"pages": pages_data, "fragments": {}}
 
 
 def merge_cross_page_solutions(
