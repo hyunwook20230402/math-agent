@@ -167,6 +167,7 @@ export default function SolutionReview() {
       return items;
     });
     setMergeAnchorIdx(null);
+    setSelectedBboxIdx(null); // 확정 후 선택 툴바 닫기
     toast({ title: '그룹 확정', description: '박스에 그룹 ID가 부여되었습니다.' });
   }, [mergeAnchorIdx, updateCurrentPageBboxes]);
 
@@ -191,6 +192,7 @@ export default function SolutionReview() {
       return items;
     });
     setMergeAnchorIdx(null);
+    setSelectedBboxIdx(null); // 묶기 완료 후 선택 툴바 닫기
     toast({ title: '박스 묶기 완료', description: '같은 번호로 그룹화되었습니다.' });
   }, [mergeAnchorIdx, updateCurrentPageBboxes]);
 
