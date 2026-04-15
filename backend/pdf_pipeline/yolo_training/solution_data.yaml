@@ -1,0 +1,6 @@
+path: C:/Users/user/workspaces/math/backend/pdf_pipeline/yolo_training/solution_dataset
+train: images/train
+val: images/val
+
+nc: 2
+names: ['solution_block', 'answer_table']

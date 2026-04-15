@@ -5,28 +5,41 @@
 사용법:
   cd backend/pdf_pipeline/yolo_training
   ../venv/Scripts/python train_finetune.py
+  ../venv/Scripts/python train_finetune.py --base-weights runs/exam_finetune_v2/weights/best.pt --epochs 50 --run-name exam_finetune_v3
 """
+import argparse
 from pathlib import Path
 from ultralytics import YOLO
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_WEIGHTS = str(SCRIPT_DIR / "runs/exam_problem_detector/weights/best.pt")
+
 
 def main():
-    model = YOLO(str(SCRIPT_DIR / "runs/exam_problem_detector/weights/best.pt"))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base-weights", default=DEFAULT_WEIGHTS,
+                        help="시작점 가중치 경로")
+    parser.add_argument("--epochs", type=int, default=100,
+                        help="학습 epoch 수")
+    parser.add_argument("--run-name", default="exam_finetune_v2",
+                        help="결과 저장 디렉토리 이름 (runs/ 하위)")
+    args = parser.parse_args()
+
+    model = YOLO(args.base_weights)
 
     results = model.train(
         data=str(SCRIPT_DIR / "data_new.yaml"),
-        epochs=100,
+        epochs=args.epochs,
         imgsz=1280,
         batch=4,
         device=0,
         patience=20,
         save=True,
         project=str(SCRIPT_DIR / "runs"),
-        name="exam_finetune_v2",
-        lr0=0.001,       # fine-tune은 작은 학습률
+        name=args.run_name,
+        lr0=0.001,
         lrf=0.01,
-        # 문서 이미지 augmentation (기존과 동일)
+        # 문서 이미지 augmentation
         hsv_h=0.0,
         hsv_s=0.0,
         hsv_v=0.2,
@@ -39,8 +52,9 @@ def main():
         mixup=0.0,
     )
 
-    print(f"\n학습 완료!")
-    print(f"Best model: runs/exam_finetune_v2/weights/best.pt")
+    best_pt = str(SCRIPT_DIR / "runs" / args.run_name / "weights" / "best.pt")
+    print(f"BEST_MODEL_PATH={best_pt}")
+    print(f"\n학습 완료! Best model: {best_pt}")
 
 
 if __name__ == "__main__":

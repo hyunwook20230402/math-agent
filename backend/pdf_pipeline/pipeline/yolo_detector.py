@@ -34,6 +34,37 @@ def load_model(model_path: str = None) -> YOLO:
   return YOLO(path)
 
 
+def _detect_top_line_y(img_gray, page_height: int) -> int:
+  """페이지 상단 위선 y좌표 자동 감지
+
+  상단 40% 범위 내에서 페이지 폭의 60% 이상을 가로지르는
+  어두운 수평선을 위선으로 판단.
+
+  Args:
+    img_gray: grayscale numpy array
+    page_height: 페이지 전체 높이 (픽셀)
+
+  Returns:
+    위선 y좌표 (없으면 fallback)
+  """
+  import numpy as _np
+  search_height = int(page_height * 0.4)
+  region = img_gray[:search_height]
+  page_width = img_gray.shape[1]
+  threshold = 0.6  # 픽셀 60% 이상이 어두운 행을 수평선으로 판단
+
+  # 행별로 어두운 픽셀(128 미만) 비율 계산
+  dark_ratio = (_np.array(region) < 128).mean(axis=1)
+  candidates = _np.where(dark_ratio >= threshold)[0]
+
+  if len(candidates) > 0:
+    return int(candidates[0])
+
+  # fallback: 단순히 가장 어두운 행
+  row_means = region.mean(axis=1)
+  return int(row_means.argmin())
+
+
 def detect_problems(
   model: YOLO,
   image_path: str,
@@ -42,10 +73,11 @@ def detect_problems(
   conf: float = 0.4,
   start_number: int = 1,
   padding: int = 30,
-  min_height: int = 300,
-  col_margin: int = 50,
+  min_height: int = 100,
+  col_margin: int = 20,
   top_margin: int = 80,
   mid_line_x: int = 1753,
+  debug_dir: Optional[str] = None,
 ) -> List[Dict]:
   """이미지에서 문제 영역 감지 + 번호 자동 부여
 
@@ -60,37 +92,62 @@ def detect_problems(
     start_number: 이 페이지의 시작 문제 번호
     padding: bbox 상하좌우 여백 (픽셀)
     min_height: 이 높이 미만 박스는 필터링 (유의사항 등 제거)
-    top_margin: 페이지 상단 헤더 영역 높이 — 박스가 이 위로 못 올라감 (픽셀)
+    top_margin: 위선에서 이만큼 내려온 곳부터 박스 허용 (픽셀)
     col_margin: 중앙선 안쪽 여백 (픽셀)
-    top_margin: 위선 아래 여백 (픽셀) — 위선에서 이만큼 내려온 곳부터 박스 허용
     mid_line_x: 페이지 중앙 구분선 x좌표 (픽셀, 3509x4963 기준)
+    debug_dir: 디버그 이미지 저장 디렉토리 (None이면 저장 안 함)
 
   Returns:
     [{"number": 1, "bbox": (x1, y1, x2, y2), "confidence": 0.95}, ...]
     bbox는 픽셀 좌표 (좌상단 x, y, 우하단 x, y)
   """
-  # 이미지에서 위선 y좌표 자동 감지 (상단 600px 내 가장 어두운 수평선)
   import cv2 as _cv2
   import numpy as _np
-  _img = _cv2.imread(image_path, _cv2.IMREAD_GRAYSCALE)
-  if _img is not None:
-    _row_means = _img[:600].mean(axis=1)
-    _top_line_y = int(_row_means.argmin())
+
+  _img_gray = _cv2.imread(image_path, _cv2.IMREAD_GRAYSCALE)
+  if _img_gray is not None:
+    _top_line_y = _detect_top_line_y(_img_gray, page_height)
   else:
-    _top_line_y = 100  # fallback
+    _top_line_y = int(page_height * 0.05)  # fallback: 5%
 
   results = model(image_path, conf=conf, imgsz=1280, verbose=False)
 
+  # 디버그용 원본 이미지 로드
+  if debug_dir is not None:
+    _img_bgr = _cv2.imread(image_path)
+    Path(debug_dir).mkdir(parents=True, exist_ok=True)
+    stem = Path(image_path).stem
+
   if not results or len(results[0].boxes) == 0:
+    if debug_dir is not None and _img_bgr is not None:
+      _cv2.imwrite(str(Path(debug_dir) / f"{stem}_01_raw.png"), _img_bgr)
     return []
 
   boxes = results[0].boxes
-  detections = []
 
   # 위선/중앙선 기준으로 유효 영역 계산
-  content_top = _top_line_y + top_margin       # 위선 아래 top_margin만큼 여백
-  content_left_max = mid_line_x - col_margin   # 좌열 우측 한계
-  content_right_min = mid_line_x + col_margin  # 우열 좌측 한계
+  content_top = _top_line_y + top_margin
+  content_left_max = mid_line_x - col_margin
+  content_right_min = mid_line_x + col_margin
+
+  # ── 단계 1: raw 예측 시각화 ─────────────────────────
+  if debug_dir is not None and _img_bgr is not None:
+    _dbg_raw = _img_bgr.copy()
+    # 위선/중앙선 표시
+    _cv2.line(_dbg_raw, (0, _top_line_y), (page_width, _top_line_y), (255, 165, 0), 3)
+    _cv2.line(_dbg_raw, (0, content_top), (page_width, content_top), (0, 165, 255), 2)
+    _cv2.line(_dbg_raw, (mid_line_x, 0), (mid_line_x, page_height), (200, 200, 0), 2)
+    for i in range(len(boxes)):
+      rx1, ry1, rx2, ry2 = [int(v) for v in boxes.xyxy[i].cpu().numpy()]
+      rc = float(boxes.conf[i].cpu().numpy())
+      _cv2.rectangle(_dbg_raw, (rx1, ry1), (rx2, ry2), (0, 255, 0), 3)
+      _cv2.putText(_dbg_raw, f"{rc:.2f}", (rx1, max(ry1 - 8, 20)),
+                   _cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+    _cv2.imwrite(str(Path(debug_dir) / f"{stem}_01_raw.png"), _dbg_raw)
+
+  # ── 후처리 ──────────────────────────────────────────
+  detections = []
+  filtered_out = []  # min_height 필터로 제거된 박스
 
   for i in range(len(boxes)):
     x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
@@ -108,12 +165,13 @@ def detect_problems(
 
     # 중앙선 기준 컬럼 클리핑
     if cx < mid_line_x:
-      x2 = min(x2, content_left_max)   # 좌열: 중앙선 왼쪽만
+      x2 = min(x2, content_left_max)
     else:
-      x1 = max(x1, content_right_min)  # 우열: 중앙선 오른쪽만
+      x1 = max(x1, content_right_min)
 
     # 너무 작은 박스 필터링 (유의사항, 저작권 표시 등)
     if (y2 - y1) < min_height:
+      filtered_out.append((int(x1), int(y1), int(x2), int(y2), confidence))
       continue
 
     detections.append({
@@ -122,6 +180,22 @@ def detect_problems(
       "center_y": float((y1 + y2) / 2),
       "confidence": confidence,
     })
+
+  # ── 단계 2: 필터링 결과 시각화 ──────────────────────
+  if debug_dir is not None and _img_bgr is not None:
+    _dbg_filt = _img_bgr.copy()
+    _cv2.line(_dbg_filt, (0, content_top), (page_width, content_top), (0, 165, 255), 2)
+    _cv2.line(_dbg_filt, (mid_line_x, 0), (mid_line_x, page_height), (200, 200, 0), 2)
+    for (fx1, fy1, fx2, fy2, fc) in filtered_out:
+      _cv2.rectangle(_dbg_filt, (fx1, fy1), (fx2, fy2), (0, 0, 255), 3)
+      _cv2.putText(_dbg_filt, f"FILT {fc:.2f}", (fx1, max(fy1 - 8, 20)),
+                   _cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+    for d in detections:
+      dx1, dy1, dx2, dy2 = d["bbox"]
+      _cv2.rectangle(_dbg_filt, (dx1, dy1), (dx2, dy2), (0, 255, 0), 3)
+      _cv2.putText(_dbg_filt, f"{d['confidence']:.2f}", (dx1, max(dy1 - 8, 20)),
+                   _cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+    _cv2.imwrite(str(Path(debug_dir) / f"{stem}_02_filtered.png"), _dbg_filt)
 
   # 2단 레이아웃 정렬: 좌열(위→아래) → 우열(위→아래)
   left_col = sorted(
@@ -132,7 +206,6 @@ def detect_problems(
     [d for d in detections if d["center_x"] >= mid_line_x],
     key=lambda d: d["center_y"]
   )
-
   ordered = left_col + right_col
 
   # 순서대로 번호 부여
@@ -143,6 +216,19 @@ def detect_problems(
       "bbox": det["bbox"],
       "confidence": det["confidence"],
     })
+
+  # ── 단계 3: 최종 bbox + 번호 시각화 ────────────────
+  if debug_dir is not None and _img_bgr is not None:
+    _dbg_final = _img_bgr.copy()
+    _cv2.line(_dbg_final, (0, content_top), (page_width, content_top), (0, 165, 255), 2)
+    _cv2.line(_dbg_final, (mid_line_x, 0), (mid_line_x, page_height), (200, 200, 0), 2)
+    for r in result:
+      fx1, fy1, fx2, fy2 = r["bbox"]
+      _cv2.rectangle(_dbg_final, (fx1, fy1), (fx2, fy2), (255, 100, 0), 4)
+      _cv2.putText(_dbg_final, f"#{r['number']} {r['confidence']:.2f}",
+                   (fx1, max(fy1 - 8, 20)),
+                   _cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 100, 0), 4)
+    _cv2.imwrite(str(Path(debug_dir) / f"{stem}_03_final.png"), _dbg_final)
 
   return result
 
