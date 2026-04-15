@@ -202,6 +202,7 @@ def merge_cross_page_solutions(
     crops: dict,
     output_dir: str,
     gap_px: int = 10,
+    pdf_path_hint: str | None = None,
 ) -> dict:
     """페이지 걸침 해설 조각들을 세로 병합
 
@@ -209,13 +210,22 @@ def merge_cross_page_solutions(
     조각이 1개면 그대로 반환.
 
     Args:
-      crops: {번호: [이미지경로, ...]}
+      crops: {번호: [이미지경로, ...]} — 상대 or 절대 or legacy 경로 모두 허용
       output_dir: 병합 이미지 저장 디렉토리
       gap_px: 조각 사이 여백 (px)
+      pdf_path_hint: 경로 resolver 힌트 (legacy 절대경로 재매핑용)
 
     Returns:
-      {번호: 병합된_이미지경로}
+      {번호: 병합된_이미지경로(절대)}
     """
+    import sys
+    from pathlib import Path as _Path
+    _pipeline_parent = str(_Path(__file__).resolve().parent.parent)
+    if _pipeline_parent not in sys.path:
+        sys.path.insert(0, _pipeline_parent)
+    from config import resolve_upload_path
+    from pipeline.image_cropper import _trim_whitespace
+
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -224,14 +234,20 @@ def merge_cross_page_solutions(
     for num, paths in crops.items():
         if not paths:
             continue
+        if not isinstance(num, int):
+            # 숫자 아닌 key (예: '__page2_idx0' 임시키) 는 병합 대상 아님
+            logger.warning(f"merge_cross_page_solutions: non-int key skip: {num}")
+            continue
 
-        if len(paths) == 1:
+        resolved_paths = [str(resolve_upload_path(p, pdf_path_hint)) for p in paths]
+
+        if len(resolved_paths) == 1:
             # 조각 1개 — 그대로
-            merged[num] = paths[0]
+            merged[num] = resolved_paths[0]
             continue
 
         # 여러 조각: 너비 통일 후 세로 병합
-        images = [Image.open(p) for p in paths]
+        images = [Image.open(p) for p in resolved_paths]
         images = [_trim_whitespace(img) for img in images]
 
         # 최대 너비 기준으로 모든 조각 너비 통일 (우측 패딩)

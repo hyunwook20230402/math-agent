@@ -1,5 +1,6 @@
 """PDF 문제 자동 추출 파이프라인 — FastAPI 서버 (포트 8000)"""
 import os
+import re
 import uuid
 import json
 import asyncio
@@ -32,6 +33,33 @@ from pipeline.structurizer import (
     release_surya_models,
 )
 from pipeline.embedder import generate_embedding, release_model as release_embedder
+
+# ── 업로드 파일명/폴더 유틸 ─────────────────────────────────────
+def _decode_upload_filename(name: str) -> str:
+    """FastAPI가 latin-1로 파싱한 파일명을 UTF-8로 복원 시도."""
+    try:
+        return name.encode("latin-1").decode("utf-8")
+    except (UnicodeError, AttributeError):
+        return name
+
+
+def _sanitize_name(name: str) -> str:
+    """확장자 제거 + 공백/경로문자 정리. 한글 유지."""
+    stem = Path(name).stem
+    cleaned = re.sub(r'[\\/:*?"<>|\s]+', "_", stem).strip("_")
+    return cleaned[:80] or "untitled"
+
+
+def _unique_dir(base: Path, folder_name: str) -> Path:
+    """동명 충돌 시 _2, _3 접미사."""
+    candidate = base / folder_name
+    if not candidate.exists():
+        return candidate
+    n = 2
+    while (base / f"{folder_name}_{n}").exists():
+        n += 1
+    return base / f"{folder_name}_{n}"
+
 
 # 교재별 문제 번호 패턴
 PROBLEM_PATTERNS = {
@@ -275,15 +303,17 @@ async def upload_file(
     if not file.filename:
         raise HTTPException(400, "파일명이 없습니다.")
 
-    ext = Path(file.filename).suffix.lower()
+    real_filename = _decode_upload_filename(file.filename)
+    ext = Path(real_filename).suffix.lower()
     if ext not in [".pdf", ".hwp", ".hwpx"]:
         raise HTTPException(400, "지원하지 않는 파일 형식입니다. (pdf, hwp, hwpx만 가능)")
 
-    # 파일 저장
+    # 파일 저장 — 원본 파일명 기반 폴더, 충돌 시 _2, _3 부여
     job_id = str(uuid.uuid4())
-    save_dir = Path(UPLOAD_DIR) / job_id
+    folder_name = _sanitize_name(real_filename)
+    save_dir = _unique_dir(Path(UPLOAD_DIR) / "problems", folder_name)
     save_dir.mkdir(parents=True, exist_ok=True)
-    save_path = save_dir / file.filename
+    save_path = save_dir / real_filename
 
     content = await file.read()
     with open(save_path, "wb") as f:
@@ -292,7 +322,7 @@ async def upload_file(
     jobs[job_id] = {
         "job_id": job_id,
         "status": "uploaded",
-        "filename": file.filename,
+        "filename": real_filename,
         "file_path": str(save_path),
         "teacher_id": teacher_id,
         "category": category,
@@ -305,7 +335,7 @@ async def upload_file(
         "error": None,
     }
 
-    return {"job_id": job_id, "filename": file.filename}
+    return {"job_id": job_id, "filename": real_filename}
 
 
 @app.post("/api/extract/{job_id}")
@@ -414,13 +444,16 @@ async def update_bboxes(job_id: str, body: UpdateBboxesRequest):
         raise HTTPException(500, f"원본 페이지 이미지 다운로드 실패: {e}")
 
     # 2단 레이아웃 순서 정렬 (좌열→우열, 위→아래)
-    mid_x = body.page_width / 2
+    # 박스 좌측 엣지(x1)가 페이지 폭의 40% 이내면 왼쪽 열로 분류.
+    # 박스 중심 기준으로 하면 좁게 잡힌 오른쪽 열 문제가 왼쪽으로 오분류되는 문제가 있어
+    # x1 + 임계값 방식으로 변경.
+    left_threshold = body.page_width * 0.4
     left_col = sorted(
-        [p for p in body.problems if (p.bbox["x1"] + p.bbox["x2"]) / 2 < mid_x],
+        [p for p in body.problems if p.bbox["x1"] < left_threshold],
         key=lambda p: p.bbox["y1"]
     )
     right_col = sorted(
-        [p for p in body.problems if (p.bbox["x1"] + p.bbox["x2"]) / 2 >= mid_x],
+        [p for p in body.problems if p.bbox["x1"] >= left_threshold],
         key=lambda p: p.bbox["y1"]
     )
     ordered_problems = left_col + right_col
@@ -485,7 +518,31 @@ async def update_bboxes(job_id: str, body: UpdateBboxesRequest):
             results.extend(new_staging)
 
     page_img.close()
-    return {"updated": len(results), "problems": results}
+
+    # 전체 staging problem_number를 전역 연속 값으로 재동기화
+    # (현재 페이지에서 박스가 추가/삭제되면 뒤 페이지 번호가 시프트되어야 함)
+    all_staging = get_staging_by_job(job_id)
+    by_page: Dict[int, list] = {}
+    for s in all_staging:
+        pg = s.get("page_number") or 0
+        if pg == 0:
+            continue
+        by_page.setdefault(pg, []).append(s)
+
+    running = 0
+    for pg in sorted(by_page.keys()):
+        page_items = sorted(by_page[pg], key=lambda s: s.get("problem_number") or 0)
+        for s in page_items:
+            running += 1
+            if s.get("problem_number") != running:
+                update_staging_status(
+                    s["id"],
+                    s.get("status", "modified"),
+                    {"problem_number": running},
+                )
+
+    refreshed = get_staging_by_job(job_id)
+    return {"updated": len(results), "problems": refreshed}
 
 
 @app.post("/api/staging/{staging_id}/replace-image")
@@ -617,7 +674,7 @@ class ExportRequest(BaseModel):
 
 
 # export 기록 파일 경로 (백엔드 재시작해도 유지)
-_EXPORT_LOG_PATH = Path(__file__).parent / "yolo_training" / "export_log.json"
+from config import PROBLEM_EXPORT_LOG as _EXPORT_LOG_PATH
 
 
 def _load_export_log() -> dict:
@@ -806,6 +863,35 @@ async def _run_retrain(retrain_id: str, base_weights: str, epochs: int, run_name
 solution_jobs: Dict[str, dict] = {}  # 메모리 진행 상태 캐시
 
 
+def _hydrate_solution_job(solution_job_id: str) -> dict | None:
+    """DB 에서 solution_job 을 읽어 메모리 캐시에 세팅. 없으면 None.
+
+    get_solution_job() 이 progress 를 이미 정규화(int key)해서 주기 때문에,
+    여기선 그 값을 그대로 메모리 딕셔너리로 조립.
+    """
+    from storage.supabase_client import get_solution_job
+    db_job = get_solution_job(solution_job_id)
+    if not db_job:
+        return None
+    progress = db_job.get("progress") or {}
+    solution_jobs[solution_job_id] = {
+        "solution_job_id": solution_job_id,
+        "status": db_job.get("status", "reviewing"),
+        "teacher_id": db_job.get("teacher_id"),
+        "problem_job_id": db_job.get("problem_job_id"),
+        "file_path": db_job.get("pdf_path"),
+        "answers": progress.get("answers", {}),
+        "fragments": progress.get("fragments", {}),
+        "page_bboxes": progress.get("page_bboxes", {}),
+        "modified_pages": progress.get("modified_pages", []),
+        "solution_image_urls": progress.get("solution_image_urls", {}),
+        "tag_results": progress.get("tag_results", {}),
+        "progress": progress,
+        "error": db_job.get("error"),
+    }
+    return solution_jobs[solution_job_id]
+
+
 class SolutionMatchRequest(BaseModel):
     problem_job_id: str
 
@@ -826,16 +912,23 @@ async def _run_solution_upload_and_tag(solution_job_id: str):
     from storage.supabase_client import update_solution_job
     from storage.image_uploader import upload_cropped_images
 
+    def _merged_progress(extra: dict) -> dict:
+        """기존 progress(fragments/page_bboxes/answers 등) 보존하며 태깅 지표만 덮어씀."""
+        base = dict(solution_jobs[solution_job_id].get("progress") or {})
+        base.update(extra)
+        solution_jobs[solution_job_id]["progress"] = base
+        return base
+
     def _progress(processed, total, current_number):
-        solution_jobs[solution_job_id]["progress"] = {
+        merged = _merged_progress({
             "processed": processed,
             "total": total,
             "current_number": current_number,
-        }
+        })
         update_solution_job(
             solution_job_id,
             status="tagging",
-            progress=solution_jobs[solution_job_id]["progress"],
+            progress=merged,
         )
 
     try:
@@ -852,7 +945,7 @@ async def _run_solution_upload_and_tag(solution_job_id: str):
         # 1. 페이지 걸침 병합
         merged_dir = str(Path(pdf_path).parent / "solution_merged")
         merged_images = await loop.run_in_executor(
-            None, merge_cross_page_solutions, fragments, merged_dir
+            None, merge_cross_page_solutions, fragments, merged_dir, 10, pdf_path
         )
 
         # 2. Supabase Storage 업로드
@@ -875,7 +968,11 @@ async def _run_solution_upload_and_tag(solution_job_id: str):
         solution_jobs[solution_job_id]["status"] = "tagging"
         update_solution_job(
             solution_job_id, status="tagging",
-            progress={"processed": 0, "total": len(merged_images), "current_number": 0}
+            progress=_merged_progress({
+                "processed": 0,
+                "total": len(merged_images),
+                "current_number": 0,
+            }),
         )
 
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -887,7 +984,10 @@ async def _run_solution_upload_and_tag(solution_job_id: str):
         # 4. 완료
         update_solution_job(
             solution_job_id, status="done",
-            progress={"processed": len(merged_images), "total": len(merged_images)}
+            progress=_merged_progress({
+                "processed": len(merged_images),
+                "total": len(merged_images),
+            }),
         )
         solution_jobs[solution_job_id]["status"] = "done"
 
@@ -933,7 +1033,8 @@ async def solution_upload(
     if not file.filename:
         raise HTTPException(400, "파일명이 없습니다.")
 
-    ext = Path(file.filename).suffix.lower()
+    real_filename = _decode_upload_filename(file.filename)
+    ext = Path(real_filename).suffix.lower()
     if ext != ".pdf":
         raise HTTPException(400, "PDF 파일만 지원합니다.")
 
@@ -943,10 +1044,11 @@ async def solution_upload(
     sol_job = create_solution_job(teacher_id, problem_job_id)
     solution_job_id = sol_job["id"]
 
-    # 파일 저장
-    save_dir = Path(UPLOAD_DIR) / f"solution_{solution_job_id}"
+    # 파일 저장 — 원본 파일명 기반 폴더, 충돌 시 _2, _3 부여
+    folder_name = _sanitize_name(real_filename)
+    save_dir = _unique_dir(Path(UPLOAD_DIR) / "solutions", folder_name)
     save_dir.mkdir(parents=True, exist_ok=True)
-    save_path = save_dir / file.filename
+    save_path = save_dir / real_filename
 
     content = await file.read()
     with open(save_path, "wb") as f:
@@ -958,7 +1060,7 @@ async def solution_upload(
     solution_jobs[solution_job_id] = {
         "solution_job_id": solution_job_id,
         "status": "uploaded",
-        "filename": file.filename,
+        "filename": real_filename,
         "file_path": str(save_path),
         "teacher_id": teacher_id,
         "problem_job_id": problem_job_id,
@@ -969,7 +1071,7 @@ async def solution_upload(
         "error": None,
     }
 
-    return {"solution_job_id": solution_job_id, "filename": file.filename}
+    return {"solution_job_id": solution_job_id, "filename": real_filename}
 
 
 @app.post("/api/solution/extract/{solution_job_id}")
@@ -1018,6 +1120,18 @@ async def solution_extract(solution_job_id: str):
                 "page_height": pdata["page_height"],
                 "items": pdata["items"],
             }
+
+        # cropped_path/fragments 절대경로 → UPLOAD_DIR 상대경로로 정규화
+        from config import to_upload_relative
+        for pb in page_bboxes.values():
+            for it in pb.get("items", []):
+                cp = it.get("cropped_path")
+                if cp:
+                    it["cropped_path"] = to_upload_relative(cp)
+        fragments = {
+            k: [to_upload_relative(p) for p in paths]
+            for k, paths in fragments.items()
+        }
 
         solution_jobs[solution_job_id]["answers"] = answers
         solution_jobs[solution_job_id]["fragments"] = fragments
@@ -1069,31 +1183,12 @@ class SolutionUpdateBboxesRequest(BaseModel):
 async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxesRequest):
     """사용자가 수정한 페이지별 bbox로 재크롭. fragments/page_bboxes 갱신."""
     if solution_job_id not in solution_jobs:
-        # 서버 재시작 후 메모리가 비어있을 수 있음 → DB에서 hydrate
-        from storage.supabase_client import get_solution_job
-        db_job = get_solution_job(solution_job_id)
-        if not db_job:
+        if _hydrate_solution_job(solution_job_id) is None:
             raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
-        progress = db_job.get("progress") or {}
-        solution_jobs[solution_job_id] = {
-            "solution_job_id": solution_job_id,
-            "status": db_job.get("status", "reviewing"),
-            "teacher_id": db_job.get("teacher_id"),
-            "problem_job_id": db_job.get("problem_job_id"),
-            "file_path": db_job.get("pdf_path"),
-            "answers": progress.get("answers", {}),
-            "fragments": progress.get("fragments", {}),
-            "page_bboxes": progress.get("page_bboxes", {}),
-            "modified_pages": progress.get("modified_pages", []),
-            "solution_image_urls": progress.get("solution_image_urls", {}),
-            "tag_results": progress.get("tag_results", {}),
-            "progress": progress,
-            "error": db_job.get("error"),
-        }
 
     job = solution_jobs[solution_job_id]
     page_bboxes = job.get("page_bboxes", {})
-    page_data = page_bboxes.get(body.page_number) or page_bboxes.get(str(body.page_number))
+    page_data = page_bboxes.get(body.page_number)
     if not page_data:
         raise HTTPException(404, f"{body.page_number}페이지 데이터 없음")
 
@@ -1159,15 +1254,18 @@ async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxe
         cropped = _trim_whitespace(cropped)
         # num이 None(OCR 미확정)이면 파일명/fragments key는 idx 기반 placeholder 사용
         num_token = f"{num:04d}" if isinstance(num, int) and num > 0 else f"none_{idx:02d}"
-        save_path = str(crop_dir / f"page_{body.page_number:03d}_{num_token}_edit_{idx}.png")
-        cropped.save(save_path)
+        save_abs = crop_dir / f"page_{body.page_number:03d}_{num_token}_edit_{idx}.png"
+        cropped.save(str(save_abs))
+        # DB 에는 UPLOAD_DIR 기준 상대경로만 저장 (UPLOAD_DIR 변경/이전 내성)
+        from config import to_upload_relative
+        save_rel = to_upload_relative(save_abs)
 
         frag_key = num if isinstance(num, int) and num > 0 else f"__page{body.page_number}_idx{idx}"
-        fragments.setdefault(frag_key, []).append(save_path)
+        fragments.setdefault(frag_key, []).append(save_rel)
         new_items.append({
             "number": num,
             "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
-            "cropped_path": save_path,
+            "cropped_path": save_rel,
             "is_fragment": False,
             "group_id": group_id,
             "box_type": "solution",
@@ -1202,7 +1300,8 @@ async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxe
 async def solution_upload_and_tag(solution_job_id: str, background_tasks: BackgroundTasks):
     """검수 완료 후 병합 + Storage 업로드 + Qwen 태깅 (백그라운드)"""
     if solution_job_id not in solution_jobs:
-        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+        if _hydrate_solution_job(solution_job_id) is None:
+            raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
 
     job = solution_jobs[solution_job_id]
     if job["status"] not in ["reviewing", "error"]:
@@ -1215,33 +1314,19 @@ async def solution_upload_and_tag(solution_job_id: str, background_tasks: Backgr
     return {"message": "AI 태깅 시작됨", "solution_job_id": solution_job_id}
 
 
+@app.get("/api/solution/by-problem/{problem_job_id}")
+async def solution_by_problem(problem_job_id: str):
+    """problem_job_id 로 연결된 최신 solution_jobs 역조회. 없으면 {} 반환."""
+    from storage.supabase_client import get_solution_job_by_problem
+    return get_solution_job_by_problem(problem_job_id)
+
+
 @app.get("/api/solution/status/{solution_job_id}")
 async def solution_status(solution_job_id: str):
     """해설지 파이프라인 진행 상황 조회. 메모리에 없으면 DB에서 복구(hydrate)한다."""
     if solution_job_id not in solution_jobs:
-        from storage.supabase_client import get_solution_job
-        db_job = get_solution_job(solution_job_id)
-        if not db_job:
+        if _hydrate_solution_job(solution_job_id) is None:
             raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
-
-        # DB progress에 저장된 page_bboxes/answers/fragments를 메모리로 복구
-        progress = db_job.get("progress") or {}
-        solution_jobs[solution_job_id] = {
-            "solution_job_id": solution_job_id,
-            "status": db_job.get("status", "reviewing"),
-            "teacher_id": db_job.get("teacher_id"),
-            "problem_job_id": db_job.get("problem_job_id"),
-            "file_path": db_job.get("pdf_path"),
-            "answers": progress.get("answers", {}),
-            "fragments": progress.get("fragments", {}),
-            "page_bboxes": progress.get("page_bboxes", {}),
-            "modified_pages": progress.get("modified_pages", []),
-            "solution_image_urls": progress.get("solution_image_urls", {}),
-            "tag_results": progress.get("tag_results", {}),
-            "progress": progress,
-            "error": db_job.get("error"),
-        }
-        return solution_jobs[solution_job_id]
     return solution_jobs[solution_job_id]
 
 
@@ -1363,8 +1448,8 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
 
 # ── 해설지 YOLO 학습 인프라 ─────────────────────────────────────
 
-_SOLUTION_MODEL_PATH = Path(__file__).parent / "models" / "solution_detector.pt"
-_SOLUTION_EXPORT_LOG_PATH = Path(__file__).parent / "yolo_training" / "solution_export_log.json"
+from config import SOLUTION_MODEL_PATH as _SOLUTION_MODEL_PATH
+from config import SOLUTION_EXPORT_LOG as _SOLUTION_EXPORT_LOG_PATH
 
 retrain_solution_jobs: Dict[str, dict] = {}  # 해설지 재학습 진행 상태
 
@@ -1408,7 +1493,8 @@ async def export_solution_training_data(body: SolutionExportRequest):
             }
 
     if body.solution_job_id not in solution_jobs:
-        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다. 서버 재시작 후에는 CLI(solution_labels.py)를 사용하세요.")
+        if _hydrate_solution_job(body.solution_job_id) is None:
+            raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
 
     job = solution_jobs[body.solution_job_id]
     page_bboxes = job.get("page_bboxes", {})

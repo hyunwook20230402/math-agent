@@ -170,8 +170,12 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
         problems.append(entry)
 
     client.table("problems").insert(problems).execute()
-    # staging 상태 업데이트
-    client.table("problem_staging").update({"status": "approved"}).eq("job_id", job_id).execute()
+    # staging 상태 업데이트 — 'modified' 는 YOLO 학습 마킹 + 저장 ✓ UI 신호를 겸하므로 보존
+    client.table("problem_staging") \
+        .update({"status": "approved"}) \
+        .eq("job_id", job_id) \
+        .neq("status", "modified") \
+        .execute()
     return len(problems)
 
 
@@ -223,8 +227,59 @@ def update_solution_job(
     return result.data[0] if result.data else {}
 
 
+def _coerce_int_key(k):
+    """숫자 str 이면 int 로, 아니면 원본 유지."""
+    if isinstance(k, int):
+        return k
+    if isinstance(k, str) and k.isdigit():
+        return int(k)
+    return k
+
+
+def _normalize_solution_progress(progress: dict) -> dict:
+    """JSONB 역직렬화로 str 이 된 숫자 key 를 int 로 통일.
+
+    - fragments: {str(num): [...]} → {int(num): [...]} (비숫자 key 는 그대로)
+    - page_bboxes: {str(page): {...}} → {int(page): {...}}
+    - page_bboxes[*].items[*].number: 숫자 str 이면 int 로
+    """
+    if not isinstance(progress, dict):
+        return progress
+
+    out = dict(progress)
+
+    fragments = progress.get("fragments")
+    if isinstance(fragments, dict):
+        out["fragments"] = {_coerce_int_key(k): v for k, v in fragments.items()}
+
+    page_bboxes = progress.get("page_bboxes")
+    if isinstance(page_bboxes, dict):
+        new_pb: dict = {}
+        for pk, pdata in page_bboxes.items():
+            nk = _coerce_int_key(pk)
+            if isinstance(pdata, dict):
+                new_pdata = dict(pdata)
+                items = pdata.get("items")
+                if isinstance(items, list):
+                    new_items = []
+                    for it in items:
+                        if isinstance(it, dict) and "number" in it:
+                            new_it = dict(it)
+                            new_it["number"] = _coerce_int_key(it["number"])
+                            new_items.append(new_it)
+                        else:
+                            new_items.append(it)
+                    new_pdata["items"] = new_items
+                new_pb[nk] = new_pdata
+            else:
+                new_pb[nk] = pdata
+        out["page_bboxes"] = new_pb
+
+    return out
+
+
 def get_solution_job(solution_job_id: str) -> dict:
-    """solution_jobs 단일 조회"""
+    """solution_jobs 단일 조회 (progress key 타입 정규화 포함)"""
     client = get_client()
     result = (
         client.table("solution_jobs")
@@ -233,7 +288,24 @@ def get_solution_job(solution_job_id: str) -> dict:
         .single()
         .execute()
     )
-    return result.data or {}
+    data = result.data or {}
+    if data and isinstance(data.get("progress"), dict):
+        data["progress"] = _normalize_solution_progress(data["progress"])
+    return data
+
+
+def get_solution_job_by_problem(problem_job_id: str) -> dict:
+    """problem_job_id 로 가장 최근 solution_jobs 역조회 (없으면 {})."""
+    client = get_client()
+    result = (
+        client.table("solution_jobs")
+        .select("*")
+        .eq("problem_job_id", problem_job_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else {}
 
 
 # ── problem_tags CRUD ──────────────────────────────────────────
