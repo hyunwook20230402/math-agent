@@ -5,7 +5,7 @@ import { Button } from '@shared/ui/button';
 import { Card, CardContent, CardHeader } from '@shared/ui/card';
 import { toast } from '@shared/hooks/use-toast';
 import {
-  ArrowLeft, Check, X, Loader2, BookOpen, RotateCcw,
+  ArrowLeft, Check, X, Loader2, BookOpen, RotateCcw, Download,
 } from 'lucide-react';
 import { useTextbook } from '@/context/TextbookContext';
 import BboxEditor, { type BboxItem } from '@/components/BboxEditor';
@@ -76,13 +76,71 @@ const PdfReview = () => {
 
   const [savingBbox, setSavingBbox] = useState(false);
   const [bboxResetKey, setBboxResetKey] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const [alreadyExported, setAlreadyExported] = useState<{ exported_at: string; image_count: number } | null>(null);
 
   const prevActivePageRef = useRef<number | null>(null);
   const activePageRef = useRef<number>(0);
 
   useEffect(() => {
-    if (jobId) loadProblems();
+    if (jobId) {
+      loadProblems();
+      checkExportStatus();
+    }
   }, [jobId]);
+
+  const checkExportStatus = async () => {
+    if (!jobId) return;
+    try {
+      const res = await fetch(`${PIPELINE_URL}/api/export-training-data/${jobId}/status`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.exported) {
+        setAlreadyExported({ exported_at: data.exported_at, image_count: data.image_count });
+      }
+    } catch {
+      // 무시
+    }
+  };
+
+  const handleExport = async (force = false) => {
+    if (dirtyPages.size > 0) {
+      toast({
+        title: '미저장 수정이 있습니다',
+        description: `${[...dirtyPages].sort((a, b) => a - b).join(', ')}페이지를 먼저 저장해주세요.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+    setExporting(true);
+    try {
+      const res = await fetch(`${PIPELINE_URL}/api/export-training-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, force }),
+      });
+      if (!res.ok) throw new Error('export 실패');
+      const data = await res.json();
+
+      if (data.already_exported) {
+        toast({
+          title: '이미 export된 데이터입니다',
+          description: `${data.exported_at} 에 export됨 (${data.image_count}장). 재export하려면 다시 눌러주세요.`,
+          variant: 'destructive',
+        });
+        setAlreadyExported({ exported_at: data.exported_at, image_count: data.image_count });
+        return;
+      }
+
+      const count = data.total_images ?? data.train_count ?? 0;
+      toast({ title: '학습 데이터 내보내기 완료', description: `${count}장 export 완료` });
+      setAlreadyExported({ exported_at: new Date().toLocaleString('ko-KR'), image_count: count });
+    } catch (e: any) {
+      toast({ title: '오류', description: e.message, variant: 'destructive' });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const loadProblems = async () => {
     setLoading(true);
@@ -241,7 +299,24 @@ const PdfReview = () => {
         })),
       }),
     });
-    return res.ok;
+    if (!res.ok) return false;
+
+    // 저장 후 서버 응답으로 bboxCache 동기화 (신규 박스에 stagingId 부여)
+    try {
+      const data = await res.json();
+      const savedProblems: StagingProblem[] = data.problems ?? [];
+      if (savedProblems.length > 0) {
+        const updatedItems = toBboxItems(savedProblems.filter(p => p.page_number === pageNum));
+        setBboxCache(prev => {
+          const next = new Map(prev);
+          next.set(pageNum, updatedItems);
+          return next;
+        });
+      }
+    } catch {
+      // 응답 파싱 실패해도 저장 자체는 성공
+    }
+    return true;
   };
 
   // 저장 버튼
@@ -351,6 +426,23 @@ const PdfReview = () => {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* 학습 데이터 내보내기 버튼 */}
+          <div className="flex flex-col items-end">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => handleExport(!!alreadyExported)}
+              disabled={exporting}
+            >
+              {exporting ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
+              학습 데이터 내보내기
+            </Button>
+            {alreadyExported && (
+              <span className="text-xs text-muted-foreground mt-0.5">
+                마지막 export: {alreadyExported.exported_at}
+              </span>
+            )}
+          </div>
           <Button
             size="sm"
             variant="outline"

@@ -134,7 +134,7 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
         .select("*")
         .eq("job_id", job_id)
         .eq("teacher_id", teacher_id)
-        .eq("status", "approved")
+        .in_("status", ["approved", "modified", "pending"])
         .execute()
     ).data
 

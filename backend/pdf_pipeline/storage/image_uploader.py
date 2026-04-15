@@ -1,10 +1,30 @@
 """크롭된 문제 이미지를 Supabase Storage에 업로드"""
+import time
 from pathlib import Path
 from typing import List, Dict
 
 from storage.supabase_client import get_client
 
 BUCKET = "problem-images"
+_MAX_RETRIES = 3
+_RETRY_DELAY = 2  # 초
+
+
+def _upload_with_retry(client, storage_path: str, file_bytes: bytes):
+  """업로드 재시도 (타임아웃 대응)"""
+  for attempt in range(_MAX_RETRIES):
+    try:
+      client.storage.from_(BUCKET).upload(
+        path=storage_path,
+        file=file_bytes,
+        file_options={"content-type": "image/png", "upsert": "true"},
+      )
+      return
+    except Exception as e:
+      if attempt < _MAX_RETRIES - 1:
+        time.sleep(_RETRY_DELAY)
+      else:
+        raise e
 
 
 def upload_page_image(job_id: str, page_num: int, image_path: str) -> str:
@@ -24,12 +44,7 @@ def upload_page_image(job_id: str, page_num: int, image_path: str) -> str:
   with open(image_path, "rb") as f:
     file_bytes = f.read()
 
-  client.storage.from_(BUCKET).upload(
-    path=storage_path,
-    file=file_bytes,
-    file_options={"content-type": "image/png", "upsert": "true"},
-  )
-
+  _upload_with_retry(client, storage_path, file_bytes)
   return client.storage.from_(BUCKET).get_public_url(storage_path)
 
 
@@ -46,13 +61,7 @@ def upload_replacement_image(image_bytes: bytes, staging_id: str, job_id: str) -
   """
   client = get_client()
   storage_path = f"staging/{job_id}/{staging_id}_replaced.png"
-
-  client.storage.from_(BUCKET).upload(
-    path=storage_path,
-    file=image_bytes,
-    file_options={"content-type": "image/png", "upsert": "true"},
-  )
-
+  _upload_with_retry(client, storage_path, image_bytes)
   return client.storage.from_(BUCKET).get_public_url(storage_path)
 
 
@@ -77,12 +86,7 @@ def upload_cropped_images(cropped_items: List[Dict], job_id: str) -> List[Dict]:
     with open(file_path, "rb") as f:
       file_bytes = f.read()
 
-    client.storage.from_(BUCKET).upload(
-      path=storage_path,
-      file=file_bytes,
-      file_options={"content-type": "image/png", "upsert": "true"},
-    )
-
+    _upload_with_retry(client, storage_path, file_bytes)
     public_url = client.storage.from_(BUCKET).get_public_url(storage_path)
 
     results.append({

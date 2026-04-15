@@ -28,8 +28,16 @@ def release_reader():
 
 def ocr_detect_boxes(image_path: str) -> list:
     """이미지에서 모든 텍스트의 bbox + 텍스트 + 신뢰도 반환 (문제번호 좌표 감지용)"""
+    import cv2
+    import numpy as np
     reader = get_reader()
-    return reader.readtext(image_path, detail=1)
+    # EasyOCR 내부 get_image_list가 2D(grayscale) shape를 기대하므로
+    # 3/4채널 이미지를 미리 grayscale로 변환해서 넘김
+    img = cv2.imread(image_path)
+    if img is None:
+        return reader.readtext(image_path, detail=1)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return reader.readtext(gray, detail=1)
 
 
 def ocr_image(image_path: str) -> str:
