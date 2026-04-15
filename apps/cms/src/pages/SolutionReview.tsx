@@ -676,7 +676,7 @@ export default function SolutionReview() {
         <div className="flex flex-1 overflow-hidden">
           {/* 좌측: 페이지 탭 + 에디터 */}
           <div className="flex flex-col flex-1 overflow-hidden border-r">
-            <div className="flex gap-1 px-3 py-2 border-b bg-gray-50 overflow-x-auto shrink-0">
+            <div className="flex gap-1.5 px-3 py-2 border-b bg-gray-50 overflow-x-auto shrink-0">
               {pages.map(pg => {
                 const pgItems = pageData[pg]?.items ?? [];
                 const isSaved = savedPages.has(pg);
@@ -685,16 +685,16 @@ export default function SolutionReview() {
                   <button
                     key={pg}
                     onClick={() => setActivePage(pg)}
-                    className={`px-3 py-1 text-sm rounded border transition-colors whitespace-nowrap ${
+                    className={`px-4 py-1.5 text-base font-medium rounded border transition-colors whitespace-nowrap ${
                       activePage === pg
                         ? 'bg-primary text-primary-foreground border-primary'
                         : 'bg-white border-gray-200 hover:bg-gray-100'
                     }`}
                   >
                     {pg}페이지
-                    <span className="ml-1 text-xs opacity-70">({pgItems.length})</span>
-                    {isSaved && !isDirty && <span className="ml-1 text-xs text-green-500">✓</span>}
-                    {isDirty && <span className="ml-1 text-xs text-orange-400">●</span>}
+                    <span className="ml-1 text-sm opacity-70">({pgItems.length})</span>
+                    {isSaved && !isDirty && <span className="ml-1 text-sm text-green-500">✓</span>}
+                    {isDirty && <span className="ml-1 text-sm text-orange-400">●</span>}
                   </button>
                 );
               })}
@@ -704,7 +704,7 @@ export default function SolutionReview() {
               {pageImageUrl ? (
                 <>
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-base text-muted-foreground">
                       {activePage}페이지 — {bboxItems.length}개 해설 박스
                       {currentPageDirty && (
                         <span className="ml-2 text-orange-600 font-medium">(수정됨 — 미저장)</span>
@@ -712,17 +712,16 @@ export default function SolutionReview() {
                     </p>
                     <div className="flex gap-2">
                       {currentPageDirty && (
-                        <Button size="sm" variant="outline" onClick={handleResetBbox}>
-                          <RotateCcw className="h-3 w-3 mr-1" />
+                        <Button variant="outline" onClick={handleResetBbox}>
+                          <RotateCcw className="h-4 w-4 mr-1" />
                           초기화
                         </Button>
                       )}
                       <Button
-                        size="sm"
                         onClick={handleSaveBbox}
                         disabled={!currentPageDirty || savingBbox}
                       >
-                        {savingBbox ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
+                        {savingBbox ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
                         저장
                       </Button>
                     </div>
@@ -829,14 +828,14 @@ export default function SolutionReview() {
           </div>
 
           {/* 우측: 현재 페이지 박스 리스트 + 정답 미리보기 */}
-          <div className="w-64 flex flex-col overflow-hidden shrink-0">
+          <div className="w-80 flex flex-col overflow-hidden shrink-0">
             {/* 현재 페이지 박스 리스트 */}
-            <div className="px-3 py-2 border-b bg-gray-50 shrink-0 space-y-1.5">
-              <p className="text-sm font-medium">
+            <div className="px-3 py-3 border-b bg-gray-50 shrink-0 space-y-2">
+              <p className="text-base font-medium">
                 {activePage}페이지 박스 ({bboxItems.length}개)
               </p>
-              <div className="flex items-center gap-1.5">
-                <label className="text-xs text-muted-foreground shrink-0">첫 해설 번호</label>
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-muted-foreground shrink-0">첫 해설 번호</label>
                 <input
                   type="number"
                   min={1}
@@ -858,11 +857,11 @@ export default function SolutionReview() {
                       }
                     }
                   }}
-                  className="w-16 text-xs border rounded px-1.5 py-0.5 text-center"
+                  className="w-20 text-sm border rounded px-2 py-1 text-center"
                 />
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-1 text-xs min-h-0">
+            <div className="flex-1 overflow-y-auto p-2 space-y-1 text-sm min-h-0">
               {bboxItems.length === 0 ? (
                 <p className="text-muted-foreground text-center py-4">박스 없음</p>
               ) : (
@@ -893,11 +892,11 @@ export default function SolutionReview() {
                         ) : (
                           <>
                             <span className="text-red-600">{it.number}번</span>
-                            {it.groupId && <span className="ml-1 text-[10px] text-purple-600">◆</span>}
+                            {it.groupId && <span className="ml-1 text-xs text-purple-600">◆</span>}
                           </>
                         )}
                       </span>
-                      <span className="text-muted-foreground text-[10px] shrink-0">
+                      <span className="text-muted-foreground text-xs shrink-0">
                         {Math.round(it.bbox.x2 - it.bbox.x1)}×{Math.round(it.bbox.y2 - it.bbox.y1)}
                       </span>
                       <button
