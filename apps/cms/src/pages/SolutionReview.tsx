@@ -549,15 +549,15 @@ export default function SolutionReview() {
   return (
     <div className="flex flex-col h-screen overflow-hidden">
       {/* 헤더 */}
-      <div className="flex items-center justify-between px-4 py-3 border-b bg-white shrink-0">
-        <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={() => navigate(`/cms/import/${jobId}`)}>
+      <div className="flex items-center justify-between px-5 py-4 border-b bg-white shrink-0">
+        <div className="flex items-center gap-4">
+          <Button variant="outline" onClick={() => navigate(`/cms/import/${jobId}`)}>
             <ArrowLeft className="h-4 w-4 mr-1" />
             문제 크롭으로
           </Button>
           <div>
-            <h1 className="text-xl font-bold">해설지 크롭 검수</h1>
-            <p className="text-xs text-muted-foreground">
+            <h1 className="text-2xl font-bold">해설지 크롭 검수</h1>
+            <p className="text-sm text-muted-foreground">
               단계: {STAGE_LABEL[stage]}
               {progress && stage === 'tagging' && (
                 <> ({progress.processed}/{progress.total})</>
@@ -567,21 +567,20 @@ export default function SolutionReview() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           {stage === 'reviewing' && (
-            <Button size="sm" onClick={handleStartTagging}>
+            <Button onClick={handleStartTagging}>
               <Check className="h-4 w-4 mr-1" />
               검수 완료 — AI 태깅 시작
             </Button>
           )}
           {stage === 'done' && (
-            <Button size="sm" onClick={handleApply} disabled={applying}>
+            <Button onClick={handleApply} disabled={applying}>
               {applying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
               문제에 적용 → 상세 입력
             </Button>
           )}
           <Button
-            size="sm"
             variant="outline"
             onClick={() => navigate(`/cms/pdf-review/${jobId}/details`)}
           >
@@ -909,23 +908,23 @@ export default function SolutionReview() {
                     <div
                       key={idx}
                       onClick={() => handleSelectionChange(idx)}
-                      className={`w-full flex items-center justify-between gap-1 px-2 py-1 rounded border text-left transition-colors cursor-pointer ${
+                      className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded border text-left transition-colors cursor-pointer ${
                         isSelected
                           ? 'bg-yellow-50 border-yellow-400'
                           : 'bg-white hover:bg-gray-50'
                       }`}
                     >
-                      <span className="font-medium flex-1 min-w-0 truncate">
+                      <span className="text-base font-medium flex-1 min-w-0 truncate">
                         {isTable ? (
                           <span className="text-gray-600">정답표</span>
                         ) : (
                           <>
                             <span className="text-red-600">{it.number}번</span>
-                            {it.groupId && <span className="ml-1 text-xs text-purple-600">◆</span>}
+                            {it.groupId && <span className="ml-1 text-sm text-purple-600">◆</span>}
                           </>
                         )}
                       </span>
-                      <span className="text-muted-foreground text-xs shrink-0">
+                      <span className="text-muted-foreground text-sm shrink-0">
                         {Math.round(it.bbox.x2 - it.bbox.x1)}×{Math.round(it.bbox.y2 - it.bbox.y1)}
                       </span>
                       <button
@@ -934,10 +933,10 @@ export default function SolutionReview() {
                           e.stopPropagation();
                           handleDeleteBox(idx);
                         }}
-                        className="shrink-0 p-0.5 rounded hover:bg-red-100 text-gray-400 hover:text-red-600 transition-colors"
+                        className="shrink-0 p-1 rounded hover:bg-red-100 text-gray-400 hover:text-red-600 transition-colors"
                         title="박스 삭제"
                       >
-                        <X className="h-3.5 w-3.5" />
+                        <X className="h-4 w-4" />
                       </button>
                     </div>
                   );
