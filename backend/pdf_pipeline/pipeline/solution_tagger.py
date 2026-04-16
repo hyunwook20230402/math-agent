@@ -1,4 +1,9 @@
-"""Qwen2.5-VL (Ollama) 기반 개념/스킬 태그 + 풀이 요약 자동 추출
+"""VL 모델 (Ollama) 기반 개념/스킬 태그 + 풀이 요약 자동 추출
+
+환경변수로 VL 모델 선택:
+  VL_OLLAMA_URL  — Ollama 서버 URL (기본 http://localhost:11434)
+  VL_MODEL       — 모델 태그 (기본 qwen2.5vl:7b, 서버에선 gemma4:26b 등으로 덮어씀)
+  VL_TIMEOUT     — 호출 타임아웃 초 (기본 180)
 
 주요 함수:
   extract_tags_from_image(image_path, has_solution) → {concept_tags, skill_tags, solution_summary}
@@ -8,6 +13,7 @@
 import json
 import base64
 import logging
+import os
 from pathlib import Path
 
 import requests
@@ -16,8 +22,11 @@ from . import unit_matcher
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-QWEN_MODEL = "qwen2.5vl:7b"  # ollama pull qwen2.5vl:7b
+VL_OLLAMA_URL = os.environ.get("VL_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+VL_MODEL = os.environ.get("VL_MODEL", "qwen2.5vl:7b")
+VL_TIMEOUT = int(os.environ.get("VL_TIMEOUT", "180"))
+
+OLLAMA_GENERATE_URL = f"{VL_OLLAMA_URL}/api/generate"
 
 # 유사도 임계값: 이 이상이면 정규화 사전의 표준 태그로 교체
 _FUZZY_THRESHOLD = 0.75
@@ -88,11 +97,14 @@ def _image_to_base64(image_path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
-def _call_qwen(image_path: str, prompt: str, timeout: int = 120) -> str:
-    """Ollama Qwen2.5-VL API 호출 → 텍스트 응답 반환"""
+def _call_vl(image_path: str, prompt: str, timeout: int | None = None) -> str:
+    """Ollama VL 모델 API 호출 → 텍스트 응답 반환.
+
+    모델은 VL_MODEL 환경변수로 결정 (기본 qwen2.5vl:7b, 서버 배포 시 gemma4:26b 등).
+    """
     img_b64 = _image_to_base64(image_path)
     payload = {
-        "model": QWEN_MODEL,
+        "model": VL_MODEL,
         "prompt": prompt,
         "images": [img_b64],
         "system": _SYSTEM_PROMPT,
@@ -102,7 +114,7 @@ def _call_qwen(image_path: str, prompt: str, timeout: int = 120) -> str:
             "num_predict": 512,
         },
     }
-    resp = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
+    resp = requests.post(OLLAMA_GENERATE_URL, json=payload, timeout=timeout or VL_TIMEOUT)
     resp.raise_for_status()
     return resp.json().get("response", "")
 
@@ -230,7 +242,7 @@ def extract_tags_from_image(
     }
 
     try:
-        raw = _call_qwen(image_path, prompt)
+        raw = _call_vl(image_path, prompt)
         fallback["raw_response"] = raw
 
         parsed = _parse_json_response(raw)
