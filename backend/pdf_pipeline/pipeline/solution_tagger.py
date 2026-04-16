@@ -12,6 +12,8 @@ from pathlib import Path
 
 import requests
 
+from . import unit_matcher
+
 logger = logging.getLogger(__name__)
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
@@ -25,59 +27,49 @@ _SYSTEM_PROMPT = """당신은 한국 고등수학 문제/해설을 분석하는 
 
 _TAGGING_PROMPT_WITH_SOLUTION = """이 수학 해설 이미지를 분석하고 다음 JSON 형식으로만 답하세요:
 
-{{
-  "unit": "과목 > 대단원 > 중단원 > 소단원",
+{
   "difficulty": "easy|medium|hard",
   "concept_tags": [
-    {{"tag": "개념명", "confidence": 0.0}}
+    {"tag": "개념명", "confidence": 0.0}
   ],
   "skill_tags": [
-    {{"tag": "풀이기술명", "confidence": 0.0}}
+    {"tag": "풀이기술명", "confidence": 0.0}
   ],
   "solution_summary": "핵심 풀이 아이디어 1~2줄",
   "pitfall": "학생이 틀리기 쉬운 지점 1~2줄"
-}}
+}
 
 규칙:
-- unit: 반드시 아래 [허용 단원 트리] 중 하나의 4단 경로를 정확히 사용. 트리에 없는 단원명/경로는 금지.
 - difficulty: easy(쉬움, 교과서 예제 수준) / medium(보통, 쎈 B단계) / hard(어려움, 쎈 C단계/수능 4점)
 - concept_tags: 이 문제에 등장하는 수학 개념 (예: 이차함수, 삼각함수, 미분계수)
 - skill_tags: 실제 풀이에 사용된 기술 (예: 완전제곱식 변환, 인수분해, 치환)
 - confidence: 해당 태그가 이 문제에 핵심적으로 사용됐다는 확신도 (0.0~1.0)
 - 한국어 수학 교육 용어 사용, 최대 5개씩
 - solution_summary: 해설의 핵심 아이디어를 1~2줄로 요약
-- pitfall: 이 문제에서 학생이 자주 실수하는 지점, 헷갈리는 개념, 놓치기 쉬운 조건을 1~2줄로
-
-[허용 단원 트리]
-{units_tree}"""
+- pitfall: 이 문제에서 학생이 자주 실수하는 지점, 헷갈리는 개념, 놓치기 쉬운 조건을 1~2줄로"""
 
 _TAGGING_PROMPT_NO_SOLUTION = """이 수학 문제 이미지를 분석하고 다음 JSON 형식으로만 답하세요:
 
-{{
-  "unit": "과목 > 대단원 > 중단원 > 소단원",
+{
   "difficulty": "easy|medium|hard",
   "concept_tags": [
-    {{"tag": "개념명", "confidence": 0.0}}
+    {"tag": "개념명", "confidence": 0.0}
   ],
   "skill_tags": [
-    {{"tag": "풀이기술명", "confidence": 0.0}}
+    {"tag": "풀이기술명", "confidence": 0.0}
   ],
   "solution_summary": null,
   "pitfall": "학생이 틀리기 쉬운 지점 1~2줄"
-}}
+}
 
 규칙:
-- unit: 반드시 아래 [허용 단원 트리] 중 하나의 4단 경로를 정확히 사용. 트리에 없는 단원명/경로는 금지.
 - difficulty: easy / medium / hard
 - concept_tags: 이 문제에 필요한 수학 개념 (예: 이차함수, 삼각함수, 미분계수)
 - skill_tags: 이 문제를 풀 때 사용될 기술 (예: 완전제곱식 변환, 인수분해, 치환)
 - confidence: 해당 태그가 이 문제에 필요하다는 확신도 (0.0~1.0, 해설 없어서 최대 0.7)
 - 한국어 수학 교육 용어 사용, 최대 5개씩
 - solution_summary: null (해설 이미지 없음)
-- pitfall: 문제 조건에서 학생이 자주 놓치거나 오해하는 지점 1~2줄
-
-[허용 단원 트리]
-{units_tree}"""
+- pitfall: 문제 조건에서 학생이 자주 놓치거나 오해하는 지점 1~2줄"""
 
 
 def _load_taxonomy() -> dict:
@@ -88,71 +80,6 @@ def _load_taxonomy() -> dict:
         return {"concepts": {}, "skills": {}, "units": {}}
     with open(taxonomy_path, encoding="utf-8") as f:
         return json.load(f)
-
-
-def _format_units_for_prompt(taxonomy: dict) -> str:
-    """units 트리를 들여쓴 텍스트로 렌더. Qwen 에 허용 목록으로 주입."""
-    units = taxonomy.get("units", {})
-    if not units:
-        return "(허용 단원 트리 없음)"
-    lines: list[str] = []
-    for subject, mids in units.items():
-        lines.append(f"- {subject}")
-        for big, middles in mids.items():
-            lines.append(f"  - {big}")
-            for middle, smalls in middles.items():
-                lines.append(f"    - {middle}")
-                for small in smalls:
-                    lines.append(f"      - {small}")
-    return "\n".join(lines)
-
-
-def validate_unit(unit_str: str, taxonomy: dict) -> str:
-    """AI 가 반환한 unit 경로를 허용 트리에 맞춰 검증/강등.
-
-    - 완전 매칭이면 그대로 반환.
-    - 트리에 없는 leaf 면 상위 노드까지 잘라 반환 (환각 차단).
-    - 어떤 노드도 매칭 안 되면 빈 문자열.
-    """
-    if not unit_str or not isinstance(unit_str, str):
-        return ""
-    units = taxonomy.get("units", {})
-    if not units:
-        return unit_str.strip()
-
-    parts = [p.strip() for p in unit_str.split(">") if p.strip()]
-    if not parts:
-        return ""
-
-    valid: list[str] = []
-    node = units
-
-    # 1단 (과목)
-    if len(parts) >= 1 and parts[0] in node:
-        valid.append(parts[0])
-        node = node[parts[0]]
-    else:
-        return ""
-
-    # 2단 (대단원)
-    if len(parts) >= 2 and isinstance(node, dict) and parts[1] in node:
-        valid.append(parts[1])
-        node = node[parts[1]]
-    else:
-        return " > ".join(valid)
-
-    # 3단 (중단원)
-    if len(parts) >= 3 and isinstance(node, dict) and parts[2] in node:
-        valid.append(parts[2])
-        node = node[parts[2]]
-    else:
-        return " > ".join(valid)
-
-    # 4단 (소단원) — leaf 는 list
-    if len(parts) >= 4 and isinstance(node, list) and parts[3] in node:
-        valid.append(parts[3])
-
-    return " > ".join(valid)
 
 
 def _image_to_base64(image_path: str) -> str:
@@ -269,6 +196,7 @@ def extract_tags_from_image(
     image_path: str,
     has_solution: bool = True,
     taxonomy: dict | None = None,
+    leaf_embeddings: dict | None = None,
 ) -> dict:
     """단일 이미지에서 태그 + 풀이 요약 추출
 
@@ -288,12 +216,11 @@ def extract_tags_from_image(
     if taxonomy is None:
         taxonomy = _load_taxonomy()
 
-    units_tree = _format_units_for_prompt(taxonomy)
-    template = _TAGGING_PROMPT_WITH_SOLUTION if has_solution else _TAGGING_PROMPT_NO_SOLUTION
-    prompt = template.format(units_tree=units_tree)
+    prompt = _TAGGING_PROMPT_WITH_SOLUTION if has_solution else _TAGGING_PROMPT_NO_SOLUTION
 
     fallback = {
         "unit": "",
+        "unit_score": 0.0,
         "difficulty": "",
         "concept_tags": [],
         "skill_tags": [],
@@ -324,11 +251,6 @@ def extract_tags_from_image(
                 {**t, "confidence": min(t["confidence"], 0.7)} for t in skill_tags
             ]
 
-        unit_raw = parsed.get("unit") or ""
-        unit = validate_unit(unit_raw, taxonomy)
-        if unit_raw and unit != unit_raw.strip():
-            logger.warning(f"validate_unit: '{unit_raw}' → '{unit}' 로 강등")
-
         difficulty_raw = (parsed.get("difficulty") or "").strip().lower()
         difficulty = difficulty_raw if difficulty_raw in ("easy", "medium", "hard") else ""
 
@@ -338,12 +260,29 @@ def extract_tags_from_image(
         else:
             pitfall = None
 
+        solution_summary = parsed.get("solution_summary")
+
+        # unit 은 AI 가 아니라 임베딩 매칭으로 결정
+        unit = ""
+        unit_score = 0.0
+        if leaf_embeddings is not None:
+            query_parts: list[str] = []
+            query_parts.extend([t["tag"] for t in concept_tags if t.get("tag")])
+            query_parts.extend([t["tag"] for t in skill_tags if t.get("tag")])
+            if isinstance(solution_summary, str) and solution_summary.strip():
+                query_parts.append(solution_summary.strip())
+            query_text = ", ".join(query_parts)
+            if query_text:
+                unit, unit_score = unit_matcher.match_unit(query_text, leaf_embeddings)
+                logger.info(f"unit 매칭: '{unit}' (score={unit_score:.3f})")
+
         return {
             "unit": unit,
+            "unit_score": unit_score,
             "difficulty": difficulty,
             "concept_tags": concept_tags,
             "skill_tags": skill_tags,
-            "solution_summary": parsed.get("solution_summary"),
+            "solution_summary": solution_summary,
             "pitfall": pitfall,
             "raw_response": raw,
         }
@@ -378,6 +317,9 @@ def tag_all_solutions(
       {번호: extract_tags_from_image 결과} — filter 가 있으면 filter 범위만
     """
     taxonomy = _load_taxonomy()
+    taxonomy_path = Path(__file__).parent.parent / "data" / "concept_taxonomy.json"
+    leaf_embeddings = unit_matcher.load_or_build_embeddings(taxonomy_path)
+
     results: dict[int, dict] = {}
 
     items_sorted = sorted(solution_images.items())
@@ -391,7 +333,12 @@ def tag_all_solutions(
             progress_callback(i, total, num)
 
         logger.info(f"태깅 중: {num}번 ({i+1}/{total})")
-        result = extract_tags_from_image(img_path, has_solution=True, taxonomy=taxonomy)
+        result = extract_tags_from_image(
+            img_path,
+            has_solution=True,
+            taxonomy=taxonomy,
+            leaf_embeddings=leaf_embeddings,
+        )
         results[num] = result
 
     if progress_callback:

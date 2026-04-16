@@ -26,10 +26,12 @@ solution_dataset/{images,labels,metadata}/{train,val}/ 에 저장.
 """
 import argparse
 import json
-import random
+import logging
 import shutil
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # 파이프라인 루트를 sys.path에 추가
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -108,6 +110,21 @@ def export_solution_labels(
     skipped = 0
     train_count = 0
     val_count = 0
+    warnings: list[str] = []
+
+    # 전역 누적 train/val 현황 — 매 export 시 이미 쌓인 비율을 보고
+    # 목표 비율(split_ratio)에 근접하도록 결정론적으로 배정한다.
+    # 페이지 단위 random 샘플링은 3~4페이지 PDF가 반복되면 편차가 누적됨.
+    existing_train = len(list((DATASET_DIR / "images" / "train").glob("*.png")))
+    existing_val = len(list((DATASET_DIR / "images" / "val").glob("*.png")))
+
+    def _pick_split() -> str:
+        """현재까지 누적된 train 비율이 목표보다 낮으면 train, 높으면 val."""
+        total = existing_train + train_count + existing_val + val_count
+        if total == 0:
+            return "train"
+        current_ratio = (existing_train + train_count) / total
+        return "train" if current_ratio < split_ratio else "val"
 
     # 페이지 키 정규화 (int/str 모두 처리)
     normalized: dict[int, dict] = {}
@@ -124,6 +141,9 @@ def export_solution_labels(
 
         page_data = normalized.get(page_num)
         if page_data is None:
+            msg = f"page {page_num}: page_bboxes 에 페이지 키 없음 — 박스 저장 누락 의심"
+            logger.warning(msg)
+            warnings.append(msg)
             skipped += 1
             continue
 
@@ -131,11 +151,14 @@ def export_solution_labels(
 
         # 박스 0개 → export 제외
         if not items:
+            msg = f"page {page_num}: 박스 0개 — export 제외"
+            logger.warning(msg)
+            warnings.append(msg)
             skipped += 1
             continue
 
-        # train/val 분리
-        split = "train" if random.random() < split_ratio else "val"
+        # train/val 분리 — 전역 누적 비율 기준 결정론적 배정
+        split = _pick_split()
 
         # 이미지 크기 — ultralytics 가 PIL.Image.open 을 monkey-patch 해서
         # 한글 경로를 cp949 로 해석하다 실패하므로, 바이트로 읽어 BytesIO 경유.
@@ -207,6 +230,7 @@ def export_solution_labels(
         "skipped": skipped,
         "train": train_count,
         "val": val_count,
+        "warnings": warnings,
     }
 
 
