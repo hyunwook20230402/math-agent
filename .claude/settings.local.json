@@ -65,7 +65,27 @@
       "Bash(grep -n \"PdfUploadDialog\\\\|textbook\" /c/Users/user/workspaces/math/apps/cms/src/pages/*.tsx)",
       "Bash(echo \"EXIT:$?\")",
       "Bash(pip check:*)",
-      "Bash(du -sh backend/pdf_pipeline/yolo_training/*/)"
+      "Bash(du -sh backend/pdf_pipeline/yolo_training/*/)",
+      "Bash(ollama list *)",
+      "Bash(uvicorn main:app --port 8000)",
+      "Read(//c/Users/user/workspaces/math/**)",
+      "Bash(find /c/Users/user/workspaces/math/backend/pdf_pipeline/yolo_training/dataset* -type f -name \"*.png\")",
+      "Bash(grep -E \"\\\\.py$\")",
+      "mcp__supabase__execute_sql",
+      "Bash(grep *)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(../../node_modules/.bin/tsc.cmd --noEmit -p tsconfig.app.json)",
+      "Bash(sort -k6,7)",
+      "Bash(head \"C:/Users/user/workspaces/math/backend/pdf_pipeline/uploads/solutions/dataset/labels/train/\"*.txt)",
+      "Bash(rm -rf \"2021학년도_수능_수리\\(나형\\)_해설\")",
+      "Bash(find dataset *)",
+      "Bash(echo \"{}\")",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__apply_migration",
+      "Bash(ollama pull *)",
+      "Bash(2>/dev/null)",
+      "WebSearch",
+      "Bash(xargs cat *)"
     ]
   },
   "hooks": {

@@ -14,5 +14,8 @@ __pycache__/
 # 환경설정 (시크릿)
 .env
 
+# unit 임베딩 캐시 (taxonomy hash 기반 자동 재생성)
+data/unit_embeddings_*.pkl
+
 # 기타
 *.log
