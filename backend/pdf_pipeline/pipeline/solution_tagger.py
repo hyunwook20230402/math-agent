@@ -66,7 +66,7 @@ Rules:
 - difficulty: easy / medium / hard
 - concept_tags: math concepts in this problem, max 5, short English or Korean terms
 - skill_tags: solving techniques used, max 5, short English or Korean terms
-- confidence: 0.0~1.0
+- confidence: float between 0.0 and 1.0, e.g. 0.9 for clear match, 0.6 for uncertain
 - solution_summary: core idea in 1-2 sentences
 - pitfall: common student mistakes in 1-2 sentences
 - solution_steps: step-by-step path, keep each description under 50 chars
@@ -254,6 +254,10 @@ def extract_tags_from_image(
 
     concept_tags = normalize_tags(result.concept_tags, "concept", taxonomy)
     skill_tags = normalize_tags(result.skill_tags, "skill", taxonomy)
+
+    # confidence 0.0 일괄 제거 (gemma4 structured output 미입력 방어)
+    concept_tags = [t for t in concept_tags if t["confidence"] > 0.0]
+    skill_tags = [t for t in skill_tags if t["confidence"] > 0.0]
 
     # 해설 없는 경우: confidence 상한 0.7
     if not has_solution:
