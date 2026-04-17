@@ -256,9 +256,11 @@ def extract_tags_from_image(
     concept_tags = normalize_tags(result.concept_tags, "concept", taxonomy)
     skill_tags = normalize_tags(result.skill_tags, "skill", taxonomy)
 
-    # confidence 0.0 일괄 제거 (gemma4 structured output 미입력 방어)
-    concept_tags = [t for t in concept_tags if t["confidence"] > 0.0]
-    skill_tags = [t for t in skill_tags if t["confidence"] > 0.0]
+    # confidence가 모두 0.0이면 gemma4가 채우지 않은 것 — 기본값 0.5로 채움
+    if concept_tags and all(t["confidence"] == 0.0 for t in concept_tags):
+      concept_tags = [{**t, "confidence": 0.5} for t in concept_tags]
+    if skill_tags and all(t["confidence"] == 0.0 for t in skill_tags):
+      skill_tags = [{**t, "confidence": 0.5} for t in skill_tags]
 
     # 해설 없는 경우: confidence 상한 0.7
     if not has_solution:
