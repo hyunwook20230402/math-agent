@@ -60,32 +60,30 @@ class TagResult(BaseModel):
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
 
 _TAGGING_PROMPT_WITH_SOLUTION = """Analyze this Korean high school math solution image.
-All text fields (summary, pitfall, tags, steps, mistakes) must be written in Korean.
-Output only valid JSON matching the schema. No explanation or markdown.
-
-Rules:
-- difficulty: easy(교과서 예제) / medium(쎈 B단계) / hard(수능 4점)
-- concept_tags: math concepts in this problem, Korean terms, max 5
-- skill_tags: solving techniques used, Korean terms, max 5
-- confidence: 0.0~1.0
-- solution_summary: core idea in 1-2 Korean sentences
-- pitfall: common student mistakes in 1-2 Korean sentences
-- solution_steps: step-by-step solution path, each description in Korean
-- common_mistakes: list of common error patterns in Korean (2-4 items)"""
-
-_TAGGING_PROMPT_NO_SOLUTION = """Analyze this Korean high school math problem image.
-All text fields must be written in Korean.
 Output only valid JSON matching the schema. No explanation or markdown.
 
 Rules:
 - difficulty: easy / medium / hard
-- concept_tags: concepts needed, Korean terms, max 5
-- skill_tags: techniques needed, Korean terms, max 5
+- concept_tags: math concepts in this problem, max 5, short English or Korean terms
+- skill_tags: solving techniques used, max 5, short English or Korean terms
+- confidence: 0.0~1.0
+- solution_summary: core idea in 1-2 sentences
+- pitfall: common student mistakes in 1-2 sentences
+- solution_steps: step-by-step path, keep each description under 50 chars
+- common_mistakes: 2-4 short error patterns, under 30 chars each"""
+
+_TAGGING_PROMPT_NO_SOLUTION = """Analyze this Korean high school math problem image.
+Output only valid JSON matching the schema. No explanation or markdown.
+
+Rules:
+- difficulty: easy / medium / hard
+- concept_tags: concepts needed, max 5, short terms
+- skill_tags: techniques needed, max 5, short terms
 - confidence: max 0.7 (no solution available)
 - solution_summary: null
-- pitfall: conditions students commonly miss, in Korean
-- solution_steps: [] (no solution image)
-- common_mistakes: list of likely error patterns in Korean (2-4 items)"""
+- pitfall: conditions students commonly miss, 1-2 sentences
+- solution_steps: []
+- common_mistakes: 2-4 short error patterns, under 30 chars each"""
 
 
 # ── 내부 유틸 ─────────────────────────────────────────────────────────────────
