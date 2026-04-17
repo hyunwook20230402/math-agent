@@ -19,7 +19,7 @@ from typing import Optional
 import requests
 from pydantic import BaseModel, ValidationError
 
-from . import unit_matcher
+from . import tag_normalizer, unit_matcher
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,6 @@ VL_MODEL = os.environ.get("VL_MODEL", "qwen2.5vl:7b")
 VL_TIMEOUT = int(os.environ.get("VL_TIMEOUT", "180"))
 
 OLLAMA_GENERATE_URL = f"{VL_OLLAMA_URL}/api/generate"
-
-# 유사도 임계값: 이 이상이면 정규화 사전의 표준 태그로 교체
-_FUZZY_THRESHOLD = 0.75
 
 
 # ── Pydantic 응답 스키마 ──────────────────────────────────────────────────────
@@ -126,70 +123,46 @@ def _call_vl(image_path: str, prompt: str, timeout: int | None = None) -> TagRes
   return TagResult.model_validate_json(raw)
 
 
-def _fuzzy_normalize(tag: str, synonyms: list[str]) -> float:
-  """단순 문자열 유사도 (Jaccard 기반)"""
-  def jaccard(a: str, b: str) -> float:
-    a_set = set(a.lower())
-    b_set = set(b.lower())
-    if not a_set or not b_set:
-      return 0.0
-    return len(a_set & b_set) / len(a_set | b_set)
+def normalize_tags(
+  raw_tags: list[ConceptTag | SkillTag],
+  tag_type: str,
+  section_embeddings: dict,
+) -> list[str]:
+  """bge-m3 cosine 유사도로 태그 정규화.
 
-  return max((jaccard(tag, syn) for syn in synonyms), default=0.0)
+  AI가 "trigonometric equations"를 출력하면 "삼각함수"로 통일.
+  매칭 안 되면 원본 유지.
 
-
-def normalize_tags(raw_tags: list[ConceptTag | SkillTag], tag_type: str, taxonomy: dict) -> list[dict]:
-  """concept_taxonomy.json 기반 태그 정규화
-
-  AI가 "2차 함수"를 출력하면 "이차함수"로 통일.
-  매칭 안 되면 원본 그대로 유지.
+  Args:
+    raw_tags: VL 모델이 낸 태그 리스트
+    tag_type: "concept" | "skill" (로깅용)
+    section_embeddings: tag_normalizer.load_or_build_section_embeddings 결과
   """
-  section = taxonomy.get("concepts" if tag_type == "concept" else "skills", {})
-  normalized = []
-
+  normalized: list[str] = []
   seen: set[str] = set()
   for item in raw_tags:
     tag = item.tag.strip()
     if not tag:
       continue
-
-    best_canonical = tag
-    best_score = 0.0
-
-    for canonical, synonyms in section.items():
-      if tag == canonical or tag in synonyms:
-        best_canonical = canonical
-        best_score = 1.0
-        break
-      score = _fuzzy_normalize(tag, [canonical] + synonyms)
-      if score > best_score and score >= _FUZZY_THRESHOLD:
-        best_score = score
-        best_canonical = canonical
-
-    if best_canonical not in seen:
-      seen.add(best_canonical)
-      normalized.append(best_canonical)
-
+    canonical, _score = tag_normalizer.match_tag(tag, section_embeddings)
+    if canonical and canonical not in seen:
+      seen.add(canonical)
+      normalized.append(canonical)
   return normalized
 
 
-def _normalize_bug_ids(common_mistakes: list[str], taxonomy: dict) -> list[dict]:
-  """common_mistakes 텍스트 → bug_id 매칭
+def _normalize_bug_ids(common_mistakes: list[str], bug_embeddings: dict) -> list[dict]:
+  """common_mistakes 텍스트 → bug_id 매칭 (bge-m3 cosine)
 
-  taxonomy의 bugs 섹션과 Jaccard 유사도로 매칭.
-  매칭 안 되면 bug_id=None으로 원본 텍스트만 유지.
+  Args:
+    bug_embeddings: tag_normalizer.load_or_build_section_embeddings("bugs") 결과
   """
-  bugs = taxonomy.get("bugs", {})
   result = []
   for mistake in common_mistakes:
-    best_id = None
-    best_score = 0.0
-    for bug_id, synonyms in bugs.items():
-      score = _fuzzy_normalize(mistake, synonyms)
-      if score > best_score and score >= _FUZZY_THRESHOLD:
-        best_score = score
-        best_id = bug_id
-    result.append({"text": mistake, "bug_id": best_id})
+    canonical, score = tag_normalizer.match_tag(mistake, bug_embeddings)
+    # canonical 이 bug_id(예: "bug_sign_error") 그대로면 매칭 성공, raw_tag면 실패
+    bug_id = canonical if canonical in bug_embeddings.get("canonicals", []) else None
+    result.append({"text": mistake, "bug_id": bug_id})
   return result
 
 
@@ -200,14 +173,20 @@ def extract_tags_from_image(
   has_solution: bool = True,
   taxonomy: dict | None = None,
   leaf_embeddings: dict | None = None,
+  concept_embeddings: dict | None = None,
+  skill_embeddings: dict | None = None,
+  bug_embeddings: dict | None = None,
 ) -> dict:
   """단일 이미지에서 온톨로지 데이터 추출
 
   Args:
     image_path: 해설 이미지 경로 (has_solution=True) 또는 문제 이미지 경로
-    has_solution: True = 해설 이미지, False = 문제 이미지만 (confidence 상한 0.7)
-    taxonomy: 정규화 사전 (None이면 자동 로드)
+    has_solution: True = 해설 이미지, False = 문제 이미지만
+    taxonomy: 정규화 사전 (None이면 자동 로드, section_embeddings 자동 생성)
     leaf_embeddings: unit 매칭용 임베딩 (None이면 unit 매칭 건너뜀)
+    concept_embeddings: concept 태그 정규화 임베딩 (None이면 taxonomy_path에서 빌드)
+    skill_embeddings: skill 태그 정규화 임베딩 (None이면 taxonomy_path에서 빌드)
+    bug_embeddings: bug_id 매칭 임베딩 (None이면 taxonomy_path에서 빌드)
 
   Returns:
     {
@@ -224,6 +203,14 @@ def extract_tags_from_image(
   """
   if taxonomy is None:
     taxonomy = _load_taxonomy()
+
+  taxonomy_path = Path(__file__).parent.parent / "data" / "concept_taxonomy.json"
+  if concept_embeddings is None:
+    concept_embeddings = tag_normalizer.load_or_build_section_embeddings(taxonomy_path, "concepts")
+  if skill_embeddings is None:
+    skill_embeddings = tag_normalizer.load_or_build_section_embeddings(taxonomy_path, "skills")
+  if bug_embeddings is None:
+    bug_embeddings = tag_normalizer.load_or_build_section_embeddings(taxonomy_path, "bugs")
 
   prompt = _TAGGING_PROMPT_WITH_SOLUTION if has_solution else _TAGGING_PROMPT_NO_SOLUTION
 
@@ -242,8 +229,8 @@ def extract_tags_from_image(
   try:
     result = _call_vl(image_path, prompt)
 
-    concept_tags = normalize_tags(result.concept_tags, "concept", taxonomy)
-    skill_tags = normalize_tags(result.skill_tags, "skill", taxonomy)
+    concept_tags = normalize_tags(result.concept_tags, "concept", concept_embeddings)
+    skill_tags = normalize_tags(result.skill_tags, "skill", skill_embeddings)
 
     difficulty = result.difficulty.strip().lower()
     if difficulty not in ("easy", "medium", "hard"):
@@ -253,7 +240,7 @@ def extract_tags_from_image(
     solution_summary = result.solution_summary
 
     solution_steps = [{"step": s.step, "description": s.description} for s in result.solution_steps]
-    common_mistakes = _normalize_bug_ids(result.common_mistakes, taxonomy)
+    common_mistakes = _normalize_bug_ids(result.common_mistakes, bug_embeddings)
 
     # unit은 AI가 아니라 임베딩 매칭으로 결정
     unit = ""
@@ -313,6 +300,9 @@ def tag_all_solutions(
   taxonomy = _load_taxonomy()
   taxonomy_path = Path(__file__).parent.parent / "data" / "concept_taxonomy.json"
   leaf_embeddings = unit_matcher.load_or_build_embeddings(taxonomy_path)
+  concept_embeddings = tag_normalizer.load_or_build_section_embeddings(taxonomy_path, "concepts")
+  skill_embeddings = tag_normalizer.load_or_build_section_embeddings(taxonomy_path, "skills")
+  bug_embeddings = tag_normalizer.load_or_build_section_embeddings(taxonomy_path, "bugs")
 
   results: dict[int, dict] = {}
 
@@ -332,6 +322,9 @@ def tag_all_solutions(
       has_solution=True,
       taxonomy=taxonomy,
       leaf_embeddings=leaf_embeddings,
+      concept_embeddings=concept_embeddings,
+      skill_embeddings=skill_embeddings,
+      bug_embeddings=bug_embeddings,
     )
     results[num] = result
 
