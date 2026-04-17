@@ -24,38 +24,60 @@ logger = logging.getLogger(__name__)
 DEFAULT_THRESHOLD = 0.6
 
 
+_EMBED_BUILD_VERSION = "v2-per-synonym"
+
+
 def _section_hash(section: dict) -> str:
-  """section 내용 hash (캐시 무효화용)"""
+  """section 내용 + 빌드 로직 버전 hash (캐시 무효화용)"""
   canonical = json.dumps(section, ensure_ascii=False, sort_keys=True)
-  return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+  payload = f"{_EMBED_BUILD_VERSION}|{canonical}"
+  return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def _build_embeddings(section: dict) -> dict:
-  """canonical + 동의어를 한 문자열로 합쳐 임베딩.
+  """canonical과 동의어를 각각 개별 임베딩 후 canonical 인덱스로 매핑.
+
+  canonical+동의어를 한 문자열로 합치면 벡터가 분산돼 단일 영어 raw 태그와의
+  cosine 유사도가 낮아진다. 각 문자열을 개별 벡터로 두고, 매칭 시 canonical별
+  최대 유사도를 취하는 방식으로 이 문제를 우회한다.
 
   Returns:
     {
-      "canonicals": [str, ...],
-      "vectors": np.ndarray,  # (N, D) L2 정규화됨
+      "canonicals": [str, ...],       # canonical 목록 (길이 M)
+      "vectors": np.ndarray,          # (N, D) L2 정규화됨 (N = canonical + 동의어 총 개수)
+      "owner_idx": np.ndarray,        # (N,) 각 벡터가 속한 canonical 인덱스 (0..M-1)
     }
   """
   canonicals: list[str] = []
   texts: list[str] = []
-  for canonical, synonyms in section.items():
+  owner_idx: list[int] = []
+  for ci, (canonical, synonyms) in enumerate(section.items()):
     canonicals.append(canonical)
-    # canonical + 동의어를 공백으로 이어붙여 embedding 품질 확보
-    parts = [canonical] + list(synonyms or [])
-    texts.append(" ".join(parts))
+    # canonical 자체 + 각 동의어를 모두 독립 벡터로 추가
+    variants = [canonical] + list(synonyms or [])
+    for v in variants:
+      if not v:
+        continue
+      texts.append(v)
+      owner_idx.append(ci)
 
-  if not canonicals:
-    return {"canonicals": [], "vectors": np.zeros((0, 1024), dtype=np.float32)}
+  if not canonicals or not texts:
+    return {
+      "canonicals": canonicals,
+      "vectors": np.zeros((0, 1024), dtype=np.float32),
+      "owner_idx": np.zeros((0,), dtype=np.int32),
+    }
 
   vectors = np.array(embedder.generate_embeddings_batch(texts), dtype=np.float32)
   norms = np.linalg.norm(vectors, axis=1, keepdims=True)
   norms[norms == 0] = 1.0
   vectors = vectors / norms
 
-  return {"canonicals": canonicals, "vectors": vectors}
+  return {
+    "canonicals": canonicals,
+    "vectors": vectors,
+    "owner_idx": np.array(owner_idx, dtype=np.int32),
+  }
 
 
 def load_or_build_section_embeddings(
@@ -122,7 +144,8 @@ def match_tag(
 
   canonicals = section_embeddings.get("canonicals", [])
   vectors = section_embeddings.get("vectors")
-  if not canonicals or vectors is None or len(canonicals) == 0:
+  owner_idx = section_embeddings.get("owner_idx")
+  if not canonicals or vectors is None or len(canonicals) == 0 or owner_idx is None:
     return raw_tag, 0.0
 
   # 완전 일치 먼저 (임베딩 호출 절약)
@@ -136,8 +159,12 @@ def match_tag(
   q_vec = q_vec / q_norm
 
   sims = vectors @ q_vec
-  top_idx = int(np.argmax(sims))
-  top_score = float(sims[top_idx])
+  # canonical별 최대 유사도로 집계 (동의어 중 가장 잘 맞는 벡터 기준)
+  per_canonical = np.full(len(canonicals), -np.inf, dtype=np.float32)
+  np.maximum.at(per_canonical, owner_idx, sims)
+
+  top_idx = int(np.argmax(per_canonical))
+  top_score = float(per_canonical[top_idx])
 
   if top_score >= threshold:
     return canonicals[top_idx], top_score
