@@ -143,5 +143,21 @@
     "표준화": ["Z점수", "표준화 변환"],
     "이항분포": ["binomial distribution", "nCr × p^r"],
     "정규분포": ["normal distribution", "표준정규분포"]
+  },
+  "bugs": {
+    "bug_sign_error":          ["부호 실수", "음수 양수 혼동", "부호 착각", "마이너스 빠짐"],
+    "bug_domain_ignored":      ["범위 무시", "치역 초과", "무연근 미제거", "정의역 조건 무시", "범위 조건 빠짐"],
+    "bug_substitution_forgot": ["치환 후 역치환 안 함", "t를 x로 안 돌림", "역치환 누락"],
+    "bug_symmetry_missed":     ["대칭성 미활용", "근을 일일이 계산", "그래프 대칭 미사용", "대칭축 미활용"],
+    "bug_formula_misapplied":  ["공식 잘못 적용", "공식 혼동", "변환 공식 오류", "항등식 오적용"],
+    "bug_condition_missed":    ["조건 누락", "문제 조건 미확인", "제약 조건 무시", "조건 빠짐"],
+    "bug_calc_error":          ["계산 실수", "사칙연산 오류", "전개 실수", "계산 착오"],
+    "bug_log_property":        ["로그 성질 오류", "로그 밑 혼동", "로그 법칙 실수"],
+    "bug_derivative_rule":     ["미분 공식 오류", "합성함수 미분 실수", "곱의 미분 실수", "연쇄법칙 오류"],
+    "bug_integration_const":   ["적분 상수 누락", "부정적분 상수 C 빠짐", "적분 상수 빠짐"],
+    "bug_trig_range":          ["삼각함수 범위 실수", "sin cos 최대최솟값 혼동", "삼각함수 값 범위 무시"],
+    "bug_probability_overlap": ["여사건 배반사건 혼동", "확률 중복 계산", "사건 중복"],
+    "bug_vector_direction":    ["벡터 방향 실수", "내적 부호 오류", "벡터 방향 혼동"],
+    "bug_equation_setup":      ["방정식 세우기 오류", "식 변환 실수", "식 설정 오류"]
   }
 }
