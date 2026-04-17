@@ -156,6 +156,11 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
             "choices": None,
             "explanation": p.get("explanation"),
             "structuring_status": "pending",
+            # 해설/온톨로지 필드 (staging → problems 복사)
+            "solution_image_url": p.get("solution_image_url"),
+            "solution_summary": p.get("solution_summary"),
+            "solution_steps": p.get("solution_steps"),
+            "common_mistakes": p.get("common_mistakes"),
             "source_info": {
                 "book": p.get("category", "기타"),
                 "page": p.get("source_page"),
@@ -399,6 +404,8 @@ def update_staging_solution(
     pitfall: str | None = None,
     unit: str | None = None,
     difficulty: str | None = None,
+    solution_steps: list | None = None,
+    common_mistakes: list | None = None,
 ) -> dict:
     """staging 레코드에 해설 정보 업데이트"""
     client = get_client()
@@ -421,6 +428,10 @@ def update_staging_solution(
         payload["unit"] = unit
     if difficulty is not None:
         payload["difficulty"] = difficulty
+    if solution_steps is not None:
+        payload["solution_steps"] = solution_steps
+    if common_mistakes is not None:
+        payload["common_mistakes"] = common_mistakes
     if not payload:
         return {}
     result = (

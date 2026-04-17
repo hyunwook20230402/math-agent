@@ -1513,22 +1513,28 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
             pitfall=data.get("pitfall"),
             unit=unit_val,
             difficulty=diff_val,
+            solution_steps=data.get("solution_steps") or None,
+            common_mistakes=data.get("common_mistakes") or None,
         )
 
-        # 태그 삽입
+        # 태그 삽입 — concept_tags/skill_tags는 이제 list[str]
         tags = []
-        for t in data.get("concept_tags", []):
+        for tag_name in data.get("concept_tags", []) or []:
+            if not tag_name:
+                continue
             tags.append({
-                "tag": t["tag"],
+                "tag": tag_name,
                 "tag_type": "concept",
-                "confidence": t.get("confidence", 0.5),
+                "confidence": 1.0,
                 "source": "ai",
             })
-        for t in data.get("skill_tags", []):
+        for tag_name in data.get("skill_tags", []) or []:
+            if not tag_name:
+                continue
             tags.append({
-                "tag": t["tag"],
+                "tag": tag_name,
                 "tag_type": "skill",
-                "confidence": t.get("confidence", 0.5),
+                "confidence": 1.0,
                 "source": "ai",
             })
         if tags:
