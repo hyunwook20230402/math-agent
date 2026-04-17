@@ -37,11 +37,9 @@ _FUZZY_THRESHOLD = 0.75
 
 class ConceptTag(BaseModel):
   tag: str
-  confidence: float
 
 class SkillTag(BaseModel):
   tag: str
-  confidence: float
 
 class SolutionStep(BaseModel):
   step: int
@@ -66,7 +64,6 @@ Rules:
 - difficulty: easy / medium / hard
 - concept_tags: max 3 terms, 1-4 words each
 - skill_tags: max 3 terms, 1-4 words each
-- confidence: 0.0~1.0
 - solution_summary: max 20 words
 - pitfall: max 20 words
 - solution_steps: max 5 steps, each description max 10 words
@@ -79,7 +76,6 @@ Rules:
 - difficulty: easy / medium / hard
 - concept_tags: max 3 terms, 1-4 words each
 - skill_tags: max 3 terms, 1-4 words each
-- confidence: max 0.7
 - solution_summary: null
 - pitfall: max 20 words
 - solution_steps: []
@@ -151,10 +147,9 @@ def normalize_tags(raw_tags: list[ConceptTag | SkillTag], tag_type: str, taxonom
   section = taxonomy.get("concepts" if tag_type == "concept" else "skills", {})
   normalized = []
 
+  seen: set[str] = set()
   for item in raw_tags:
     tag = item.tag.strip()
-    confidence = item.confidence
-
     if not tag:
       continue
 
@@ -171,17 +166,11 @@ def normalize_tags(raw_tags: list[ConceptTag | SkillTag], tag_type: str, taxonom
         best_score = score
         best_canonical = canonical
 
-    normalized.append({"tag": best_canonical, "confidence": confidence})
+    if best_canonical not in seen:
+      seen.add(best_canonical)
+      normalized.append(best_canonical)
 
-  # 중복 제거 (같은 tag → confidence 최대값 유지)
-  seen: dict[str, float] = {}
-  for item in normalized:
-    t = item["tag"]
-    c = item["confidence"]
-    if t not in seen or c > seen[t]:
-      seen[t] = c
-
-  return [{"tag": t, "confidence": c} for t, c in seen.items()]
+  return normalized
 
 
 def _normalize_bug_ids(common_mistakes: list[str], taxonomy: dict) -> list[dict]:
@@ -225,8 +214,8 @@ def extract_tags_from_image(
       "unit": str,
       "unit_score": float,
       "difficulty": str,
-      "concept_tags": [{"tag": str, "confidence": float}, ...],
-      "skill_tags": [{"tag": str, "confidence": float}, ...],
+      "concept_tags": [str, ...],
+      "skill_tags": [str, ...],
       "solution_summary": str | None,
       "pitfall": str | None,
       "solution_steps": [{"step": int, "description": str}, ...],
@@ -256,17 +245,6 @@ def extract_tags_from_image(
     concept_tags = normalize_tags(result.concept_tags, "concept", taxonomy)
     skill_tags = normalize_tags(result.skill_tags, "skill", taxonomy)
 
-    # confidence가 모두 0.0이면 gemma4가 채우지 않은 것 — 기본값 0.5로 채움
-    if concept_tags and all(t["confidence"] == 0.0 for t in concept_tags):
-      concept_tags = [{**t, "confidence": 0.5} for t in concept_tags]
-    if skill_tags and all(t["confidence"] == 0.0 for t in skill_tags):
-      skill_tags = [{**t, "confidence": 0.5} for t in skill_tags]
-
-    # 해설 없는 경우: confidence 상한 0.7
-    if not has_solution:
-      concept_tags = [{**t, "confidence": min(t["confidence"], 0.7)} for t in concept_tags]
-      skill_tags = [{**t, "confidence": min(t["confidence"], 0.7)} for t in skill_tags]
-
     difficulty = result.difficulty.strip().lower()
     if difficulty not in ("easy", "medium", "hard"):
       difficulty = ""
@@ -282,8 +260,8 @@ def extract_tags_from_image(
     unit_score = 0.0
     if leaf_embeddings is not None:
       query_parts: list[str] = []
-      query_parts.extend([t["tag"] for t in concept_tags if t.get("tag")])
-      query_parts.extend([t["tag"] for t in skill_tags if t.get("tag")])
+      query_parts.extend(concept_tags)
+      query_parts.extend(skill_tags)
       if isinstance(solution_summary, str) and solution_summary.strip():
         query_parts.append(solution_summary.strip())
       query_text = ", ".join(query_parts)
