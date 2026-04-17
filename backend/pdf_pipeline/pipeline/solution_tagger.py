@@ -122,7 +122,7 @@ def _call_vl(image_path: str, prompt: str, timeout: int | None = None) -> TagRes
     "stream": False,
     "options": {
       "temperature": 0.1,
-      "num_predict": 4096,  # gemma4는 이미지 토큰 소비가 커서 충분히 확보
+      "num_predict": 8192,  # gemma4는 이미지+JSON 응답이 커서 충분히 확보
     },
   }
   resp = requests.post(OLLAMA_GENERATE_URL, json=payload, timeout=timeout or VL_TIMEOUT)
