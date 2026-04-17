@@ -60,30 +60,30 @@ class TagResult(BaseModel):
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
 
 _TAGGING_PROMPT_WITH_SOLUTION = """Analyze this Korean high school math solution image.
-Output only valid JSON matching the schema. No explanation or markdown.
+Output only valid JSON. No explanation or markdown. Be concise.
 
 Rules:
 - difficulty: easy / medium / hard
-- concept_tags: math concepts in this problem, max 5, short English or Korean terms
-- skill_tags: solving techniques used, max 5, short English or Korean terms
-- confidence: float between 0.0 and 1.0, e.g. 0.9 for clear match, 0.6 for uncertain
-- solution_summary: core idea in 1-2 sentences
-- pitfall: common student mistakes in 1-2 sentences
-- solution_steps: step-by-step path, keep each description under 50 chars
-- common_mistakes: 2-4 short error patterns, under 30 chars each"""
+- concept_tags: max 3 terms, 1-4 words each
+- skill_tags: max 3 terms, 1-4 words each
+- confidence: 0.0~1.0
+- solution_summary: max 20 words
+- pitfall: max 20 words
+- solution_steps: max 5 steps, each description max 10 words
+- common_mistakes: 2-3 items, max 8 words each"""
 
 _TAGGING_PROMPT_NO_SOLUTION = """Analyze this Korean high school math problem image.
-Output only valid JSON matching the schema. No explanation or markdown.
+Output only valid JSON. No explanation or markdown. Be concise.
 
 Rules:
 - difficulty: easy / medium / hard
-- concept_tags: concepts needed, max 5, short terms
-- skill_tags: techniques needed, max 5, short terms
-- confidence: max 0.7 (no solution available)
+- concept_tags: max 3 terms, 1-4 words each
+- skill_tags: max 3 terms, 1-4 words each
+- confidence: max 0.7
 - solution_summary: null
-- pitfall: conditions students commonly miss, 1-2 sentences
+- pitfall: max 20 words
 - solution_steps: []
-- common_mistakes: 2-4 short error patterns, under 30 chars each"""
+- common_mistakes: 2-3 items, max 8 words each"""
 
 
 # ── 내부 유틸 ─────────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ def _call_vl(image_path: str, prompt: str, timeout: int | None = None) -> TagRes
     "options": {
       "temperature": 0.1,
       "num_ctx": 16384,   # 이미지 토큰 + JSON 응답 공간 확보 (Ollama 기본값 2048로는 부족)
-      "num_predict": 4096,
+      "num_predict": 16384,
     },
   }
   resp = requests.post(OLLAMA_GENERATE_URL, json=payload, timeout=timeout or VL_TIMEOUT)
