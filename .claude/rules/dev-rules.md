@@ -53,6 +53,42 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 - 대규모 탐색 완료 후 구현 시작 전 `/compact` 실행
 - `--no-verify` 사용 금지 (hook으로 차단됨)
 
+## 해설지 파이프라인 버그 이력 (2026-04-19 해결)
+
+### 증상
+저장 버튼을 눌러도 초록 ✓ 미표시, PUT 요청이 안 가거나 500 에러 반복.
+
+### 원인 및 해결책
+
+**1. Windows 포트 충돌 — uvicorn 좀비 프로세스**
+- 증상: PUT 요청이 서버 터미널에 안 찍힘
+- 원인: 이전 uvicorn(127.0.0.1:8000)이 좀비로 살아있고, 새 uvicorn(0.0.0.0:8001)과 공존. 브라우저가 구버전 프로세스로 연결
+- 해결: `powershell -Command "Stop-Process -Id <PID> -Force"` 또는 포트 변경(`8001`)
+- **향후**: uvicorn 재시작 전 `netstat -ano | findstr :8000`으로 좀비 확인
+
+**2. page_bboxes 키 타입 불일치 (str vs int)**
+- 원인: DB hydrate 시 `page_bboxes` 키가 문자열(`"1"`)인데 `body.page_number`는 정수(`1`) → dict lookup 실패 → 404
+- 해결: `page_bboxes.get(body.page_number) or page_bboxes.get(str(body.page_number))`
+- 위치: `main.py` `solution_update_bboxes` 함수
+
+**3. PIL Image를 numpy array 기대 함수에 직접 전달**
+- 원인: `img.crop()` → PIL Image → `_trim_whitespace()`(cv2/numpy 기대) 직접 전달 → cv2.error
+- 해결: PIL→numpy(`cv2.cvtColor(np.array(pil), COLOR_RGB2BGR)`) → trim → numpy→PIL(`PILImage.fromarray(cv2.cvtColor(..., COLOR_BGR2RGB))`)
+- 위치: `main.py` `solution_update_bboxes` L1367~
+
+**4. React useCallback 클로저 stale 문제 (solutionJobId)**
+- 원인: `saveBboxForPage`가 `useCallback([solutionJobId])`로 정의돼 있어 state 업데이트 직후 클로저가 null을 참조
+- 해결: `solutionJobIdRef = useRef(null)` 추가, `setCleanSolutionJobId`에서 ref도 동기화, `saveBboxForPage`에서 ref 참조
+- **향후**: 저장/fetch 함수에서 state 직접 참조 대신 ref 패턴 사용
+
+**5. status 복구 시 pageNums=0이면 stage가 'idle' 고착**
+- 원인: `if (pageNums.length === 0) return` 에서 `setStage('reviewing')` 전에 return → 저장 버튼 렌더 안 됨
+- 해결: `setStage(newStage)`를 `pageNums` 체크 전에 호출
+
+## 백엔드 포트 현황
+- 로컬 개발: **8001** (SolutionReview, PdfReview, PdfUploadDialog, ProblemDetail 모두 8001로 변경됨)
+- CORS allowlist: main.py에 8001 추가 필요 여부 확인
+
 ## 메모리 규칙
 
 새 세션에서 기억해야 할 내용은 `~/.claude/projects/.../memory/` 가 아닌 **이 프로젝트의 `.claude/rules/` 파일에 기록**한다.

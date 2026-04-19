@@ -113,6 +113,7 @@ async def _run_extraction(
     job_id: str, pdf_path: str, teacher_id: str, category: str,
     textbook_id: Optional[str] = None, chapter_id: Optional[str] = None,
     page_start: Optional[int] = None, page_end: Optional[int] = None,
+    pdf_type: str = "문제",
 ):
     jobs[job_id]["status"] = "extracting"
     try:
@@ -126,18 +127,69 @@ async def _run_extraction(
 
         jobs[job_id]["total_pages"] = len(page_images)
 
+        loop = asyncio.get_event_loop()
+        from PIL import Image as PILImage
+        from concurrent.futures import ThreadPoolExecutor
+
+        # 해설 PDF: YOLO 스킵 — 페이지 이미지만 업로드하고 빈 bbox로 staging 저장
+        if pdf_type == "해설":
+            jobs[job_id]["status"] = "uploading"
+
+            def _upload_pages():
+                results = []
+                for pi in page_images:
+                    ipath = pi["image_path"]
+                    pnum = pi["page"]
+                    with PILImage.open(ipath) as _img:
+                        pw, ph = _img.size
+                    page_url = upload_page_image(job_id, pnum, ipath)
+                    results.append({
+                        "number": pnum,
+                        "page": pnum,
+                        "source_page_image_url": page_url,
+                        "page_width": pw,
+                        "page_height": ph,
+                    })
+                return results
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                page_results = await loop.run_in_executor(executor, _upload_pages)
+
+            jobs[job_id]["total_problems"] = 0
+            jobs[job_id]["status"] = "saving"
+            staging_data = []
+            for item in page_results:
+                entry = {
+                    "problem_number": item["page"],
+                    "source_image_url": None,
+                    "source_pdf": str(pdf_path),
+                    "source_page": item["page"],
+                    "confidence": 0.0,
+                    "answer_type": "short_answer",
+                    "difficulty_score": 5,
+                    "unit": "미분류",
+                    "category": category,
+                    "bbox": None,
+                    "source_page_image_url": item["source_page_image_url"],
+                    "page_number": item["page"],
+                }
+                if textbook_id:
+                    entry["textbook_id"] = textbook_id
+                if chapter_id:
+                    entry["chapter_id"] = chapter_id
+                staging_data.append(entry)
+            insert_staging_problems(job_id, teacher_id, staging_data)
+            jobs[job_id]["status"] = "done"
+            return
+
         jobs[job_id]["status"] = "detecting"
         all_cropped = []
         crop_dir = str(Path(pdf_path).parent / "cropped")
 
-        loop = asyncio.get_event_loop()
-
-        # YOLO 기반 크롭 (모든 교재 공통)
+        # YOLO 기반 크롭 (문제 PDF)
         if not yolo_model_exists():
             raise RuntimeError(f"YOLO 모델이 없습니다. 학습 후 models/ 에 배치하세요.")
 
-        from PIL import Image as PILImage
-        from concurrent.futures import ThreadPoolExecutor
         Path(crop_dir).mkdir(parents=True, exist_ok=True)
 
         def _run_yolo():
@@ -251,6 +303,7 @@ async def upload_file(
     chapter_id: Optional[str] = Form(None),
     page_start: Optional[int] = Form(None),
     page_end: Optional[int] = Form(None),
+    pdf_type: str = Form("문제"),
 ):
     """PDF/HWP 파일 업로드 → job_id 반환"""
     if not file.filename:
@@ -283,6 +336,7 @@ async def upload_file(
         "chapter_id": chapter_id,
         "page_start": page_start,
         "page_end": page_end,
+        "pdf_type": pdf_type,
         "total_pages": 0,
         "total_problems": 0,
         "error": None,
@@ -315,6 +369,7 @@ async def start_extraction(job_id: str, background_tasks: BackgroundTasks):
             job.get("chapter_id"),
             job.get("page_start"),
             job.get("page_end"),
+            job.get("pdf_type", "문제"),
         )
     else:
         raise HTTPException(400, "HWP 지원은 4단계에서 추가됩니다.")
@@ -1238,7 +1293,7 @@ async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxe
 
     job = solution_jobs[solution_job_id]
     page_bboxes = job.get("page_bboxes", {})
-    page_data = page_bboxes.get(body.page_number)
+    page_data = page_bboxes.get(body.page_number) or page_bboxes.get(str(body.page_number))
     if not page_data:
         raise HTTPException(404, f"{body.page_number}페이지 데이터 없음")
 
@@ -1261,19 +1316,28 @@ async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxe
             del fragments[key]
 
     # 새 bbox로 재크롭
-    pdf_parent = Path(job["file_path"]).parent
+    file_path = job.get("file_path") or job.get("pdf_path")
+    if not file_path:
+        raise HTTPException(500, "파일 경로 정보가 없습니다. 다시 업로드해주세요.")
+    pdf_parent = Path(file_path).parent
     crop_dir = pdf_parent / "solution_crops"
     crop_dir.mkdir(parents=True, exist_ok=True)
 
-    # page_image_url이 아닌 로컬 페이지 원본 사용 — extract 시 pages_tmp_dir에 저장됨
+    # 로컬 페이지 원본 우선, 없으면 page_image_url에서 다운로드
     pages_tmp_dir = crop_dir / "_pages"
-    # 페이지 원본 찾기
+    pages_tmp_dir.mkdir(parents=True, exist_ok=True)
     local_page_imgs = sorted(pages_tmp_dir.glob("*.png"))
     page_img_path = None
     if body.page_number - 1 < len(local_page_imgs):
         page_img_path = str(local_page_imgs[body.page_number - 1])
     if not page_img_path or not Path(page_img_path).exists():
-        raise HTTPException(500, "페이지 원본 이미지를 찾을 수 없습니다.")
+        # fallback: page_image_url 다운로드
+        page_url = page_data.get("page_image_url")
+        if not page_url:
+            raise HTTPException(500, "페이지 원본 이미지를 찾을 수 없습니다.")
+        import urllib.request
+        page_img_path = str(pages_tmp_dir / f"page_{body.page_number:03d}.png")
+        urllib.request.urlretrieve(page_url, page_img_path)
 
     img = PILImage.open(page_img_path)
     new_items: list = []
@@ -1300,12 +1364,16 @@ async def solution_update_bboxes(solution_job_id: str, body: SolutionUpdateBboxe
             })
             continue
 
-        cropped = img.crop((x1, y1, x2, y2))
-        cropped = _trim_whitespace(cropped)
+        import cv2 as _cv2
+        import numpy as _np
+        cropped_pil = img.crop((x1, y1, x2, y2))
+        cropped_arr = _cv2.cvtColor(_np.array(cropped_pil), _cv2.COLOR_RGB2BGR)
+        cropped_arr = _trim_whitespace(cropped_arr)
+        cropped_pil = PILImage.fromarray(_cv2.cvtColor(cropped_arr, _cv2.COLOR_BGR2RGB))
         # num이 None(OCR 미확정)이면 파일명/fragments key는 idx 기반 placeholder 사용
         num_token = f"{num:04d}" if isinstance(num, int) and num > 0 else f"none_{idx:02d}"
         save_abs = crop_dir / f"page_{body.page_number:03d}_{num_token}_edit_{idx}.png"
-        cropped.save(str(save_abs))
+        cropped_pil.save(str(save_abs))
         # DB 에는 UPLOAD_DIR 기준 상대경로만 저장 (UPLOAD_DIR 변경/이전 내성)
         from config import to_upload_relative
         save_rel = to_upload_relative(save_abs)

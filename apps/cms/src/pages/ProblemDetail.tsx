@@ -10,7 +10,7 @@ import { Label } from '@shared/ui/label';
 import { toast } from '@shared/hooks/use-toast';
 import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap } from 'lucide-react';
 
-const PIPELINE_URL = 'http://localhost:8000';
+const PIPELINE_URL = 'http://localhost:8001';
 
 interface TagItem {
   tag: string;

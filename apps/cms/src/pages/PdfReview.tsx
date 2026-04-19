@@ -10,7 +10,7 @@ import {
 import { useTextbook } from '@/context/TextbookContext';
 import BboxEditor, { type BboxItem } from '@/components/BboxEditor';
 
-const PIPELINE_URL = 'http://localhost:8000';
+const PIPELINE_URL = 'http://localhost:8001';
 
 interface StagingProblem {
   id: string;

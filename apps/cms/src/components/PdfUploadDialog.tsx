@@ -8,7 +8,7 @@ import { toast } from '@shared/hooks/use-toast';
 import { Upload, FileText, Loader2, AlertTriangle } from 'lucide-react';
 import type { Textbook, Chapter } from '@shared/types/database';
 
-const PIPELINE_URL = 'http://localhost:8000';
+const PIPELINE_URL = 'http://localhost:8001';
 
 interface PdfUploadDialogProps {
   open: boolean;
@@ -22,6 +22,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
   const { profile } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [category, setCategory] = useState('쎈');
+  const [pdfType, setPdfType] = useState<'문제' | '해설'>('문제');
   const [pageStart, setPageStart] = useState('');
   const [pageEnd, setPageEnd] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -50,6 +51,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
       formData.append('file', file);
       formData.append('teacher_id', profile.id);
       formData.append('category', category);
+      formData.append('pdf_type', pdfType);
       formData.append('textbook_id', textbook.id);
       if (chapter) {
         formData.append('chapter_id', chapter.id);
@@ -78,7 +80,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
         throw new Error(err.detail || '추출 시작 실패');
       }
 
-      toast({ title: '추출 시작', description: '문제 추출 중입니다...' });
+      toast({ title: '추출 시작', description: pdfType === '해설' ? '해설 페이지 업로드 중입니다...' : '문제 추출 중입니다...' });
       startPolling(data.job_id);
     } catch (e: any) {
       setErrorMessage(e.message);
@@ -115,6 +117,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
 
   const resetForm = () => {
     setFile(null);
+    setPdfType('문제');
     setPageStart('');
     setPageEnd('');
     setJobStatus(null);
@@ -141,18 +144,31 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
         </div>
 
         <div className="space-y-4">
-          <div>
-            <Label>교재 종류</Label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-            >
-              <option value="쎈">쎈</option>
-              <option value="모의고사">모의고사</option>
-              <option value="연산">연산</option>
-              <option value="자작">자작</option>
-            </select>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>PDF 종류</Label>
+              <select
+                value={pdfType}
+                onChange={(e) => setPdfType(e.target.value as '문제' | '해설')}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <option value="문제">문제</option>
+                <option value="해설">해설</option>
+              </select>
+            </div>
+            <div>
+              <Label>교재 종류</Label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <option value="쎈">쎈</option>
+                <option value="모의고사">모의고사</option>
+                <option value="연산">연산</option>
+                <option value="자작">자작</option>
+              </select>
+            </div>
           </div>
 
           <div>

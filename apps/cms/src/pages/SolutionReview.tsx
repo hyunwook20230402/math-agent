@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import BboxEditor, { type BboxItem } from '@/components/BboxEditor';
 
-const PIPELINE_URL = 'http://localhost:8000';
+const PIPELINE_URL = 'http://localhost:8001';
 
 interface SolutionItem {
   number: number | null;
@@ -92,9 +92,23 @@ export default function SolutionReview() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { profile } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const autoSaveTimerRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+  const saveBboxForPageRef = useRef<((pg: number, items: BboxItem[], silent?: boolean) => Promise<void>) | null>(null);
 
   const [stage, setStage] = useState<Stage>('idle');
   const [solutionJobId, setSolutionJobId] = useState<string | null>(null);
+  const solutionJobIdRef = useRef<string | null>(null);
+  const setCleanSolutionJobId = (id: string | null) => {
+    if (!id) {
+      setSolutionJobId(null);
+      solutionJobIdRef.current = null;
+      return;
+    }
+    const match = id.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    const clean = match ? match[0] : null;
+    setSolutionJobId(clean);
+    solutionJobIdRef.current = clean;
+  };
   const [pages, setPages] = useState<number[]>([]);
   const [pageData, setPageData] = useState<Record<number, PageData>>({});
   const [activePage, setActivePage] = useState<number>(0);
@@ -134,18 +148,26 @@ export default function SolutionReview() {
     return count + 1;
   }, [pages, bboxCache, pageData]);
 
-  /** 현재 activePage bbox를 교체하고 dirty 처리 */
+  /** 현재 activePage bbox를 교체하고 dirty 처리 + 2초 후 자동저장 */
   const updateCurrentPageBboxes = useCallback((updater: (prev: BboxItem[]) => BboxItem[]) => {
     const pg = activePageRef.current;
+    let updatedItems: BboxItem[] = [];
     setBboxCache(prev => {
       const startNum = pageStartNumbersRef.current[pg] ?? computeStartNumber(pg);
       const cur = prev.get(pg) ?? itemsToBboxItems(pageData[pg]?.items ?? [], startNum);
+      updatedItems = updater(cur);
       const next = new Map(prev);
-      next.set(pg, updater(cur));
+      next.set(pg, updatedItems);
       return next;
     });
     setDirtyPages(prev => new Set([...prev, pg]));
     setSavedPages(prev => { const n = new Set(prev); n.delete(pg); return n; });
+
+    // 2초 debounce 자동저장
+    clearTimeout(autoSaveTimerRef.current[pg]);
+    autoSaveTimerRef.current[pg] = setTimeout(() => {
+      saveBboxForPageRef.current?.(pg, updatedItems, true).catch(() => {});
+    }, 2000);
   }, [pageData, computeStartNumber]);
 
   /** "묶기 시작" — 첫 번째 박스 선택 시 앵커 저장 */
@@ -301,6 +323,7 @@ export default function SolutionReview() {
         if (!res.ok) return;
         const job = await res.json();
         if (cancelled || !job?.id) return;
+        if (job.status === 'error') return;
         setSearchParams(prev => {
           const next = new URLSearchParams(prev);
           next.set('sj', job.id);
@@ -323,6 +346,7 @@ export default function SolutionReview() {
       try {
         const res = await fetch(`${PIPELINE_URL}/api/solution/status/${sj}`);
         if (!res.ok) {
+          setSolutionJobId(null);
           setSearchParams(prev => {
             const next = new URLSearchParams(prev);
             next.delete('sj');
@@ -336,8 +360,12 @@ export default function SolutionReview() {
         const parsed: Record<number, PageData> = {};
         Object.entries(pb).forEach(([k, v]: any) => { parsed[Number(k)] = v as PageData; });
         const pageNums = Object.keys(parsed).map(Number).sort((a, b) => a - b);
+        setCleanSolutionJobId(sj);
+        const newStage: Stage = job.status === 'done' ? 'done'
+          : (job.status === 'queued' || job.status === 'processing') ? 'tagging'
+          : 'reviewing';
+        setStage(newStage);
         if (pageNums.length === 0) return;
-        setSolutionJobId(sj);
         setPageData(parsed);
         setPages(pageNums);
         setActivePage(pageNums[0]);
@@ -346,7 +374,6 @@ export default function SolutionReview() {
         setSavedPages(new Set(modified));
         setAnswers(job.answers ?? {});
         setTagResults(job.tag_results ?? job.progress?.tag_results ?? {});
-        setStage(job.status === 'done' ? 'done' : job.status === 'queued' || job.status === 'processing' ? 'tagging' : 'reviewing');
         toast({ title: '작업 복구됨', description: `${pageNums.length}페이지 불러옴` });
       } catch (e) {
         // 복구 실패 시 조용히 무시 (업로드 화면으로)
@@ -414,7 +441,7 @@ export default function SolutionReview() {
         throw new Error(`업로드 실패: ${res.status} ${txt}`);
       }
       const data = await res.json();
-      setSolutionJobId(data.solution_job_id);
+      setCleanSolutionJobId(data.solution_job_id);
       setSearchParams(prev => {
         const next = new URLSearchParams(prev);
         next.set('sj', data.solution_job_id);
@@ -461,40 +488,48 @@ export default function SolutionReview() {
     } catch (e: any) {
       setStage('error');
       setErrorMsg(e.message);
+      setCleanSolutionJobId(null);
       toast({ title: '추출 오류', description: e.message, variant: 'destructive' });
     }
   };
 
   // 3. 페이지 bbox 저장 (재크롭)
-  const handleSaveBbox = async () => {
-    if (!solutionJobId) return;
-    setSavingBbox(true);
-    try {
-      const items = bboxCache.get(activePage) ?? itemsToBboxItems(pageData[activePage]?.items ?? [], computeStartNumber(activePage));
-      const res = await fetch(`${PIPELINE_URL}/api/solution/${solutionJobId}/update-bboxes`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          page_number: activePage,
-          items: items.map(it => ({
-            // 표시번호 = 저장번호. 정답표만 0, 그 외는 사이드바에 보이는 값 그대로.
-            number: it.boxType === 'answer_table' ? 0 : it.number,
-            bbox: it.bbox,
-            group_id: it.groupId ?? null,
-            box_type: it.boxType ?? 'solution',
-          })),
-        }),
-      });
-      if (!res.ok) throw new Error('bbox 저장 실패');
+  const saveBboxForPage = useCallback(async (pg: number, items: BboxItem[], silent = false): Promise<void> => {
+    const sjId = solutionJobIdRef.current;
+    if (!sjId) return;
+    const res = await fetch(`${PIPELINE_URL}/api/solution/${sjId}/update-bboxes`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        page_number: pg,
+        items: items.map(it => ({
+          number: it.boxType === 'answer_table' ? 0 : it.number,
+          bbox: it.bbox,
+          group_id: it.groupId ?? null,
+          box_type: it.boxType ?? 'solution',
+        })),
+      }),
+    });
+    if (!res.ok) throw new Error('bbox 저장 실패');
+    setDirtyPages(prev => { const next = new Set(prev); next.delete(pg); return next; });
+    setSavedPages(prev => new Set([...prev, pg]));
+    if (!silent) {
+      setSelectedBboxIdx(null);
       toast({ title: '저장 완료', description: '해당 페이지가 재크롭되었습니다.' });
-      setDirtyPages(prev => {
-        const next = new Set(prev);
-        next.delete(activePage);
-        return next;
-      });
-      setSavedPages(prev => new Set([...prev, activePage]));
-      setBboxResetKey(k => k + 1);
-      setSelectedBboxIdx(null); // 저장 완료 후 선택 툴바 닫기
+    }
+  }, [solutionJobId]);
+
+  // ref 동기화 (updateCurrentPageBboxes의 자동저장에서 참조)
+  useEffect(() => { saveBboxForPageRef.current = saveBboxForPage; }, [saveBboxForPage]);
+
+  const handleSaveBbox = async () => {
+    if (!solutionJobIdRef.current) return;
+    setSavingBbox(true);
+    const pg = activePage;
+    clearTimeout(autoSaveTimerRef.current[pg]);
+    try {
+      const items = bboxCache.get(pg) ?? itemsToBboxItems(pageData[pg]?.items ?? [], computeStartNumber(pg));
+      await saveBboxForPage(pg, items, false);
     } catch (e: any) {
       toast({ title: '오류', description: e.message, variant: 'destructive' });
     } finally {
