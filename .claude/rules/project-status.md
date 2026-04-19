@@ -13,7 +13,7 @@
 - 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크)
 - SolutionReview 같은 번호 묶기 + 그룹 확정 UI
 - Supabase 마이그레이션 **010** 까지 적용 (`difficulty_score` INT 1~10 + 5단계 GENERATED 라벨, `problem_sets` 3지표 avg/p75/max, `recalc_set_difficulty` RPC)
-- Provider 시간대 자동 선택 (`provider_selector.py` — 평일 09-18 KST Ollama, 그외 Gemini→OpenAI)
+- Provider 시간대 자동 선택 (`provider_selector.py` — 평일 09-19 KST Ollama, 그외 Gemini→OpenAI)
 
 ## 향후 작업
 
@@ -28,7 +28,7 @@
 
 | 시간대 | VL Provider | Embed Provider |
 |--------|-------------|----------------|
-| 평일 09-18 KST (서버) | Ollama Gemma3 27B | bge-m3 (Ollama) |
+| 평일 09-19 KST (서버) | Ollama Gemma3 27B | bge-m3 (Ollama) |
 | 그 외 (집) | Gemini → OpenAI fallback | OpenAI text-embedding-3-small |
 
 - 환경변수 `VL_PROVIDER` / `EMBED_PROVIDER` 로 강제 override 가능

@@ -1,7 +1,7 @@
 """Provider 시간대 기반 auto-select + 환경변수 override
 
 운영 전략 (2026-04-19 확정):
-  평일 09:00~18:00 KST (서버 근무)  → ollama  (Gemma 4 / bge-m3)
+  평일 09:00~19:00 KST (서버 근무)  → ollama  (Gemma 4 / bge-m3)
   그 외 시간 (집)                   → gemini → openai fallback (VL)
                                       openai                    (embed)
 
@@ -19,11 +19,11 @@ except Exception:
 
 
 def is_work_hours() -> bool:
-  """평일(월~금) 09:00~18:00 KST 이면 True. ZoneInfo 로드 실패 시 로컬 시간 fallback."""
+  """평일(월~금) 09:00~19:00 KST 이면 True. ZoneInfo 로드 실패 시 로컬 시간 fallback."""
   now = datetime.now(_KST) if _KST else datetime.now()
   if now.weekday() >= 5:
     return False
-  return 9 <= now.hour < 18
+  return 9 <= now.hour < 19
 
 
 def select_vl_provider() -> str:
