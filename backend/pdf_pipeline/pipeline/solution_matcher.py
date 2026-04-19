@@ -79,9 +79,10 @@ def match_solutions_to_problems(
 
         answer_data = answers.get(num, {})
         answer = answer_data.get("answer")
-        answer_type = answer_data.get("answer_type")
         img_path = solution_images.get(num)
         tags = tag_results.get(num, {})
+        # answer_type: 태거 판단 우선 (이미지 보고 보기 유무 판단), 없으면 정답 파싱 결과
+        answer_type = tags.get("answer_type") or answer_data.get("answer_type")
 
         confidence = calculate_match_confidence(
             staging_number=num,
@@ -90,6 +91,7 @@ def match_solutions_to_problems(
             has_image=bool(img_path),
         )
 
+        validation = tags.get("validation") or {}
         results[sid] = {
             "problem_number": num,
             "solution_image_local_path": img_path,
@@ -99,9 +101,14 @@ def match_solutions_to_problems(
             "skill_tags": tags.get("skill_tags", []),
             "solution_summary": tags.get("solution_summary"),
             "unit": tags.get("unit") or "",
-            "difficulty": tags.get("difficulty") or "",
+            "difficulty_score": tags.get("difficulty_score"),
             "pitfall": tags.get("pitfall"),
+            "solution_steps": tags.get("solution_steps"),
+            "common_mistakes": tags.get("common_mistakes"),
             "match_confidence": confidence,
+            "validation_status": validation.get("status"),
+            "validation_score": validation.get("score"),
+            "validation_issues": validation.get("issues"),
         }
 
     return results

@@ -59,6 +59,11 @@ export interface Database {
           textbook_id: string | null;
           chapter_id: string | null;
           subchapter_id: string | null;
+          solution_image_url: string | null;
+          solution_summary: string | null;
+          pitfall: string | null;
+          solution_steps: any | null;
+          common_mistakes: any | null;
           created_at: string;
           updated_at: string;
         };

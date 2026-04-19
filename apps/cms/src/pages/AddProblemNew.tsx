@@ -81,6 +81,19 @@ const AddProblemNew = () => {
     minor_unit: ''
   });
 
+  // 편집 모드 전용 — unit 전체 문자열 (읽기 전용 표시용)
+  const [unitText, setUnitText] = useState('');
+
+  // AI 태깅 필드 (편집 모드에서만 표시)
+  const [solutionImageUrl, setSolutionImageUrl] = useState('');
+  const [solutionSummary, setSolutionSummary] = useState('');
+  const [pitfall, setPitfall] = useState('');
+  const [solutionSteps, setSolutionSteps] = useState<{ step: number; description: string }[]>([]);
+  const [commonMistakes, setCommonMistakes] = useState<{ bug_id: string; text: string }[]>([]);
+
+  // 해설 이미지 라이트박스
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
   // 파일 업로드 상태
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [explanationImageFile, setExplanationImageFile] = useState<File | null>(null);
@@ -441,6 +454,16 @@ const AddProblemNew = () => {
         minor_unit: problem.unit?.split(' > ')[2] || ''
       });
 
+      // 편집 모드: unit 전체 읽기 전용 표시
+      setUnitText(problem.unit || '');
+
+      // AI 태깅 필드 로드
+      setSolutionImageUrl((problem as any).solution_image_url || '');
+      setSolutionSummary((problem as any).solution_summary || '');
+      setPitfall((problem as any).pitfall || '');
+      setSolutionSteps((problem as any).solution_steps || []);
+      setCommonMistakes((problem as any).common_mistakes || []);
+
       // 이미지 파일 상태 초기화 (편집 시에는 기존 이미지 URL만 사용)
       setImageFile(null);
       setExplanationImageFile(null);
@@ -549,9 +572,9 @@ const AddProblemNew = () => {
     return formData.title;
   };
 
-  // 폼 데이터가 변경될 때마다 제목 자동 업데이트
+  // 폼 데이터가 변경될 때마다 제목 자동 업데이트 (등록 모드에서만)
   React.useEffect(() => {
-    if (formData.textbook && formData.subject && formData.problem_number) {
+    if (!isEditMode && formData.textbook && formData.subject && formData.problem_number) {
       const autoTitle = `${formData.textbook} ${formData.subject} ${formData.problem_number}번`;
       if (formData.title !== autoTitle) {
         setFormData(prev => ({ ...prev, title: autoTitle }));
@@ -606,7 +629,7 @@ const AddProblemNew = () => {
         throw new Error('사용자 프로필을 찾을 수 없습니다. 다시 로그인해주세요.');
       }
 
-      const problemData = {
+      const problemData: Record<string, any> = {
         teacher_id: teacherId,
         title: formData.title,
         problem_number: formData.problem_number || 1,
@@ -617,7 +640,12 @@ const AddProblemNew = () => {
         answer_type: formData.problem_type,
         correct_answer: formData.correct_answer,
         choices: null,
-        explanation: formData.explanation || null
+        explanation: formData.explanation || null,
+        // AI 태깅 필드
+        solution_summary: solutionSummary || null,
+        pitfall: pitfall || null,
+        solution_steps: solutionSteps.length > 0 ? solutionSteps : null,
+        common_mistakes: commonMistakes.length > 0 ? commonMistakes : null,
       };
 
       let data, error;
@@ -690,6 +718,7 @@ const AddProblemNew = () => {
   };
 
   return (
+    <>
     <div className="container mx-auto px-4 py-6 max-w-4xl">
       {/* 헤더 */}
       <div className="flex items-center gap-4 mb-6">
@@ -732,59 +761,60 @@ const AddProblemNew = () => {
                 </select>
               </div>
 
-              {/* 과목/대단원/중단원 */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* 단원 — 편집: 읽기 전용 / 등록: 드롭다운 */}
+              {isEditMode ? (
                 <div>
-                  <Label htmlFor="subject">과목 *</Label>
-                  <select
-                    value={formData.subject}
-                    onChange={(e) => handleSubjectChange(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                  >
-                    <option value="">과목 선택</option>
-                    {subjectOptions.map(option => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  <Label>단원</Label>
+                  <p className="mt-1 text-sm text-muted-foreground bg-gray-50 border rounded-md px-3 py-2">{unitText || '—'}</p>
                 </div>
-                <div>
-                  <Label htmlFor="major_unit">대단원 *</Label>
-                  <select
-                    value={formData.major_unit}
-                    onChange={(e) => handleMajorUnitChange(e.target.value)}
-                    disabled={!formData.subject}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
-                  >
-                    <option value="">{formData.subject ? "대단원 선택" : "먼저 과목을 선택하세요"}</option>
-                    {availableMajorUnits.map(option => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <Label htmlFor="subject">과목 *</Label>
+                    <select
+                      value={formData.subject}
+                      onChange={(e) => handleSubjectChange(e.target.value)}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                    >
+                      <option value="">과목 선택</option>
+                      {subjectOptions.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <Label htmlFor="major_unit">대단원 *</Label>
+                    <select
+                      value={formData.major_unit}
+                      onChange={(e) => handleMajorUnitChange(e.target.value)}
+                      disabled={!formData.subject}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
+                    >
+                      <option value="">{formData.subject ? "대단원 선택" : "먼저 과목을 선택하세요"}</option>
+                      {availableMajorUnits.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <Label htmlFor="minor_unit">중단원 *</Label>
+                    <select
+                      value={formData.minor_unit}
+                      onChange={(e) => setFormData({ ...formData, minor_unit: e.target.value })}
+                      disabled={!formData.major_unit}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
+                    >
+                      <option value="">{formData.major_unit ? "중단원 선택" : "먼저 대단원을 선택하세요"}</option>
+                      {availableMinorUnits.map(option => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <Label htmlFor="minor_unit">중단원 *</Label>
-                  <select
-                    value={formData.minor_unit}
-                    onChange={(e) => setFormData({ ...formData, minor_unit: e.target.value })}
-                    disabled={!formData.major_unit}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-50"
-                  >
-                    <option value="">{formData.major_unit ? "중단원 선택" : "먼저 대단원을 선택하세요"}</option>
-                    {availableMinorUnits.map(option => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+              )}
 
               <div>
-                <Label htmlFor="title">문제 제목 * (자동 생성)</Label>
+                <Label htmlFor="title">{isEditMode ? '문제 제목' : '문제 제목 * (자동 생성)'}</Label>
                 <Input
                   id="title"
                   value={formData.title}
@@ -792,9 +822,11 @@ const AddProblemNew = () => {
                   placeholder="교재, 과목, 문제 번호를 선택하면 자동 생성됩니다"
                   className="bg-gray-50"
                 />
-                <p className="text-xs text-muted-foreground mt-1">
-                  형식: {formData.textbook || '[교재]'} {formData.subject || '[과목]'} {formData.problem_number || '[번호]'}번
-                </p>
+                {!isEditMode && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    형식: {formData.textbook || '[교재]'} {formData.subject || '[과목]'} {formData.problem_number || '[번호]'}번
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -872,111 +904,99 @@ const AddProblemNew = () => {
                 </div>
               )}
 
-              <div>
-                <Label htmlFor="explanation">해설</Label>
-                <Textarea
-                  id="explanation"
-                  value={formData.explanation}
-                  onChange={(e) => setFormData({ ...formData, explanation: e.target.value })}
-                  placeholder="문제 해설을 입력하세요"
-                  rows={3}
-                />
-              </div>
-
-              {/* 이미지 업로드 */}
+              {/* 문제 이미지 */}
               <div>
                 <Label>문제 이미지</Label>
-                <div 
-                  className="border-2 border-dashed border-border rounded-lg p-4 text-center"
-                  onPaste={handlePaste}
-                  tabIndex={0}
-                >
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => setImageFile(e.target.files?.[0] || null)}
-                    className="hidden"
-                    id="image-upload"
-                  />
-                  
-                  {/* 업로드된 이미지 미리보기 */}
-                  {imageFile && (
-                    <div className="mb-4">
-                      <img 
-                        src={URL.createObjectURL(imageFile)} 
-                        alt="업로드된 이미지" 
-                        className="max-w-full max-h-48 mx-auto rounded-lg border"
+                {isEditMode ? (
+                  /* 편집 모드: 이미지만 표시 */
+                  formData.image_url ? (
+                    <div className="mt-1 rounded border overflow-hidden">
+                      <img
+                        src={formData.image_url}
+                        alt="문제 이미지"
+                        className="max-w-full"
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
                       />
-                      <p className="text-sm text-green-600 mt-2">{imageFile.name}</p>
                     </div>
-                  )}
-                  
-                  {/* 업로드 버튼들 */}
-                  <div className="flex flex-col gap-2">
-                    <label htmlFor="image-upload" className="cursor-pointer">
-                      <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-                      <p className="text-sm text-muted-foreground">
-                        {imageFile ? '다른 이미지 선택' : '파일에서 이미지 선택'}
-                      </p>
-                    </label>
-                    
-                    <div className="flex gap-2 justify-center">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={handleClipboardImage}
-                        disabled={clipboardLoading}
-                        className="flex items-center gap-2"
-                      >
-                        {clipboardLoading ? (
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
-                        ) : (
-                          <Clipboard className="h-4 w-4" />
-                        )}
-                        {clipboardLoading ? '읽는 중...' : '클립보드에서 가져오기'}
-                      </Button>
-                    </div>
-                    
-                    <p className="text-xs text-muted-foreground">
-                      💡 Shift+Win+S로 스크린샷을 찍은 후 "클립보드에서 가져오기" 버튼을 클릭하세요
-                    </p>
-                  </div>
-                  
-                  {/* 기존 이미지가 있는 경우 미리보기 및 삭제 버튼 표시 */}
-                  {formData.image_url && (
-                    <div className="mt-4">
-                      <p className="text-sm text-green-600 mb-2">현재 이미지:</p>
-                      <div className="mb-3">
-                        <img 
-                          src={formData.image_url} 
-                          alt="현재 문제 이미지" 
+                  ) : (
+                    <p className="text-sm text-muted-foreground mt-1">이미지 없음</p>
+                  )
+                ) : (
+                  /* 등록 모드: 업로드 UI */
+                  <div
+                    className="border-2 border-dashed border-border rounded-lg p-4 text-center"
+                    onPaste={handlePaste}
+                    tabIndex={0}
+                  >
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => setImageFile(e.target.files?.[0] || null)}
+                      className="hidden"
+                      id="image-upload"
+                    />
+                    {imageFile && (
+                      <div className="mb-4">
+                        <img
+                          src={URL.createObjectURL(imageFile)}
+                          alt="업로드된 이미지"
                           className="max-w-full max-h-48 mx-auto rounded-lg border"
-                          onError={(e) => {
-                            console.error('이미지 로드 실패:', formData.image_url);
-                            e.currentTarget.style.display = 'none';
-                          }}
                         />
+                        <p className="text-sm text-green-600 mt-2">{imageFile.name}</p>
                       </div>
-                      <p className="text-xs text-muted-foreground mb-2 break-all">
-                        {formData.image_url}
+                    )}
+                    <div className="flex flex-col gap-2">
+                      <label htmlFor="image-upload" className="cursor-pointer">
+                        <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                        <p className="text-sm text-muted-foreground">
+                          {imageFile ? '다른 이미지 선택' : '파일에서 이미지 선택'}
+                        </p>
+                      </label>
+                      <div className="flex gap-2 justify-center">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleClipboardImage}
+                          disabled={clipboardLoading}
+                          className="flex items-center gap-2"
+                        >
+                          {clipboardLoading
+                            ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary" />
+                            : <Clipboard className="h-4 w-4" />}
+                          {clipboardLoading ? '읽는 중...' : '클립보드에서 가져오기'}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        💡 Shift+Win+S로 스크린샷을 찍은 후 "클립보드에서 가져오기" 버튼을 클릭하세요
                       </p>
-                      <Button 
-                        type="button"
-                        variant="destructive" 
-                        size="sm"
-                        onClick={() => setFormData(prev => ({ ...prev, image_url: '' }))}
-                      >
-                        이미지 삭제
-                      </Button>
                     </div>
-                  )}
-                </div>
+                    {formData.image_url && (
+                      <div className="mt-4">
+                        <img
+                          src={formData.image_url}
+                          alt="현재 문제 이미지"
+                          className="max-w-full max-h-48 mx-auto rounded-lg border"
+                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                        />
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          className="mt-2"
+                          onClick={() => setFormData(prev => ({ ...prev, image_url: '' }))}
+                        >
+                          이미지 삭제
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              <div>
+              {!isEditMode && <div>
                 <Label>해설 이미지</Label>
-                <div 
+                <div
                   className="border-2 border-dashed border-border rounded-lg p-4 text-center"
                   onPaste={handleExplanationPaste}
                   tabIndex={0}
@@ -1062,9 +1082,150 @@ const AddProblemNew = () => {
                     </div>
                   )}
                 </div>
-              </div>
+              </div>}
             </CardContent>
         </Card>
+
+        {/* AI 태깅 필드 — 편집 모드에서만 표시 */}
+        {isEditMode && (
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle className="text-base">AI 해설 정보</CardTitle>
+              <CardDescription>PDF 파이프라인에서 추출한 해설 데이터</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* 해설 이미지 (읽기 전용, 클릭 시 라이트박스) */}
+              {solutionImageUrl && (
+                <div>
+                  <Label className="text-sm">해설 이미지 <span className="text-xs text-muted-foreground font-normal">(클릭하면 크게 보기)</span></Label>
+                  <img
+                    src={solutionImageUrl}
+                    alt="해설 이미지"
+                    className="mt-1 max-w-full rounded border cursor-zoom-in hover:opacity-90 transition-opacity"
+                    style={{ maxHeight: '320px', objectFit: 'contain' }}
+                    onClick={() => setLightboxSrc(solutionImageUrl)}
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  />
+                </div>
+              )}
+
+              {/* 해설 요약 */}
+              <div>
+                <Label htmlFor="solution_summary" className="text-sm">해설 요약</Label>
+                <Textarea
+                  id="solution_summary"
+                  value={solutionSummary}
+                  onChange={(e) => setSolutionSummary(e.target.value)}
+                  placeholder="해설 요약"
+                  rows={2}
+                  className="mt-1 text-sm"
+                />
+              </div>
+
+              {/* 오답 포인트 */}
+              <div>
+                <Label htmlFor="pitfall" className="text-sm">오답 포인트</Label>
+                <Textarea
+                  id="pitfall"
+                  value={pitfall}
+                  onChange={(e) => setPitfall(e.target.value)}
+                  placeholder="자주 틀리는 포인트"
+                  rows={2}
+                  className="mt-1 text-sm"
+                />
+              </div>
+
+              {/* 단계별 풀이 */}
+              <div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm">단계별 풀이</Label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-6 text-xs px-2"
+                    onClick={() => setSolutionSteps(prev => [...prev, { step: prev.length + 1, description: '' }])}
+                  >
+                    + 단계 추가
+                  </Button>
+                </div>
+                <div className="mt-1 space-y-2">
+                  {solutionSteps.map((s, i) => (
+                    <div key={i} className="flex gap-2 items-start">
+                      <span className="text-xs text-muted-foreground mt-2 w-12 shrink-0">Step {s.step}</span>
+                      <Textarea
+                        value={s.description}
+                        onChange={(e) => {
+                          const next = [...solutionSteps];
+                          next[i] = { ...next[i], description: e.target.value };
+                          setSolutionSteps(next);
+                        }}
+                        rows={2}
+                        className="text-sm flex-1"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-1 text-red-400 hover:text-red-600 mt-1"
+                        onClick={() => setSolutionSteps(prev => prev.filter((_, j) => j !== i).map((s, j) => ({ ...s, step: j + 1 })))}
+                      >
+                        ×
+                      </Button>
+                    </div>
+                  ))}
+                  {solutionSteps.length === 0 && (
+                    <p className="text-xs text-muted-foreground">단계가 없습니다. "+ 단계 추가"를 눌러 추가하세요.</p>
+                  )}
+                </div>
+              </div>
+
+              {/* 자주 하는 실수 */}
+              <div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm">자주 하는 실수</Label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-6 text-xs px-2"
+                    onClick={() => setCommonMistakes(prev => [...prev, { bug_id: `bug_${Date.now()}`, text: '' }])}
+                  >
+                    + 항목 추가
+                  </Button>
+                </div>
+                <div className="mt-1 space-y-2">
+                  {commonMistakes.map((m, i) => (
+                    <div key={i} className="flex gap-2 items-start">
+                      <Textarea
+                        value={m.text}
+                        onChange={(e) => {
+                          const next = [...commonMistakes];
+                          next[i] = { ...next[i], text: e.target.value };
+                          setCommonMistakes(next);
+                        }}
+                        rows={2}
+                        className="text-sm flex-1"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-1 text-red-400 hover:text-red-600 mt-1"
+                        onClick={() => setCommonMistakes(prev => prev.filter((_, j) => j !== i))}
+                      >
+                        ×
+                      </Button>
+                    </div>
+                  ))}
+                  {commonMistakes.length === 0 && (
+                    <p className="text-xs text-muted-foreground">항목이 없습니다. "+ 항목 추가"를 눌러 추가하세요.</p>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* 등록 버튼 */}
         <Button
@@ -1091,6 +1252,29 @@ const AddProblemNew = () => {
           </Button>
       </div>
     </div>
+
+    {/* 해설 이미지 라이트박스 */}
+
+    {lightboxSrc && (
+      <div
+        className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80"
+        onClick={() => setLightboxSrc(null)}
+      >
+        <img
+          src={lightboxSrc}
+          alt="해설 이미지 전체보기"
+          className="max-w-[90vw] max-h-[90vh] object-contain rounded shadow-2xl"
+          onClick={e => e.stopPropagation()}
+        />
+        <button
+          className="absolute top-4 right-4 text-white bg-black/40 hover:bg-black/70 rounded-full w-9 h-9 flex items-center justify-center text-xl transition-colors"
+          onClick={() => setLightboxSrc(null)}
+        >
+          ✕
+        </button>
+      </div>
+    )}
+    </>
   );
 };
 

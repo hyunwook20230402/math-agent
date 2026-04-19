@@ -38,6 +38,7 @@ class TagResult(BaseModel):
   difficulty_score: int = Field(ge=1, le=10)  # 1~10 정수 (1-2=very_easy, 3-4=easy, 5-6=medium, 7-8=hard, 9-10=very_hard)
   concept_tags: list[str] = Field(default_factory=list)
   skill_tags: list[str] = Field(default_factory=list)
+  answer_type: Optional[str] = None  # "multiple_choice" or "short_answer"
   solution_summary: Optional[str] = None
   pitfall: Optional[str] = None
   solution_steps: list[SolutionStep] = Field(default_factory=list)
@@ -50,6 +51,7 @@ _TAGGING_PROMPT_WITH_SOLUTION = """You are analyzing a Korean high school math s
 
 Rules:
 - difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
+- answer_type: "multiple_choice" if the problem has numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분")
 - skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석")
 - solution_summary: max 20 words IN KOREAN
@@ -71,6 +73,7 @@ Use BOTH images together: the problem tells you what is being asked and which gi
 
 Rules:
 - difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
+- answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분") — derived from the problem's underlying concept, cross-checked with the solution
 - skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석") — techniques used in the solution
 - solution_summary: max 20 words IN KOREAN — describe the core approach
@@ -86,6 +89,7 @@ _TAGGING_PROMPT_NO_SOLUTION = """You are analyzing a Korean high school math pro
 
 Rules:
 - difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
+- answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분")
 - skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석")
 - solution_summary: null
@@ -187,16 +191,7 @@ def _apply_suggested_fixes(
   applied_fields: set[str] = set()
 
   if not fixes:
-    # suggested_fixes 없어도 difficulty_score medium/high 이슈는 이슈 텍스트에서 숫자 파싱 시도
-    for iss in issues:
-      if iss.get("field") == "difficulty_score" and iss.get("severity") in ("medium", "high"):
-        import re as _re
-        m = _re.search(r'\b([1-9]|10)\b(?=\s*(?:점|로|이|으로|가)\s*(?:적절|조정|변경|평가))', iss.get("reason", ""))
-        if m:
-          tag_result["difficulty_score"] = int(m.group(1))
-          iss["applied"] = True
-          applied_fields.add("difficulty_score")
-          logger.info(f"difficulty_score 이슈에서 파싱 반영: {m.group(1)}")
+    # suggested_fixes 없으면 difficulty_score 이슈는 수정하지 않고 이슈만 남김 (수동 수정 필요)
     return
 
   # concept_tags — low 포함 suggested_fixes 있으면 교체
@@ -217,17 +212,25 @@ def _apply_suggested_fixes(
       tag_result["skill_tags"] = normalized
       applied_fields.add("skill_tags")
 
-  # difficulty_score — medium/high 이슈 있고 suggested_fixes에 명시된 경우 반영
-  diff_issues = _any_severity({"difficulty_score"}, "medium")
+  # difficulty_score — suggested_fixes 직접 값 우선, 없으면 이슈 reason 텍스트 fallback
+  diff_issues = _any_severity({"difficulty_score"}, "low")
   if diff_issues:
     import re as _re
-    for iss in diff_issues:
-      m = _re.search(r'\b([1-9]|10)\b(?=\s*(?:점|로|이|으로|가)\s*(?:적절|조정|변경|평가))', iss.get("reason", ""))
-      if m:
-        tag_result["difficulty_score"] = int(m.group(1))
-        applied_fields.add("difficulty_score")
-        logger.info(f"difficulty_score 조정: {original['difficulty_score']} → {m.group(1)}")
-        break
+    suggested_diff = fixes.get("difficulty_score")
+    if isinstance(suggested_diff, int) and 1 <= suggested_diff <= 10:
+      tag_result["difficulty_score"] = suggested_diff
+      applied_fields.add("difficulty_score")
+      logger.info(f"difficulty_score 조정: {original['difficulty_score']} → {suggested_diff} (suggested_fixes)")
+    else:
+      for iss in diff_issues:
+        reason = iss.get("reason", "")
+        m = _re.search(r'\b(10|[1-9])(?:~(10|[1-9]))?\s*점\s*(?:이|가|로|으로)?\s*(?:적절|조정|변경|평가|될\s*수\s*있)', reason)
+        if m:
+          score = int(m.group(1))
+          tag_result["difficulty_score"] = score
+          applied_fields.add("difficulty_score")
+          logger.info(f"difficulty_score 조정: {original['difficulty_score']} → {score} (reason 파싱)")
+          break
 
   # unit — validator 가 직접 제안한 unit path 또는 수정된 concept/skill 로 재매칭
   if leaf_embeddings is not None:
@@ -372,6 +375,20 @@ def extract_tags_from_image(
       if query_text:
         unit, unit_score = unit_matcher.match_unit(query_text, leaf_embeddings)
         logger.info(f"unit 매칭: '{unit}' (score={unit_score:.3f})")
+
+    # LLM이 $...$ 형식으로 수식을 줄 경우 \(...\) 로 정규화
+    def _nm(text):
+      if not isinstance(text, str):
+        return text
+      import re as _re
+      text = _re.sub(r'\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=_re.DOTALL)
+      text = _re.sub(r'\$([^$\n]+?)\$', r'\\(\1\\)', text)
+      return text
+
+    solution_summary = _nm(solution_summary)
+    pitfall = _nm(pitfall)
+    solution_steps = [{"step": s["step"], "description": _nm(s.get("description", ""))} for s in solution_steps] if solution_steps else solution_steps
+    common_mistakes = [{"bug_id": m.get("bug_id", ""), "text": _nm(m.get("text", ""))} for m in common_mistakes] if common_mistakes else common_mistakes
 
     tag_result = {
       "unit": unit,

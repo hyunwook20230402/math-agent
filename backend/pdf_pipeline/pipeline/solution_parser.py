@@ -101,6 +101,51 @@ def parse_inline_answers(ocr_results: list) -> dict:
     return answers
 
 
+def extract_quick_answers(pdf_path: str) -> dict:
+    """빠른정답 PDF에서 정답 추출 (PyMuPDF 텍스트 기반)
+
+    "N. [정답] X" 형식 파싱. 원문자(①~⑤)→숫자 변환.
+    특수문자로 인식 안 되는 주관식 숫자는 건너뜀.
+
+    Returns:
+      {번호: {"answer": str, "answer_type": "multiple_choice"|"short_answer"}}
+    """
+    try:
+        import fitz
+    except ImportError:
+        logger.warning("PyMuPDF(fitz) 없음 — 빠른정답 파싱 불가")
+        return {}
+
+    circle_map = {'①': '1', '②': '2', '③': '3', '④': '4', '⑤': '5'}
+    answers: dict[int, str] = {}
+
+    try:
+        doc = fitz.open(pdf_path)
+        for page in doc:
+            for block in page.get_text('blocks'):
+                text = block[4].strip()
+                m = re.match(r'(\d+)\.\s*\[정답\]\s*(.+)', text)
+                if not m:
+                    continue
+                num = int(m.group(1))
+                ans = m.group(2).strip()
+                if ans in circle_map:
+                    answers[num] = circle_map[ans]
+                elif ans and not any(c in ans for c in ['①','②','③','④','⑤']):
+                    answers[num] = ans
+        doc.close()
+    except Exception as e:
+        logger.error(f"빠른정답 파싱 오류: {e}")
+
+    return {
+        num: {
+            "answer": ans,
+            "answer_type": infer_answer_type(ans),
+        }
+        for num, ans in answers.items()
+    }
+
+
 def extract_answers(pdf_path: str, dpi: int = 200) -> dict:
     """해설지 PDF에서 정답 딕셔너리 추출
 

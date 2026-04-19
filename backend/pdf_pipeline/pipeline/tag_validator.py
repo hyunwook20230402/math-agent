@@ -34,6 +34,7 @@ class SuggestedFixes(BaseModel):
   concept_tags: list[str] | None = None
   skill_tags: list[str] | None = None
   unit: str | None = None
+  difficulty_score: int | None = None
 
 class ValidationResult(BaseModel):
   status: Literal["ok", "warning", "reject"]
@@ -67,8 +68,18 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
   if not tag_result.get("skill_tags"):
     issues.append(ValidationIssue(field="skill_tags", reason="skill_tags 비어 있음", severity="medium"))
 
-  if not tag_result.get("solution_steps"):
+  steps = tag_result.get("solution_steps") or []
+  if not steps:
     issues.append(ValidationIssue(field="solution_steps", reason="solution_steps 비어 있음", severity="medium"))
+  else:
+    difficulty_score = tag_result.get("difficulty_score")
+    if difficulty_score is not None:
+      d = int(difficulty_score)
+      step_count = len(steps)
+      if d <= 6 and step_count < 3:
+        issues.append(ValidationIssue(field="solution_steps", reason=f"difficulty {d}(쉬움)인데 steps {step_count}개 — 최소 3개 필요", severity="medium"))
+      elif d >= 7 and step_count < 5:
+        issues.append(ValidationIssue(field="solution_steps", reason=f"difficulty {d}(어려움)인데 steps {step_count}개 — 최소 5개 필요", severity="medium"))
 
   if not tag_result.get("common_mistakes"):
     issues.append(ValidationIssue(field="common_mistakes", reason="common_mistakes 비어 있음", severity="low"))
@@ -168,7 +179,12 @@ _VALIDATION_PROMPT_TEMPLATE = """\
 이미지와 태깅 결과를 비교해서 다음을 검사해라:
 1. concept_tags / skill_tags 중 명백히 누락된 개념이나 오태깅이 있는가?
 2. unit (단원 경로) 이 이미지 내용과 맞는가?
-3. solution_steps 가 실제 풀이 흐름과 맞는가?
+3. solution_steps 가 실제 풀이 흐름과 맞는가? 아래 기준으로 엄격히 판단해라:
+   - 이미지에 등장하는 핵심 계산/변환 단계가 steps에 빠져 있으면 "solution_steps step 누락" 이슈 (severity=high)
+   - steps 순서가 실제 풀이 순서와 다르면 "solution_steps 순서 불일치" 이슈 (severity=high)
+   - steps 내용이 이미지와 무관한 엉뚱한 풀이면 "solution_steps 내용 불일치" 이슈 (severity=high, reject)
+   - difficulty_score 1~6인데 steps 3개 미만, 또는 difficulty_score 7~10인데 steps 5개 미만이면 "solution_steps 개수 부족" 이슈 (severity=medium)
+   - steps 개수가 1개뿐이거나 지나치게 뭉뚱그려진 경우 "solution_steps 세분화 부족" 이슈 (severity=medium)
 4. difficulty_score (1~10 정수) 가 문제 난이도와 맞는가? (1-2=아주 쉬움, 3-4=쉬움, 5-6=보통, 7-8=어려움, 9-10=최상위 킬러)
 
 태깅 결과:
@@ -180,6 +196,7 @@ _VALIDATION_PROMPT_TEMPLATE = """\
 suggested_fixes 를 제안할 때:
 - concept_tags / skill_tags 는 반드시 위에 제시된 "사용 가능한 canonical 목록" 안에서만 골라라.
 - unit 은 반드시 "사용 가능한 unit 경로" 중 하나를 골라라.
+- difficulty_score 가 부적절하면 suggested_fixes.difficulty_score 에 1~10 정수로 직접 제시해라.
 - 목록에 없는 용어는 제안하지 마라 (후처리에서 매칭 실패).
 
 문제 없으면 status=ok, 경미한 문제면 warning, 심각하면 reject 로 판단해라.

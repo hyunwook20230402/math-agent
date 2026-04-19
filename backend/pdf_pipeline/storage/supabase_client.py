@@ -159,6 +159,7 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
             # 해설/온톨로지 필드 (staging → problems 복사)
             "solution_image_url": p.get("solution_image_url"),
             "solution_summary": p.get("solution_summary"),
+            "pitfall": p.get("pitfall"),
             "solution_steps": p.get("solution_steps"),
             "common_mistakes": p.get("common_mistakes"),
             "source_info": {
@@ -185,10 +186,21 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
 
 
 def _build_title(p: dict) -> str:
-    category = p.get("category", "기타")
-    unit = p.get("unit", "")
+    import re as _re
     number = p.get("problem_number", "?")
-    return f"{category} {unit} {number}번".strip()
+    # source_pdf 파일명에서 제목 추출: "평가원 6월 25년_문제.pdf" → "평가원 6월 25년"
+    source_pdf = p.get("source_pdf") or ""
+    if source_pdf:
+        basename = _re.split(r"[/\\]", source_pdf)[-1]  # 파일명만
+        stem = _re.sub(r"\.pdf$", "", basename, flags=_re.IGNORECASE)
+        stem = _re.sub(r"[_\s]*(문제|해설|정답|answer|solution)\s*$", "", stem, flags=_re.IGNORECASE).strip()
+        if stem:
+            return f"{stem} {number}번"
+    # fallback: category + unit 첫 계층
+    category = p.get("category", "기타")
+    unit_top = (p.get("unit") or "").split(" > ")[0]
+    base = f"{category} {unit_top}".strip() if unit_top else category
+    return f"{base} {number}번"
 
 
 # ── 해설지 job CRUD ────────────────────────────────────────────
@@ -406,6 +418,10 @@ def update_staging_solution(
     difficulty_score: int | None = None,
     solution_steps: list | None = None,
     common_mistakes: list | None = None,
+    validation_status: str | None = None,
+    validation_score: float | None = None,
+    validation_issues: list | None = None,
+    title: str | None = None,
 ) -> dict:
     """staging 레코드에 해설 정보 업데이트"""
     client = get_client()
@@ -432,6 +448,14 @@ def update_staging_solution(
         payload["solution_steps"] = solution_steps
     if common_mistakes is not None:
         payload["common_mistakes"] = common_mistakes
+    if validation_status is not None:
+        payload["validation_status"] = validation_status
+    if validation_score is not None:
+        payload["validation_score"] = validation_score
+    if validation_issues is not None:
+        payload["validation_issues"] = validation_issues
+    if title is not None:
+        payload["title"] = title
     if not payload:
         return {}
     result = (

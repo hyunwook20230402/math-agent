@@ -18,6 +18,7 @@ import {
   Edit,
   Trash2,
   Search,
+  FolderInput,
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
 import { useTextbook } from '@/context/TextbookContext';
@@ -43,12 +44,13 @@ interface Problem {
   title: string;
   problem_number: number;
   difficulty_score: number;
-  difficulty: string; // GENERATED
+  difficulty: string;
   answer_type: string;
   image_url: string;
   category: string;
   unit: string;
   correct_answer: string;
+  chapter_id: string | null;
   created_at: string;
 }
 
@@ -79,37 +81,42 @@ const TextbookManagementNew = () => {
     setSubchapter: ctxSetSubchapter,
   } = useTextbook();
 
-  // 교재/단원 데이터
   const [textbooks, setTextbooks] = useState<Textbook[]>([]);
   const [chapters, setChapters] = useState<Record<string, Chapter[]>>({});
   const [subchapters, setSubchapters] = useState<Record<string, Subchapter[]>>({});
 
-  // 선택 상태
   const [selectedTextbook, setSelectedTextbook] = useState<Textbook | null>(ctxTextbook);
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(ctxChapter);
   const [selectedSubchapter, setSelectedSubchapter] = useState<Subchapter | null>(ctxSubchapter);
 
-  // 트리 펼침 상태
   const [expandedTextbooks, setExpandedTextbooks] = useState<Set<string>>(new Set());
   const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set());
 
-  // 문제 목록
   const [problems, setProblems] = useState<Problem[]>([]);
   const [problemsLoading, setProblemsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Dialog 상태
+  // 체크박스 선택 (폴더 이동용)
+  const [selectedProblemIds, setSelectedProblemIds] = useState<Set<string>>(new Set());
+
+  // 모달 상태
   const [isTextbookDialogOpen, setIsTextbookDialogOpen] = useState(false);
   const [isChapterDialogOpen, setIsChapterDialogOpen] = useState(false);
   const [isSubchapterDialogOpen, setIsSubchapterDialogOpen] = useState(false);
   const [isPdfDialogOpen, setIsPdfDialogOpen] = useState(false);
 
-  // 폼
+  // 삭제 확인 모달
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'textbook' | 'chapter' | 'subchapter'; id: string; name: string } | null>(null);
+
+  // 폴더 이동 모달
+  const [isMoveDialogOpen, setIsMoveDialogOpen] = useState(false);
+  const [moveTargetChapterId, setMoveTargetChapterId] = useState<string>('');
+
   const [textbookForm, setTextbookForm] = useState({ name: '', grade: '', semester: '', description: '' });
   const [chapterForm, setChapterForm] = useState({ name: '', description: '', sort_order: 1 });
   const [subchapterForm, setSubchapterForm] = useState({ name: '', description: '', sort_order: 1 });
 
-  // 인라인 리네임 상태
+  // 인라인 리네임
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = React.useRef<HTMLInputElement>(null);
@@ -161,7 +168,6 @@ const TextbookManagementNew = () => {
     fetchTextbooks();
   }, []);
 
-  // 컨텍스트 선택 복원 시 트리 펼침
   useEffect(() => {
     if (ctxTextbook) {
       setExpandedTextbooks(prev => new Set([...prev, ctxTextbook.id]));
@@ -173,13 +179,13 @@ const TextbookManagementNew = () => {
     }
   }, []);
 
-  // 문제 목록 로드
   useEffect(() => {
     if (selectedSubchapter || selectedChapter || selectedTextbook) {
       fetchProblems();
     } else {
       setProblems([]);
     }
+    setSelectedProblemIds(new Set());
   }, [selectedTextbook, selectedChapter, selectedSubchapter]);
 
   const fetchTextbooks = async () => {
@@ -227,7 +233,8 @@ const TextbookManagementNew = () => {
       } else if (selectedChapter) {
         query = query.eq('chapter_id', selectedChapter.id);
       } else if (selectedTextbook) {
-        query = query.eq('textbook_id', selectedTextbook.id);
+        // 교재 루트: 폴더에 속하지 않은 문제만 표시
+        query = query.eq('textbook_id', selectedTextbook.id).is('chapter_id', null);
       }
 
       const { data, error } = await query;
@@ -301,10 +308,10 @@ const TextbookManagementNew = () => {
       .select()
       .single();
     if (error) {
-      toast({ title: '오류', description: '대단원 생성에 실패했습니다.', variant: 'destructive' });
+      toast({ title: '오류', description: '폴더 생성에 실패했습니다.', variant: 'destructive' });
       return;
     }
-    toast({ title: '성공', description: '대단원이 생성되었습니다.' });
+    toast({ title: '성공', description: '폴더가 생성되었습니다.' });
     setChapterForm({ name: '', description: '', sort_order: 1 });
     setIsChapterDialogOpen(false);
     await fetchChapters(selectedTextbook.id);
@@ -323,10 +330,10 @@ const TextbookManagementNew = () => {
       .select()
       .single();
     if (error) {
-      toast({ title: '오류', description: '중단원 생성에 실패했습니다.', variant: 'destructive' });
+      toast({ title: '오류', description: '하위 폴더 생성에 실패했습니다.', variant: 'destructive' });
       return;
     }
-    toast({ title: '성공', description: '중단원이 생성되었습니다.' });
+    toast({ title: '성공', description: '하위 폴더가 생성되었습니다.' });
     setSubchapterForm({ name: '', description: '', sort_order: 1 });
     setIsSubchapterDialogOpen(false);
     await fetchSubchapters(selectedChapter.id);
@@ -334,6 +341,49 @@ const TextbookManagementNew = () => {
       setSelectedSubchapter(data);
       ctxSetSubchapter(data);
     }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    const { type, id, name } = deleteTarget;
+
+    if (type === 'textbook') {
+      const { error } = await supabase.from('textbooks').delete().eq('id', id);
+      if (error) {
+        toast({ title: '오류', description: '교재 삭제에 실패했습니다.', variant: 'destructive' });
+      } else {
+        toast({ title: '삭제 완료', description: `"${name}" 교재가 삭제되었습니다.` });
+        if (selectedTextbook?.id === id) {
+          setSelectedTextbook(null); setSelectedChapter(null); setSelectedSubchapter(null);
+          ctxSetTextbook(null); ctxSetChapter(null); ctxSetSubchapter(null);
+        }
+        await fetchTextbooks();
+      }
+    } else if (type === 'chapter') {
+      const { error } = await supabase.from('chapters').delete().eq('id', id);
+      if (error) {
+        toast({ title: '오류', description: '폴더 삭제에 실패했습니다.', variant: 'destructive' });
+      } else {
+        toast({ title: '삭제 완료', description: `"${name}" 폴더가 삭제되었습니다.` });
+        if (selectedChapter?.id === id) {
+          setSelectedChapter(null); setSelectedSubchapter(null);
+          ctxSetChapter(null); ctxSetSubchapter(null);
+        }
+        if (selectedTextbook) await fetchChapters(selectedTextbook.id);
+      }
+    } else {
+      const { error } = await supabase.from('subchapters').delete().eq('id', id);
+      if (error) {
+        toast({ title: '오류', description: '하위 폴더 삭제에 실패했습니다.', variant: 'destructive' });
+      } else {
+        toast({ title: '삭제 완료', description: `"${name}" 하위 폴더가 삭제되었습니다.` });
+        if (selectedSubchapter?.id === id) {
+          setSelectedSubchapter(null); ctxSetSubchapter(null);
+        }
+        if (selectedChapter) await fetchSubchapters(selectedChapter.id);
+      }
+    }
+    setDeleteTarget(null);
   };
 
   const handleDeleteProblem = async (problemId: string) => {
@@ -350,6 +400,45 @@ const TextbookManagementNew = () => {
     setProblems(prev => prev.filter(p => p.id !== problemId));
   };
 
+  const handleMoveToFolder = async () => {
+    if (selectedProblemIds.size === 0) return;
+    const ids = Array.from(selectedProblemIds);
+    const updateData = moveTargetChapterId
+      ? { chapter_id: moveTargetChapterId }
+      : { chapter_id: null };
+
+    const { error } = await supabase
+      .from('problems')
+      .update(updateData)
+      .in('id', ids);
+
+    if (error) {
+      toast({ title: '오류', description: '폴더 이동에 실패했습니다.', variant: 'destructive' });
+      return;
+    }
+    toast({ title: '완료', description: `${ids.length}개 문제를 이동했습니다.` });
+    setIsMoveDialogOpen(false);
+    setSelectedProblemIds(new Set());
+    setMoveTargetChapterId('');
+    await fetchProblems();
+  };
+
+  const toggleProblemSelect = (id: string) => {
+    setSelectedProblemIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedProblemIds.size === filteredProblems.length) {
+      setSelectedProblemIds(new Set());
+    } else {
+      setSelectedProblemIds(new Set(filteredProblems.map(p => p.id)));
+    }
+  };
+
   const filteredProblems = searchTerm
     ? problems.filter(p =>
         p.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -357,9 +446,11 @@ const TextbookManagementNew = () => {
       )
     : problems;
 
-  // 현재 선택 경로
   const breadcrumb = [selectedTextbook?.name, selectedChapter?.name, selectedSubchapter?.name]
     .filter(Boolean).join(' > ');
+
+  // 현재 교재의 폴더 목록 (이동 모달용)
+  const currentChapters = selectedTextbook ? (chapters[selectedTextbook.id] ?? []) : [];
 
   return (
     <>
@@ -421,11 +512,18 @@ const TextbookManagementNew = () => {
                         >
                           <Edit className="h-3 w-3" />
                         </button>
+                        <button
+                          className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5 rounded transition-opacity text-destructive"
+                          onClick={e => { e.stopPropagation(); setDeleteTarget({ type: 'textbook', id: textbook.id, name: textbook.name }); }}
+                          title="삭제"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
                       </>
                     )}
                   </div>
 
-                  {/* 대단원 목록 */}
+                  {/* 폴더(대단원) 목록 */}
                   {isExpanded && (
                     <div>
                       {textbookChapters.map(chapter => {
@@ -465,11 +563,18 @@ const TextbookManagementNew = () => {
                                   >
                                     <Edit className="h-3 w-3" />
                                   </button>
+                                  <button
+                                    className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5 rounded transition-opacity text-destructive"
+                                    onClick={e => { e.stopPropagation(); setDeleteTarget({ type: 'chapter', id: chapter.id, name: chapter.name }); }}
+                                    title="삭제"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
                                 </>
                               )}
                             </div>
 
-                            {/* 중단원 목록 */}
+                            {/* 하위 폴더(중단원) 목록 */}
                             {isChapterExpanded && (
                               <div>
                                 {chapterSubchapters.map(sub => (
@@ -499,11 +604,18 @@ const TextbookManagementNew = () => {
                                         >
                                           <Edit className="h-3 w-3" />
                                         </button>
+                                        <button
+                                          className="opacity-0 group-hover:opacity-60 hover:!opacity-100 p-0.5 rounded transition-opacity text-destructive"
+                                          onClick={e => { e.stopPropagation(); setDeleteTarget({ type: 'subchapter', id: sub.id, name: sub.name }); }}
+                                          title="삭제"
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </button>
                                       </>
                                     )}
                                   </div>
                                 ))}
-                                {/* 중단원 추가 */}
+                                {/* 하위 폴더 추가 */}
                                 {isChapterSelected && (
                                   <div
                                     className="flex items-center gap-1 pl-14 pr-3 py-1 cursor-pointer text-muted-foreground hover:text-primary transition-colors"
@@ -513,7 +625,7 @@ const TextbookManagementNew = () => {
                                     }}
                                   >
                                     <Plus className="h-3 w-3 flex-shrink-0" />
-                                    <span className="text-xs">중단원 추가</span>
+                                    <span className="text-xs">하위 폴더 추가</span>
                                   </div>
                                 )}
                               </div>
@@ -522,7 +634,7 @@ const TextbookManagementNew = () => {
                         );
                       })}
 
-                      {/* 대단원 추가 */}
+                      {/* 폴더 추가 */}
                       {isSelected && (
                         <div
                           className="flex items-center gap-1 pl-7 pr-3 py-1 cursor-pointer text-muted-foreground hover:text-primary transition-colors"
@@ -532,7 +644,7 @@ const TextbookManagementNew = () => {
                           }}
                         >
                           <Plus className="h-3 w-3 flex-shrink-0" />
-                          <span className="text-xs">대단원 추가</span>
+                          <span className="text-xs">폴더 추가</span>
                         </div>
                       )}
                     </div>
@@ -565,9 +677,18 @@ const TextbookManagementNew = () => {
                 PDF 가져오기
               </Button>
             )}
+            {selectedProblemIds.size > 0 && selectedTextbook && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { setMoveTargetChapterId(''); setIsMoveDialogOpen(true); }}
+              >
+                <FolderInput className="h-4 w-4 mr-1.5" />
+                폴더 이동 ({selectedProblemIds.size})
+              </Button>
+            )}
             {(selectedTextbook || selectedChapter || selectedSubchapter) && (
               <Button size="sm" onClick={() => {
-                // 선택된 컨텍스트를 query param으로 넘겨 문제 등록 페이지로 이동
                 const params = new URLSearchParams();
                 if (selectedTextbook) params.set('textbook_id', selectedTextbook.id);
                 if (selectedChapter) params.set('chapter_id', selectedChapter.id);
@@ -633,12 +754,31 @@ const TextbookManagementNew = () => {
                 </div>
               ) : (
                 <div className="space-y-2">
+                  {/* 전체 선택 헤더 */}
+                  <div className="flex items-center gap-2 px-1 pb-1">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 cursor-pointer"
+                      checked={filteredProblems.length > 0 && selectedProblemIds.size === filteredProblems.length}
+                      onChange={toggleSelectAll}
+                    />
+                    <span className="text-xs text-muted-foreground">
+                      {selectedProblemIds.size > 0 ? `${selectedProblemIds.size}개 선택됨` : '전체 선택'}
+                    </span>
+                  </div>
+
                   {filteredProblems.map(problem => (
                     <div
                       key={problem.id}
-                      className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/30 transition-colors"
+                      className={`flex items-center justify-between p-4 border rounded-lg hover:bg-muted/30 transition-colors ${selectedProblemIds.has(problem.id) ? 'border-primary bg-primary/5' : ''}`}
                     >
-                      <div className="flex items-center gap-4 min-w-0">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 cursor-pointer flex-shrink-0"
+                          checked={selectedProblemIds.has(problem.id)}
+                          onChange={() => toggleProblemSelect(problem.id)}
+                        />
                         <div className="flex-shrink-0 w-10 h-10 bg-muted rounded flex items-center justify-center text-sm font-bold text-muted-foreground">
                           {problem.problem_number || '?'}
                         </div>
@@ -651,6 +791,11 @@ const TextbookManagementNew = () => {
                             <Badge variant="outline" className="text-xs">
                               {problem.answer_type === 'multiple_choice' ? '객관식' : '주관식'}
                             </Badge>
+                            {problem.chapter_id && (
+                              <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700">
+                                폴더
+                              </Badge>
+                            )}
                             {problem.image_url && !problem.image_url.includes('placeholder') && (
                               <Badge variant="outline" className="text-xs bg-purple-50 text-purple-700">
                                 이미지
@@ -750,38 +895,23 @@ const TextbookManagementNew = () => {
         </div>
       )}
 
-      {/* 대단원 생성 모달 */}
+      {/* 폴더 생성 모달 */}
       {isChapterDialogOpen && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center">
           <div className="fixed inset-0 bg-black/80" onClick={() => setIsChapterDialogOpen(false)} />
           <div className="relative z-[10000] bg-background border rounded-lg shadow-lg w-full max-w-lg p-6 space-y-4">
             <div>
-              <h2 className="text-lg font-semibold">새 대단원 생성</h2>
-              <p className="text-sm text-muted-foreground">{selectedTextbook?.name}에 새로운 대단원을 추가하세요</p>
+              <h2 className="text-lg font-semibold">새 폴더 생성</h2>
+              <p className="text-sm text-muted-foreground">{selectedTextbook?.name}에 새로운 폴더를 추가하세요</p>
             </div>
             <div className="space-y-4">
               <div>
-                <Label>대단원명 *</Label>
+                <Label>폴더명 *</Label>
                 <Input
                   value={chapterForm.name}
                   onChange={e => setChapterForm({ ...chapterForm, name: e.target.value })}
-                  placeholder="예: 다항식"
-                />
-              </div>
-              <div>
-                <Label>설명</Label>
-                <Textarea
-                  value={chapterForm.description}
-                  onChange={e => setChapterForm({ ...chapterForm, description: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label>정렬 순서</Label>
-                <Input
-                  type="number"
-                  value={chapterForm.sort_order}
-                  onChange={e => setChapterForm({ ...chapterForm, sort_order: parseInt(e.target.value) || 1 })}
-                  min="1"
+                  placeholder="예: 평가원 6월 25년"
+                  autoFocus
                 />
               </div>
             </div>
@@ -793,44 +923,90 @@ const TextbookManagementNew = () => {
         </div>
       )}
 
-      {/* 중단원 생성 모달 */}
+      {/* 하위 폴더 생성 모달 */}
       {isSubchapterDialogOpen && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center">
           <div className="fixed inset-0 bg-black/80" onClick={() => setIsSubchapterDialogOpen(false)} />
           <div className="relative z-[10000] bg-background border rounded-lg shadow-lg w-full max-w-lg p-6 space-y-4">
             <div>
-              <h2 className="text-lg font-semibold">새 중단원 생성</h2>
-              <p className="text-sm text-muted-foreground">{selectedChapter?.name}에 새로운 중단원을 추가하세요</p>
+              <h2 className="text-lg font-semibold">새 하위 폴더 생성</h2>
+              <p className="text-sm text-muted-foreground">{selectedChapter?.name} 안에 추가합니다</p>
             </div>
             <div className="space-y-4">
               <div>
-                <Label>중단원명 *</Label>
+                <Label>하위 폴더명 *</Label>
                 <Input
                   value={subchapterForm.name}
                   onChange={e => setSubchapterForm({ ...subchapterForm, name: e.target.value })}
-                  placeholder="예: 다항식의 연산"
-                />
-              </div>
-              <div>
-                <Label>설명</Label>
-                <Textarea
-                  value={subchapterForm.description}
-                  onChange={e => setSubchapterForm({ ...subchapterForm, description: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label>정렬 순서</Label>
-                <Input
-                  type="number"
-                  value={subchapterForm.sort_order}
-                  onChange={e => setSubchapterForm({ ...subchapterForm, sort_order: parseInt(e.target.value) || 1 })}
-                  min="1"
+                  placeholder="예: 1~10번"
+                  autoFocus
                 />
               </div>
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setIsSubchapterDialogOpen(false)}>취소</Button>
               <Button onClick={handleCreateSubchapter} disabled={!subchapterForm.name}>생성</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 삭제 확인 모달 */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/80" onClick={() => setDeleteTarget(null)} />
+          <div className="relative z-[10000] bg-background border rounded-lg shadow-lg w-full max-w-md p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold text-destructive">삭제 확인</h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                <span className="font-medium text-foreground">"{deleteTarget.name}"</span>을 삭제하시겠습니까?
+              </p>
+              {deleteTarget.type !== 'subchapter' && (
+                <p className="text-sm text-destructive mt-2">
+                  ⚠️ 하위 폴더와 폴더 내 문제 연결이 모두 해제됩니다. (문제 자체는 삭제되지 않습니다)
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setDeleteTarget(null)}>취소</Button>
+              <Button variant="destructive" onClick={handleDelete}>삭제</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 폴더 이동 모달 */}
+      {isMoveDialogOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/80" onClick={() => setIsMoveDialogOpen(false)} />
+          <div className="relative z-[10000] bg-background border rounded-lg shadow-lg w-full max-w-md p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold">폴더로 이동</h2>
+              <p className="text-sm text-muted-foreground">
+                선택된 {selectedProblemIds.size}개 문제를 이동할 폴더를 선택하세요
+              </p>
+            </div>
+            <div>
+              <Label>폴더 선택</Label>
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm mt-1"
+                value={moveTargetChapterId}
+                onChange={e => setMoveTargetChapterId(e.target.value)}
+              >
+                <option value="">(폴더 없음)</option>
+                {currentChapters.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              {currentChapters.length === 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  먼저 사이드바에서 폴더를 생성하세요
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setIsMoveDialogOpen(false)}>취소</Button>
+              <Button onClick={handleMoveToFolder}>이동</Button>
             </div>
           </div>
         </div>

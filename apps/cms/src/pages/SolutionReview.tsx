@@ -143,6 +143,8 @@ export default function SolutionReview() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { profile } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const qaFileInputRef = useRef<HTMLInputElement>(null);
+  const [qaFile, setQaFile] = useState<File | null>(null);
   const autoSaveTimerRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
   const saveBboxForPageRef = useRef<((pg: number, items: BboxItem[], silent?: boolean) => Promise<void>) | null>(null);
 
@@ -426,7 +428,14 @@ export default function SolutionReview() {
         const modified: number[] = (job.modified_pages ?? job.progress?.modified_pages ?? []).map(Number);
         setSavedPages(new Set(modified));
         setAnswers(job.answers ?? {});
-        setTagResults(job.tag_results ?? job.progress?.tag_results ?? {});
+        const restoredTagResults = job.tag_results ?? job.progress?.tag_results ?? {};
+        setTagResults(restoredTagResults);
+        // _retagged 플래그 있는 번호만 done으로 복원
+        const retaggedDone: Record<number, 'done'> = {};
+        Object.entries(restoredTagResults).forEach(([k, v]: [string, any]) => {
+          if (v?._retagged) retaggedDone[Number(k)] = 'done';
+        });
+        if (Object.keys(retaggedDone).length > 0) setRetagStatus(retaggedDone);
         toast({ title: '작업 복구됨', description: `${pageNums.length}페이지 불러옴` });
       } catch (e) {
         // 복구 실패 시 조용히 무시 (업로드 화면으로)
@@ -484,6 +493,7 @@ export default function SolutionReview() {
       fd.append('file', file);
       fd.append('teacher_id', profile.id);
       fd.append('problem_job_id', jobId);
+      if (qaFile) fd.append('quick_answer_file', qaFile);
 
       const res = await fetch(`${PIPELINE_URL}/api/solution/upload`, {
         method: 'POST',
@@ -980,6 +990,22 @@ export default function SolutionReview() {
                 if (f) handleUpload(f);
               }}
             />
+            <input
+              ref={qaFileInputRef}
+              type="file"
+              accept=".pdf"
+              className="hidden"
+              onChange={e => setQaFile(e.target.files?.[0] ?? null)}
+            />
+            <div className="flex flex-col items-center gap-2">
+              <button
+                type="button"
+                onClick={() => qaFileInputRef.current?.click()}
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                {qaFile ? `✓ 빠른정답: ${qaFile.name}` : '빠른정답 PDF 첨부 (선택)'}
+              </button>
+            </div>
             <Button
               disabled={stage !== 'idle'}
               onClick={() => fileInputRef.current?.click()}

@@ -1196,7 +1196,12 @@ async def _run_retag(solution_job_id: str, numbers: list[int]):
         def _strip_raw(d: dict) -> dict:
             return {k: v for k, v in d.items() if k != "raw_response"}
 
-        slim_new = {num: _strip_raw(r) for num, r in new_tag_results.items() if isinstance(r, dict)}
+        def _mark_retagged(r: dict) -> dict:
+            d = _strip_raw(r)
+            d["_retagged"] = True
+            return d
+
+        slim_new = {num: _mark_retagged(r) for num, r in new_tag_results.items() if isinstance(r, dict)}
 
         # 기존 tag_results에 병합
         existing = dict(job.get("tag_results") or {})
@@ -1247,8 +1252,9 @@ async def solution_upload(
     file: UploadFile = File(...),
     teacher_id: str = Form(...),
     problem_job_id: Optional[str] = Form(None),
+    quick_answer_file: Optional[UploadFile] = File(None),
 ):
-    """해설지 PDF 업로드 → solution_job_id 반환"""
+    """해설지 PDF 업로드 → solution_job_id 반환. quick_answer_file(빠른정답 PDF) 선택 첨부."""
     if not file.filename:
         raise HTTPException(400, "파일명이 없습니다.")
 
@@ -1259,11 +1265,9 @@ async def solution_upload(
 
     from storage.supabase_client import create_solution_job
 
-    # solution_jobs DB 레코드 생성
     sol_job = create_solution_job(teacher_id, problem_job_id)
     solution_job_id = sol_job["id"]
 
-    # 파일 저장 — 원본 파일명 기반 폴더, 충돌 시 _2, _3 부여
     folder_name = _sanitize_name(real_filename)
     save_dir = _unique_dir(Path(UPLOAD_DIR) / "solutions", folder_name)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -1272,6 +1276,17 @@ async def solution_upload(
     content = await file.read()
     with open(save_path, "wb") as f:
         f.write(content)
+
+    # 빠른정답 PDF 파싱
+    quick_answers: dict = {}
+    if quick_answer_file and quick_answer_file.filename:
+        qa_path = save_dir / _decode_upload_filename(quick_answer_file.filename)
+        qa_content = await quick_answer_file.read()
+        with open(qa_path, "wb") as f:
+            f.write(qa_content)
+        from pipeline.solution_parser import extract_quick_answers
+        quick_answers = extract_quick_answers(str(qa_path))
+        logger.info(f"빠른정답 파싱 완료: {len(quick_answers)}개")
 
     from storage.supabase_client import update_solution_job
     update_solution_job(solution_job_id, status="uploaded", pdf_path=str(save_path))
@@ -1283,14 +1298,18 @@ async def solution_upload(
         "file_path": str(save_path),
         "teacher_id": teacher_id,
         "problem_job_id": problem_job_id,
-        "answers": {},
+        "answers": quick_answers,  # 빠른정답 있으면 미리 채움
         "solution_image_urls": {},
         "tag_results": {},
-        "progress": {},
+        "progress": {"answers": quick_answers} if quick_answers else {},
         "error": None,
     }
 
-    return {"solution_job_id": solution_job_id, "filename": real_filename}
+    return {
+        "solution_job_id": solution_job_id,
+        "filename": real_filename,
+        "quick_answers_count": len(quick_answers),
+    }
 
 
 @app.post("/api/solution/extract/{solution_job_id}")
@@ -1627,7 +1646,8 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
     overrides가 있으면 해당 staging_id의 answer/answer_type을 override 값으로 사용.
     """
     if solution_job_id not in solution_jobs:
-        raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
+        if _hydrate_solution_job(solution_job_id) is None:
+            raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
 
     job = solution_jobs[solution_job_id]
     if job["status"] != "done":
@@ -1670,18 +1690,15 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
         answer = ov.get("answer", data.get("answer"))
         answer_type = ov.get("answer_type", data.get("answer_type"))
 
-        # unit/difficulty 는 override > 기존 staging 값이 비어있을 때만 AI 결과로
-        existing_row = staging_map.get(sid, {})
-        ai_unit = data.get("unit") or None
-        ai_difficulty_score = data.get("difficulty_score")
+        # unit/difficulty_score: override 있으면 override, 없으면 AI 결과로 항상 덮어쓰기
+        unit_val = ov.get("unit") or data.get("unit") or None
+        diff_score_val = ov.get("difficulty_score") or data.get("difficulty_score") or None
 
-        unit_val = ov.get("unit")
-        if unit_val is None and not (existing_row.get("unit") or "").strip() and ai_unit:
-            unit_val = ai_unit
-
-        diff_score_val = ov.get("difficulty_score")
-        if diff_score_val is None and existing_row.get("difficulty_score") is None and ai_difficulty_score:
-            diff_score_val = ai_difficulty_score
+        # unit이 실제 값으로 갱신되면 title도 재생성
+        new_title = None
+        if unit_val and unit_val != "미분류":
+            st = staging_map.get(sid, {})
+            new_title = f"{st.get('category', '기타')} {unit_val} {st.get('problem_number', '?')}번"
 
         # staging 업데이트
         update_staging_solution(
@@ -1697,6 +1714,10 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
             difficulty_score=diff_score_val,
             solution_steps=data.get("solution_steps") or None,
             common_mistakes=data.get("common_mistakes") or None,
+            validation_status=data.get("validation_status"),
+            validation_score=data.get("validation_score"),
+            validation_issues=data.get("validation_issues"),
+            title=new_title,
         )
 
         # 태그 삽입 — concept_tags/skill_tags는 이제 list[str]

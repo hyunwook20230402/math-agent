@@ -9,8 +9,54 @@ import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { toast } from '@shared/hooks/use-toast';
 import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap } from 'lucide-react';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 
 const PIPELINE_URL = 'http://localhost:8001';
+
+function tryRenderKatex(expr: string, display = false): string | null {
+  try {
+    return katex.renderToString(expr, { displayMode: display, throwOnError: true });
+  } catch {
+    return null;
+  }
+}
+
+function MathText({ text }: { text: string }) {
+  const parts = text.split(/(\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)/g);
+  return (
+    <span>
+      {parts.map((part, i) => {
+        const display = part.startsWith('\\[') || part.startsWith('$$');
+        const inner = part.replace(/^\\\(|\\\)$|^\\\[|\\\]$|^\$\$|\$\$$|^\$|\$$/g, '');
+        if ((part.startsWith('\\(') && part.endsWith('\\)')) ||
+            (part.startsWith('\\[') && part.endsWith('\\]')) ||
+            (part.startsWith('$$') && part.endsWith('$$')) ||
+            (part.startsWith('$') && part.endsWith('$') && part.length > 2)) {
+          const html = tryRenderKatex(inner, display);
+          return html
+            ? <span key={i} dangerouslySetInnerHTML={{ __html: html }} />
+            : <span key={i}>{part}</span>;
+        }
+        const subParts: React.ReactNode[] = [];
+        let last = 0;
+        let m: RegExpExecArray | null;
+        const re = /([a-zA-Z0-9α-ωΑ-Ω]+(?:[\^_]\{?[^}\s]+\}?)+|\\[a-zA-Z]+(?:\{[^}]*\})*)/g;
+        while ((m = re.exec(part)) !== null) {
+          if (m.index > last) subParts.push(<span key={`t${i}_${last}`}>{part.slice(last, m.index)}</span>);
+          const html = tryRenderKatex(m[0]);
+          subParts.push(html
+            ? <span key={`m${i}_${m.index}`} dangerouslySetInnerHTML={{ __html: html }} />
+            : <span key={`m${i}_${m.index}`}>{m[0]}</span>
+          );
+          last = m.index + m[0].length;
+        }
+        if (last < part.length) subParts.push(<span key={`t${i}_end`}>{part.slice(last)}</span>);
+        return <span key={i}>{subParts}</span>;
+      })}
+    </span>
+  );
+}
 
 interface TagItem {
   tag: string;
@@ -31,7 +77,13 @@ interface StagingProblem {
   source_image_url: string | null;
   solution_image_url: string | null;
   solution_summary: string | null;
+  pitfall: string | null;
+  solution_steps: { step: number; description: string }[] | null;
+  common_mistakes: { bug_id: string; text: string }[] | null;
   match_confidence: number | null;
+  validation_status: 'ok' | 'warning' | 'reject' | null;
+  validation_score: number | null;
+  validation_issues: { field: string; reason: string; severity: string; applied?: boolean }[] | null;
   status: string;
 }
 
@@ -150,6 +202,10 @@ const ProblemDetail = () => {
       const data = await res.json();
       const list: StagingProblem[] = data.problems.filter((p: any) => p.status !== 'rejected');
       setProblems(list);
+      // 이미 저장(approved/modified)된 문제 복원
+      // 저장 버튼을 눌러 확정한 문제: status=approved이면서 correct_answer가 있는 경우
+      const alreadySaved = new Set(list.filter((p: any) => p.status === 'approved' && p.correct_answer).map((p: any) => p.id));
+      setSavedIds(alreadySaved);
       if (list.length > 0) {
         await selectProblem(list[0]);
       }
@@ -394,6 +450,25 @@ const ProblemDetail = () => {
                   )
                 )}
               </div>
+
+              {/* 검증 결과 */}
+              {selectedProblem.validation_issues && selectedProblem.validation_issues.length > 0 && (
+                <div className="px-3 py-2 border-t text-xs space-y-1">
+                  <p className="font-medium text-muted-foreground mb-1">
+                    검증 결과 {selectedProblem.validation_status === 'reject' ? '🔴' : '🟡'}
+                    {selectedProblem.validation_score != null && ` (점수 ${Math.round(selectedProblem.validation_score * 100)}점)`}
+                  </p>
+                  {selectedProblem.validation_issues.map((iss, i) => (
+                    <div key={i} className={`flex items-start gap-1 ${iss.applied ? 'text-green-600' : 'text-yellow-700'}`}>
+                      <span>{iss.applied ? '✅' : '⚠️'}</span>
+                      <span>
+                        <span className="font-medium">[{iss.severity}] {iss.field}:</span> {iss.reason}
+                        {iss.applied && <span className="ml-1 text-green-500">→ 자동수정됨</span>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* 입력 폼 */}
@@ -404,13 +479,26 @@ const ProblemDetail = () => {
 
               <div>
                 <Label className="text-sm">정답</Label>
-                <Input
-                  value={editValues.correct_answer || ''}
-                  onChange={e => setEditValues(prev => ({ ...prev, correct_answer: e.target.value }))}
-                  placeholder="예: 3, ①, 15"
-                  className="mt-1"
-                  onKeyDown={e => e.key === 'Enter' && handleSave()}
-                />
+                {editValues.answer_type === 'multiple_choice' ? (
+                  <select
+                    value={editValues.correct_answer || ''}
+                    onChange={e => setEditValues(prev => ({ ...prev, correct_answer: e.target.value }))}
+                    className={`mt-1 ${selectClassName}`}
+                  >
+                    <option value="">선택</option>
+                    {[1,2,3,4,5].map(n => (
+                      <option key={n} value={String(n)}>{n}번</option>
+                    ))}
+                  </select>
+                ) : (
+                  <Input
+                    value={editValues.correct_answer || ''}
+                    onChange={e => setEditValues(prev => ({ ...prev, correct_answer: e.target.value }))}
+                    placeholder="숫자 입력"
+                    className="mt-1"
+                    onKeyDown={e => e.key === 'Enter' && handleSave()}
+                  />
+                )}
               </div>
 
               <div>
@@ -487,13 +575,69 @@ const ProblemDetail = () => {
                 </div>
               )}
 
+              {/* 오답 포인트 */}
+              {selectedProblem.pitfall && (
+                <div>
+                  <Label className="text-sm flex items-center gap-1">
+                    <Bot className="h-3 w-3" />
+                    오답 포인트 (AI)
+                  </Label>
+                  <p className="mt-1 text-sm text-muted-foreground bg-muted/40 rounded-md px-3 py-2"><MathText text={selectedProblem.pitfall} /></p>
+                </div>
+              )}
+
+              {/* 단계별 풀이 */}
+              {selectedProblem.solution_steps && selectedProblem.solution_steps.length > 0 && (
+                <div>
+                  <Label className="text-sm flex items-center gap-1">
+                    <Bot className="h-3 w-3" />
+                    단계별 풀이 (AI)
+                  </Label>
+                  <ol className="mt-1 space-y-1">
+                    {selectedProblem.solution_steps.map(s => (
+                      <li key={s.step} className="text-sm bg-muted/40 rounded-md px-3 py-1.5">
+                        <span className="font-medium text-xs text-muted-foreground mr-2">Step {s.step}</span>
+                        <MathText text={s.description} />
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+
+              {/* 자주 하는 실수 */}
+              {selectedProblem.common_mistakes && selectedProblem.common_mistakes.length > 0 && (
+                <div>
+                  <Label className="text-sm flex items-center gap-1">
+                    <Bot className="h-3 w-3" />
+                    자주 하는 실수 (AI)
+                  </Label>
+                  <ul className="mt-1 space-y-1">
+                    {selectedProblem.common_mistakes.map((m, i) => (
+                      <li key={i} className="text-sm bg-muted/40 rounded-md px-3 py-1.5">• <MathText text={m.text} /></li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* 해설 이미지 */}
+              {selectedProblem.solution_image_url && (
+                <div>
+                  <Label className="text-sm">해설 이미지</Label>
+                  <img
+                    src={selectedProblem.solution_image_url}
+                    alt="해설 이미지"
+                    className="mt-1 w-full rounded-md border border-input"
+                  />
+                </div>
+              )}
+
               <div>
-                <Label className="text-sm">해설 (선택)</Label>
+                <Label className="text-sm">해설 메모 (선택)</Label>
                 <textarea
                   value={editValues.explanation || ''}
                   onChange={e => setEditValues(prev => ({ ...prev, explanation: e.target.value }))}
-                  placeholder="해설 내용..."
-                  rows={4}
+                  placeholder="추가 메모..."
+                  rows={3}
                   className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 resize-none"
                 />
               </div>
