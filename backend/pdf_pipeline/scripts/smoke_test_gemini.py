@@ -7,9 +7,11 @@ TagResult Pydantic 스키마를 그대로 사용하므로 provider 교체 외 �
   cd backend/pdf_pipeline
   set VL_PROVIDER=gemini
   set GEMINI_MODEL=gemini-2.0-flash   # 또는 gemini-1.5-flash 등
-  python scripts/smoke_test_gemini.py [이미지경로]
+  python scripts/smoke_test_gemini.py [해설이미지경로] [문제이미지경로(선택)]
 
-이미지경로 생략 시 기본값(16번 삼각방정식 해설) 사용.
+- 첫 번째 인자: 해설 이미지 (생략 시 기본값)
+- 두 번째 인자: 문제 이미지 (생략 시 해설 단독 모드).
+  두 인자를 모두 주면 문제+해설 동시 태깅 결과가 solo 결과와 함께 출력된다.
 """
 import json
 import os
@@ -66,14 +68,20 @@ DEFAULT_IMAGE = (
 )
 
 IMAGE_PATH = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_IMAGE
+PROBLEM_IMAGE_PATH = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 
 if not IMAGE_PATH.exists():
-  print(f"❌ 이미지 파일이 없습니다: {IMAGE_PATH}")
+  print(f"❌ 해설 이미지가 없습니다: {IMAGE_PATH}")
+  sys.exit(1)
+if PROBLEM_IMAGE_PATH is not None and not PROBLEM_IMAGE_PATH.exists():
+  print(f"❌ 문제 이미지가 없습니다: {PROBLEM_IMAGE_PATH}")
   sys.exit(1)
 
 VL_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-print(f"모델  : {VL_MODEL}")
-print(f"이미지: {IMAGE_PATH}")
+print(f"모델     : {VL_MODEL}")
+print(f"해설이미지: {IMAGE_PATH}")
+if PROBLEM_IMAGE_PATH is not None:
+  print(f"문제이미지: {PROBLEM_IMAGE_PATH}")
 print("-" * 60)
 
 taxonomy_path = ROOT / "data" / "concept_taxonomy.json"
@@ -82,21 +90,34 @@ concept_embeddings = load_or_build_section_embeddings(taxonomy_path, "concepts")
 skill_embeddings = load_or_build_section_embeddings(taxonomy_path, "skills")
 bug_embeddings = load_or_build_section_embeddings(taxonomy_path, "bugs")
 
-t0 = time.time()
-result = solution_tagger.extract_tags_from_image(
-  str(IMAGE_PATH),
-  has_solution=True,
-  leaf_embeddings=leaf_embeddings,
-  concept_embeddings=concept_embeddings,
-  skill_embeddings=skill_embeddings,
-  bug_embeddings=bug_embeddings,
-)
-elapsed = time.time() - t0
 
-print("\n=== 최종 결과 ===")
-print(json.dumps(result, ensure_ascii=False, indent=2))
+def _tag(problem_path: str | None, label: str) -> tuple[dict, float]:
+  t = time.time()
+  r = solution_tagger.extract_tags_from_image(
+    str(IMAGE_PATH),
+    has_solution=True,
+    leaf_embeddings=leaf_embeddings,
+    concept_embeddings=concept_embeddings,
+    skill_embeddings=skill_embeddings,
+    bug_embeddings=bug_embeddings,
+    problem_image_path=problem_path,
+  )
+  el = time.time() - t
+  print(f"\n=== [{label}] 결과 ({el:.1f}s) ===")
+  print(json.dumps(r, ensure_ascii=False, indent=2))
+  return r, el
+
+
+solo_result, solo_elapsed = _tag(None, "해설만")
+dual_result: dict | None = None
+dual_elapsed: float | None = None
+if PROBLEM_IMAGE_PATH is not None:
+  dual_result, dual_elapsed = _tag(str(PROBLEM_IMAGE_PATH), "문제+해설")
+
 print("-" * 60)
-print(f"소요: {elapsed:.1f}초")
+print(f"해설만   : {solo_elapsed:.1f}s | concept={solo_result.get('concept_tags')} | skill={solo_result.get('skill_tags')}")
+if dual_result is not None:
+  print(f"문제+해설: {dual_elapsed:.1f}s | concept={dual_result.get('concept_tags')} | skill={dual_result.get('skill_tags')}")
 
 # 파일 저장
 out_dir = ROOT / "scripts" / "smoke_results"
@@ -107,8 +128,9 @@ with open(out_path, "w", encoding="utf-8") as f:
   json.dump({
     "model": VL_MODEL,
     "provider": "gemini",
-    "image": str(IMAGE_PATH),
-    "elapsed_sec": elapsed,
-    "result": result,
+    "solution_image": str(IMAGE_PATH),
+    "problem_image": str(PROBLEM_IMAGE_PATH) if PROBLEM_IMAGE_PATH else None,
+    "solo": {"elapsed_sec": solo_elapsed, "result": solo_result},
+    "dual": {"elapsed_sec": dual_elapsed, "result": dual_result} if dual_result is not None else None,
   }, f, ensure_ascii=False, indent=2)
 print(f"\n저장: {out_path}")

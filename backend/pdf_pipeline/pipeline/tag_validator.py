@@ -232,8 +232,11 @@ def _build_canonical_section() -> str:
   )
 
 
-def _layer2_llm(tag_result: dict, image_path: str) -> tuple[list[ValidationIssue], SuggestedFixes | None]:
-  """Gemini (또는 현재 VL_PROVIDER) 로 태깅 결과를 재검증."""
+def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[ValidationIssue], SuggestedFixes | None]:
+  """Gemini (또는 현재 VL_PROVIDER) 로 태깅 결과를 재검증.
+
+  image_path 는 단일 경로 또는 리스트([문제경로, 해설경로]). 리스트면 멀티 이미지로 전달.
+  """
   try:
     from .vl_providers import call_vl
 
@@ -259,10 +262,11 @@ def _layer2_llm(tag_result: dict, image_path: str) -> tuple[list[ValidationIssue
 
 # ── 공개 API ──────────────────────────────────────────────────────────────────
 
-def validate(tag_result: dict, image_path: str) -> ValidationResult:
+def validate(tag_result: dict, image_path: str | list[str]) -> ValidationResult:
   """태깅 결과를 3-layer 로 검증.
 
   TAG_VALIDATOR_LAYERS 환경변수로 레이어 선택 (기본 "123" = 전체).
+  image_path 는 단일 경로 또는 [문제, 해설] 리스트 허용.
   """
   layers = os.environ.get("TAG_VALIDATOR_LAYERS", TAG_VALIDATOR_LAYERS)
 

@@ -60,6 +60,26 @@ Rules:
 All text fields (concept_tags, skill_tags, solution_summary, pitfall, solution_steps.description, common_mistakes.text) MUST be in Korean.
 Output valid JSON only."""
 
+_TAGGING_PROMPT_WITH_PROBLEM_AND_SOLUTION = """You are analyzing a Korean high school math problem and its solution.
+
+You are given TWO images in order:
+- Image 1 = Problem (문제)
+- Image 2 = Solution (해설)
+
+Use BOTH images together: the problem tells you what is being asked and which given conditions matter; the solution tells you which techniques were actually used. Tags must reflect both the problem's intent and the solution's method.
+
+Rules:
+- difficulty: easy / medium / hard
+- concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분") — derived from the problem's underlying concept, cross-checked with the solution
+- skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석") — techniques used in the solution
+- solution_summary: max 20 words IN KOREAN — describe the core approach
+- pitfall: max 20 words IN KOREAN — the most likely mistake given the problem's trap
+- solution_steps: max 5 steps, each description max 15 words IN KOREAN
+- common_mistakes: 2-3 items, each text max 10 words IN KOREAN
+
+All text fields MUST be in Korean.
+Output valid JSON only."""
+
 _TAGGING_PROMPT_NO_SOLUTION = """You are analyzing a Korean high school math problem image (no solution shown).
 
 Rules:
@@ -93,8 +113,11 @@ def _image_to_base64(image_path: str) -> str:
     return base64.b64encode(f.read()).decode("utf-8")
 
 
-def _call_vl(image_path: str, prompt: str, timeout: int | None = None) -> TagResult:
-  """vl_providers.call_vl 래퍼. monkeypatch 및 레거시 호출 호환."""
+def _call_vl(image_path: str | list[str], prompt: str, timeout: int | None = None) -> TagResult:
+  """vl_providers.call_vl 래퍼. monkeypatch 및 레거시 호출 호환.
+
+  image_path 는 단일 경로(str) 또는 리스트(list[str]) 모두 허용.
+  """
   return call_vl(image_path, prompt, TagResult, timeout)
 
 
@@ -239,8 +262,15 @@ def extract_tags_from_image(
   concept_embeddings: dict | None = None,
   skill_embeddings: dict | None = None,
   bug_embeddings: dict | None = None,
+  problem_image_path: str | None = None,
 ) -> dict:
-  """단일 이미지에서 온톨로지 데이터 추출.
+  """단일 이미지(또는 문제+해설 2장)에서 온톨로지 데이터 추출.
+
+  Args:
+    image_path: 해설 이미지(has_solution=True) 또는 문제 이미지(has_solution=False)
+    problem_image_path: has_solution=True 일 때 함께 참조할 문제 이미지 (선택).
+      전달되면 [problem_image_path, image_path] 순서로 VL 에 넘기며,
+      프롬프트에서 "Image 1=문제, Image 2=해설" 로 명시된다.
 
   Returns:
     {
@@ -266,7 +296,13 @@ def extract_tags_from_image(
   if bug_embeddings is None:
     bug_embeddings = tag_normalizer.load_or_build_section_embeddings(taxonomy_path, "bugs")
 
-  prompt = _TAGGING_PROMPT_WITH_SOLUTION if has_solution else _TAGGING_PROMPT_NO_SOLUTION
+  use_problem = has_solution and bool(problem_image_path)
+  if use_problem:
+    prompt = _TAGGING_PROMPT_WITH_PROBLEM_AND_SOLUTION
+    vl_image_arg: str | list[str] = [problem_image_path, image_path]
+  else:
+    prompt = _TAGGING_PROMPT_WITH_SOLUTION if has_solution else _TAGGING_PROMPT_NO_SOLUTION
+    vl_image_arg = image_path
 
   fallback = {
     "unit": "",
@@ -281,7 +317,7 @@ def extract_tags_from_image(
   }
 
   try:
-    result = _call_vl(image_path, prompt)
+    result = _call_vl(vl_image_arg, prompt)
 
     concept_tags = normalize_tags(result.concept_tags, "concept", concept_embeddings, threshold=0.65)
     skill_tags = normalize_tags(result.skill_tags, "skill", skill_embeddings, threshold=0.65)
@@ -324,7 +360,7 @@ def extract_tags_from_image(
     if os.environ.get("TAG_VALIDATOR_ENABLED", "true") == "true":
       try:
         from . import tag_validator
-        validation = tag_validator.validate(tag_result, image_path)
+        validation = tag_validator.validate(tag_result, vl_image_arg)
         validation_dict = validation.model_dump()
         _apply_suggested_fixes(
           tag_result,
@@ -357,8 +393,13 @@ def tag_all_solutions(
   solution_images: dict,
   progress_callback=None,
   numbers_filter: set[int] | None = None,
+  problem_images: dict[int, str] | None = None,
 ) -> dict:
   """모든 해설 이미지 일괄 태깅.
+
+  Args:
+    solution_images: {번호: 해설 이미지 로컬 경로}
+    problem_images: {번호: 문제 이미지 로컬 경로} — 있으면 문제+해설을 함께 VL 에 전달
 
   Returns:
     {
@@ -388,6 +429,7 @@ def tag_all_solutions(
       progress_callback(i, total, num)
 
     logger.info(f"태깅 중: {num}번 ({i+1}/{total})")
+    problem_path = problem_images.get(num) if problem_images else None
     result = extract_tags_from_image(
       img_path,
       has_solution=True,
@@ -396,6 +438,7 @@ def tag_all_solutions(
       concept_embeddings=concept_embeddings,
       skill_embeddings=skill_embeddings,
       bug_embeddings=bug_embeddings,
+      problem_image_path=problem_path,
     )
     results[num] = result
 

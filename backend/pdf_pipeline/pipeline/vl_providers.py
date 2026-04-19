@@ -9,6 +9,8 @@ provider 는 `provider_selector.select_vl_provider()` 로 결정:
 
 공통 인터페이스:
   call_vl(image_path, prompt, schema) → schema 인스턴스
+    image_path 는 단일 경로(str) 또는 경로 리스트(list[str]) 모두 허용.
+    리스트일 경우 각 provider 에 멀티 이미지로 전달되며, 프롬프트에서 순서를 명시해야 한다.
 
 각 provider 는 schema 를 직접 전달받아 structured output 을 강제한다.
 free-form JSON 파싱 / 정규식 추출은 이 모듈에서 사용하지 않는다.
@@ -34,11 +36,25 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 
 T = TypeVar("T", bound=BaseModel)
 
+ImagePaths = str | list[str]
 
-def call_vl(image_path: str, prompt: str, schema: type[T], timeout: int | None = None) -> T:
+
+def _normalize_paths(image_path: ImagePaths) -> list[str]:
+  if isinstance(image_path, str):
+    return [image_path]
+  return list(image_path)
+
+
+def _mime_for(path: str) -> str:
+  suffix = Path(path).suffix.lower()
+  return "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
+
+
+def call_vl(image_path: ImagePaths, prompt: str, schema: type[T], timeout: int | None = None) -> T:
   """provider 에 관계없이 동일한 인터페이스로 VL 모델 호출.
 
   반환값은 항상 schema 인스턴스 (Pydantic 검증 완료).
+  image_path 에 리스트를 넘기면 멀티 이미지 모드로 호출된다.
   """
   provider = provider_selector.select_vl_provider()
   if provider == "gemini":
@@ -98,14 +114,17 @@ def _call_ollama_with_fallback(image_path, prompt, schema, timeout):
 
 # ── Ollama ────────────────────────────────────────────────────────────────────
 
-def _call_ollama(image_path: str, prompt: str, schema: type[T], timeout: int | None = None) -> T:
-  with open(image_path, "rb") as f:
-    img_b64 = base64.b64encode(f.read()).decode("utf-8")
+def _call_ollama(image_path: ImagePaths, prompt: str, schema: type[T], timeout: int | None = None) -> T:
+  paths = _normalize_paths(image_path)
+  images_b64: list[str] = []
+  for p in paths:
+    with open(p, "rb") as f:
+      images_b64.append(base64.b64encode(f.read()).decode("utf-8"))
 
   payload = {
     "model": os.environ.get("VL_MODEL", VL_MODEL),
     "prompt": prompt,
-    "images": [img_b64],
+    "images": images_b64,
     "format": schema.model_json_schema(),
     "stream": False,
     "options": {
@@ -126,7 +145,7 @@ def _call_ollama(image_path: str, prompt: str, schema: type[T], timeout: int | N
 
 # ── Gemini ────────────────────────────────────────────────────────────────────
 
-def _call_gemini(image_path: str, prompt: str, schema: type[T], timeout: int | None = None) -> T:
+def _call_gemini(image_path: ImagePaths, prompt: str, schema: type[T], timeout: int | None = None) -> T:
   try:
     from google import genai
     from google.genai import types as genai_types
@@ -142,23 +161,17 @@ def _call_gemini(image_path: str, prompt: str, schema: type[T], timeout: int | N
   client = genai.Client(api_key=api_key)
   model = os.environ.get("GEMINI_MODEL", GEMINI_MODEL)
 
-  suffix = Path(image_path).suffix.lower()
-  mime = "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
-
-  with open(image_path, "rb") as f:
-    img_bytes = f.read()
+  paths = _normalize_paths(image_path)
+  parts = []
+  for p in paths:
+    with open(p, "rb") as f:
+      img_bytes = f.read()
+    parts.append(genai_types.Part.from_bytes(data=img_bytes, mime_type=_mime_for(p)))
+  parts.append(genai_types.Part.from_text(text=prompt))
 
   response = client.models.generate_content(
     model=model,
-    contents=[
-      genai_types.Content(
-        parts=[
-          genai_types.Part.from_bytes(data=img_bytes, mime_type=mime),
-          genai_types.Part.from_text(text=prompt),
-        ],
-        role="user",
-      )
-    ],
+    contents=[genai_types.Content(parts=parts, role="user")],
     config=genai_types.GenerateContentConfig(
       response_mime_type="application/json",
       response_schema=schema,
@@ -170,7 +183,7 @@ def _call_gemini(image_path: str, prompt: str, schema: type[T], timeout: int | N
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 
-def _call_openai(image_path: str, prompt: str, schema: type[T], timeout: int | None = None) -> T:
+def _call_openai(image_path: ImagePaths, prompt: str, schema: type[T], timeout: int | None = None) -> T:
   try:
     import openai
   except ImportError as e:
@@ -183,23 +196,20 @@ def _call_openai(image_path: str, prompt: str, schema: type[T], timeout: int | N
   client = openai.OpenAI(api_key=api_key)
   model = os.environ.get("OPENAI_MODEL", OPENAI_MODEL)
 
-  suffix = Path(image_path).suffix.lower()
-  mime = "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
-
-  with open(image_path, "rb") as f:
-    img_b64 = base64.b64encode(f.read()).decode("utf-8")
+  paths = _normalize_paths(image_path)
+  content: list[dict] = []
+  for p in paths:
+    with open(p, "rb") as f:
+      img_b64 = base64.b64encode(f.read()).decode("utf-8")
+    content.append({
+      "type": "input_image",
+      "image_url": f"data:{_mime_for(p)};base64,{img_b64}",
+    })
+  content.append({"type": "input_text", "text": prompt})
 
   response = client.responses.parse(
     model=model,
-    input=[
-      {
-        "role": "user",
-        "content": [
-          {"type": "input_image", "image_url": f"data:{mime};base64,{img_b64}"},
-          {"type": "input_text", "text": prompt},
-        ],
-      }
-    ],
+    input=[{"role": "user", "content": content}],
     text_format=schema,
   )
   return response.output_parsed

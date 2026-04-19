@@ -1012,13 +1012,63 @@ async def _run_solution_upload_and_tag(
             }),
         )
 
+        # 3-1. 문제 이미지 맵 구성 (문제+해설 동시 태깅용)
+        problem_job_id = job.get("problem_job_id")
+        problem_local_paths: dict[int, str] = {}
+        if problem_job_id:
+            try:
+                staging_rows = await loop.run_in_executor(
+                    None, get_staging_by_job, problem_job_id
+                )
+                problem_url_map: dict[int, str] = {}
+                for row in staging_rows or []:
+                    num = row.get("problem_number")
+                    url = row.get("source_image_url")
+                    if num is None or not url:
+                        continue
+                    try:
+                        num_int = int(num)
+                    except (TypeError, ValueError):
+                        continue
+                    if num_int in target_set:
+                        problem_url_map[num_int] = url
+
+                def _download_all(url_map: dict[int, str]) -> dict[int, str]:
+                    local: dict[int, str] = {}
+                    for n, u in url_map.items():
+                        try:
+                            local[n] = download_image(u)
+                        except Exception as e:
+                            logger.warning(f"문제 이미지 다운로드 실패 {n}: {e}")
+                    return local
+
+                problem_local_paths = await loop.run_in_executor(
+                    None, _download_all, problem_url_map
+                )
+                logger.info(
+                    f"문제 이미지 확보: {len(problem_local_paths)}/{len(target_set)}"
+                )
+            except Exception as e:
+                logger.warning(f"문제 이미지 맵 구성 실패 (해설 단독 태깅으로 fallback): {e}")
+                problem_local_paths = {}
+
         def _tag_runner():
             return tag_all_solutions(
-                merged_images, _progress, numbers_filter=target_set
+                merged_images,
+                _progress,
+                numbers_filter=target_set,
+                problem_images=problem_local_paths or None,
             )
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            new_tag_results = await loop.run_in_executor(executor, _tag_runner)
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                new_tag_results = await loop.run_in_executor(executor, _tag_runner)
+        finally:
+            for p in problem_local_paths.values():
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
 
         # raw_response 제거 (JSONB 비대화 방지) — 디버깅용이라 DB 저장 불필요
         def _strip_raw(d: dict) -> dict:
