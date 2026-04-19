@@ -16,6 +16,57 @@ import {
   ArrowLeft, Upload, Loader2, RotateCcw, Check, SkipForward, X,
 } from 'lucide-react';
 import BboxEditor, { type BboxItem } from '@/components/BboxEditor';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
+
+// plain text 수식 패턴: x^2, a_1, \frac, log_5 등 — 구분자 없이 raw로 온 수식 감지
+const PLAIN_MATH_RE = /([a-zA-Z0-9_\\]+(?:\^[{(]?[^}\s)]+[})]?|_[{(]?[^}\s)]+[})]?|\\[a-z]+)+(?:\([^)]*\))?)/g;
+
+function tryRenderKatex(expr: string, display = false): string | null {
+  try {
+    return katex.renderToString(expr, { displayMode: display, throwOnError: true });
+  } catch {
+    return null;
+  }
+}
+
+function MathText({ text }: { text: string }) {
+  // 1단계: 명시적 구분자(\(...\), \[...\], $...$) 분리
+  const parts = text.split(/(\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)/g);
+  return (
+    <span>
+      {parts.map((part, i) => {
+        const display = part.startsWith('\\[') || part.startsWith('$$');
+        const inner = part.replace(/^\\\(|\\\)$|^\\\[|\\\]$|^\$\$|\$\$$|^\$|\$$/g, '');
+        if ((part.startsWith('\\(') && part.endsWith('\\)')) ||
+            (part.startsWith('\\[') && part.endsWith('\\]')) ||
+            (part.startsWith('$$') && part.endsWith('$$')) ||
+            (part.startsWith('$') && part.endsWith('$') && part.length > 2)) {
+          const html = tryRenderKatex(inner, display);
+          return html
+            ? <span key={i} dangerouslySetInnerHTML={{ __html: html }} />
+            : <span key={i}>{part}</span>;
+        }
+        // 2단계: plain text 안에서 ^, _ 포함 수식 패턴 감지 후 렌더
+        const subParts: React.ReactNode[] = [];
+        let last = 0;
+        let m: RegExpExecArray | null;
+        const re = /([a-zA-Z0-9α-ωΑ-Ω]+(?:[\^_]\{?[^}\s]+\}?)+|\\[a-zA-Z]+(?:\{[^}]*\})*)/g;
+        while ((m = re.exec(part)) !== null) {
+          if (m.index > last) subParts.push(<span key={`t${i}_${last}`}>{part.slice(last, m.index)}</span>);
+          const html = tryRenderKatex(m[0]);
+          subParts.push(html
+            ? <span key={`m${i}_${m.index}`} dangerouslySetInnerHTML={{ __html: html }} />
+            : <span key={`m${i}_${m.index}`}>{m[0]}</span>
+          );
+          last = m.index + m[0].length;
+        }
+        if (last < part.length) subParts.push(<span key={`t${i}_end`}>{part.slice(last)}</span>);
+        return <span key={i}>{subParts}</span>;
+      })}
+    </span>
+  );
+}
 
 const PIPELINE_URL = 'http://localhost:8001';
 
@@ -304,6 +355,8 @@ export default function SolutionReview() {
   const [tagResults, setTagResults] = useState<Record<string, any>>({});
   const [expandedTagNumber, setExpandedTagNumber] = useState<number | null>(null);
   const [taggingMode, setTaggingMode] = useState<'sample' | 'continue' | 'full' | null>(null);
+  const [retagStatus, setRetagStatus] = useState<Record<number, 'pending'|'tagging'|'done'|'error'>>({});
+  const retagPollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activePageRef = useRef<number>(0);
   useEffect(() => { activePageRef.current = activePage; }, [activePage]);
@@ -712,6 +765,53 @@ export default function SolutionReview() {
     }
   };
 
+  // 재태깅 폴러 정리
+  const stopRetagPoller = useCallback(() => {
+    if (retagPollerRef.current) {
+      clearInterval(retagPollerRef.current);
+      retagPollerRef.current = null;
+    }
+  }, []);
+
+  const handleRetag = useCallback(async (numbers: number[]) => {
+    const sjId = solutionJobIdRef.current;
+    if (!sjId || numbers.length === 0) return;
+
+    const initial: Record<number, 'pending'|'tagging'|'done'|'error'> = {};
+    numbers.forEach(n => { initial[n] = 'pending'; });
+    setRetagStatus(prev => ({ ...prev, ...initial }));
+
+    await fetch(`${PIPELINE_URL}/api/solution/${sjId}/retag`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ numbers }),
+    });
+
+    stopRetagPoller();
+    retagPollerRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${PIPELINE_URL}/api/solution/${sjId}/retag-status`);
+        const status: Record<string, string> = await res.json();
+        // 빈 응답 = 서버 재시작 후 메모리 초기화 → 무시
+        if (Object.keys(status).length === 0) return;
+
+        const parsed: Record<number, 'pending'|'tagging'|'done'|'error'> = {};
+        Object.entries(status).forEach(([k, v]) => { parsed[Number(k)] = v as any; });
+        setRetagStatus(prev => ({ ...prev, ...parsed }));
+
+        const allDone = Object.values(parsed).every(s => s === 'done' || s === 'error');
+        if (allDone) {
+          stopRetagPoller();
+          const statusRes = await fetch(`${PIPELINE_URL}/api/solution/${sjId}/status`);
+          const jobData = await statusRes.json();
+          const newTagResults = jobData?.progress?.tag_results ?? jobData?.tag_results ?? {};
+          if (Object.keys(newTagResults).length > 0) setTagResults(newTagResults);
+          toast({ title: '재태깅 완료', description: `${numbers.length}개 문제 재태깅 완료` });
+        }
+      } catch { /* 폴링 오류 무시 */ }
+    }, 2000);
+  }, [stopRetagPoller]);
+
   // 6. 문제 staging에 적용
   const handleApply = async () => {
     if (!solutionJobId || !jobId) return;
@@ -944,12 +1044,12 @@ export default function SolutionReview() {
                 const expanded = expandedTagNumber === num;
                 return (
                   <div key={num} className="bg-white rounded-lg border overflow-hidden">
-                    <button
-                      type="button"
-                      className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50"
-                      onClick={() => setExpandedTagNumber(expanded ? null : num)}
-                    >
-                      <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
+                      <button
+                        type="button"
+                        className="flex items-center gap-3 flex-1 text-left"
+                        onClick={() => setExpandedTagNumber(expanded ? null : num)}
+                      >
                         <span className="font-mono text-sm text-muted-foreground w-10">{num}번</span>
                         <span className="text-xs text-muted-foreground truncate max-w-md">
                           {r?.unit || '(단원 없음)'}
@@ -959,9 +1059,23 @@ export default function SolutionReview() {
                             {r.difficulty_score}/10
                           </span>
                         )}
+                        {retagStatus[num] === 'pending' && <span className="text-xs text-yellow-600">대기 중…</span>}
+                        {retagStatus[num] === 'tagging' && <span className="text-xs text-blue-600 animate-pulse">재태깅 중…</span>}
+                        {retagStatus[num] === 'done' && <span className="text-xs text-green-600">✓ 재태깅 완료</span>}
+                        {retagStatus[num] === 'error' && <span className="text-xs text-red-600">재태깅 오류</span>}
+                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={retagStatus[num] === 'pending' || retagStatus[num] === 'tagging'}
+                          onClick={e => { e.stopPropagation(); handleRetag([num]); }}
+                          className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-100 disabled:opacity-40"
+                        >
+                          재태깅
+                        </button>
+                        <button type="button" onClick={() => setExpandedTagNumber(expanded ? null : num)} className="text-xs text-muted-foreground px-1">{expanded ? '▲' : '▼'}</button>
                       </div>
-                      <span className="text-xs text-muted-foreground">{expanded ? '▲' : '▼'}</span>
-                    </button>
+                    </div>
                     {expanded && (
                       <div className="px-4 py-3 border-t bg-gray-50/50 text-sm space-y-2">
                         <div><strong className="text-xs text-muted-foreground">단원:</strong> {r?.unit || '-'}</div>
@@ -969,23 +1083,63 @@ export default function SolutionReview() {
                         <div>
                           <strong className="text-xs text-muted-foreground">개념:</strong>{' '}
                           {Array.isArray(r?.concept_tags) && r.concept_tags.length > 0
-                            ? r.concept_tags.map((t: any) => `${t.tag}(${t.confidence?.toFixed?.(2) ?? ''})`).join(', ')
+                            ? r.concept_tags.map((t: any) => typeof t === 'string' ? t : `${t.tag}`).join(', ')
                             : '-'}
                         </div>
                         <div>
                           <strong className="text-xs text-muted-foreground">스킬:</strong>{' '}
                           {Array.isArray(r?.skill_tags) && r.skill_tags.length > 0
-                            ? r.skill_tags.map((t: any) => `${t.tag}(${t.confidence?.toFixed?.(2) ?? ''})`).join(', ')
+                            ? r.skill_tags.map((t: any) => typeof t === 'string' ? t : `${t.tag}`).join(', ')
                             : '-'}
                         </div>
-                        <div className="whitespace-pre-wrap">
+                        <div>
                           <strong className="text-xs text-muted-foreground">풀이 요약:</strong>{' '}
-                          {r?.solution_summary || '-'}
+                          {r?.solution_summary ? <MathText text={r.solution_summary} /> : '-'}
                         </div>
-                        <div className="whitespace-pre-wrap">
+                        <div>
                           <strong className="text-xs text-muted-foreground">오답 포인트:</strong>{' '}
-                          {r?.pitfall || '-'}
+                          {r?.pitfall ? <MathText text={r.pitfall} /> : '-'}
                         </div>
+                        {Array.isArray(r?.solution_steps) && r.solution_steps.length > 0 && (
+                          <div>
+                            <strong className="text-xs text-muted-foreground">단계별 풀이:</strong>
+                            <ol className="mt-1 ml-4 list-decimal space-y-1">
+                              {r.solution_steps.map((s: any, i: number) => (
+                                <li key={i} className="text-xs">
+                                  <span className="font-medium">Step {s.step}</span>
+                                  {s.description && <span className="text-muted-foreground"> — <MathText text={s.description} /></span>}
+                                </li>
+                              ))}
+                            </ol>
+                          </div>
+                        )}
+                        {Array.isArray(r?.common_mistakes) && r.common_mistakes.length > 0 && (
+                          <div>
+                            <strong className="text-xs text-muted-foreground">자주 하는 실수:</strong>
+                            <ul className="mt-1 ml-4 list-disc space-y-1">
+                              {r.common_mistakes.map((m: any, i: number) => {
+                                const txt = typeof m === 'string' ? m : (m.text ?? m.id ?? JSON.stringify(m));
+                                return <li key={i} className="text-xs"><MathText text={txt} /></li>;
+                              })}
+                            </ul>
+                          </div>
+                        )}
+                        {r?._validation && (
+                          <div className={`mt-1 text-xs rounded px-2 py-1 ${
+                            r._validation.status === 'ok' ? 'bg-green-50 text-green-700'
+                            : r._validation.status === 'warning' ? 'bg-yellow-50 text-yellow-700'
+                            : 'bg-red-50 text-red-700'
+                          }`}>
+                            <strong>검증:</strong> {r._validation.status} (점수 {(r._validation.score * 100).toFixed(0)}점)
+                            {r._validation.issues?.length > 0 && (
+                              <ul className="mt-1 ml-3 list-disc">
+                                {r._validation.issues.map((iss: any, i: number) => (
+                                  <li key={i}>[{iss.severity}] {iss.field}: {iss.reason}{iss.applied ? ' ✓수정됨' : ''}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

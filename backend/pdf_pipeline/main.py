@@ -1103,6 +1103,120 @@ async def _run_solution_upload_and_tag(
         raise
 
 
+# 재태깅 진행 상태 메모리 캐시 {solution_job_id: {number: status}}
+retag_status: Dict[str, Dict[int, str]] = {}
+
+
+class RetagRequest(BaseModel):
+    numbers: list[int]  # 재태깅할 문제 번호 목록
+
+
+@app.post("/api/solution/{solution_job_id}/retag")
+async def retag_problems(solution_job_id: str, body: RetagRequest, background_tasks: BackgroundTasks):
+    """특정 문제 번호만 재태깅. 진행 상태는 GET /api/solution/{id}/retag-status 로 폴링."""
+    if solution_job_id not in solution_jobs:
+        job = _hydrate_solution_job(solution_job_id)
+    else:
+        job = solution_jobs[solution_job_id]
+    if not job:
+        raise HTTPException(status_code=404, detail="solution job 없음")
+    if not body.numbers:
+        raise HTTPException(status_code=400, detail="numbers 필수")
+
+    retag_status[solution_job_id] = {n: "pending" for n in body.numbers}
+    background_tasks.add_task(_run_retag, solution_job_id, body.numbers)
+    return {"queued": body.numbers}
+
+
+@app.get("/api/solution/{solution_job_id}/retag-status")
+async def get_retag_status(solution_job_id: str):
+    """재태깅 진행 상태 반환. {number: 'pending'|'tagging'|'done'|'error'}"""
+    return retag_status.get(solution_job_id, {})
+
+
+async def _run_retag(solution_job_id: str, numbers: list[int]):
+    from pipeline.solution_tagger import tag_all_solutions
+    from pipeline.solution_parser import merge_cross_page_solutions
+    from storage.supabase_client import update_solution_job
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    if solution_job_id not in solution_jobs:
+        _hydrate_solution_job(solution_job_id)
+    job = solution_jobs.get(solution_job_id, {})
+    fragments = job.get("fragments", {})
+    pdf_path = job.get("file_path", "")
+    target_set = set(numbers)
+
+    try:
+        loop = asyncio.get_event_loop()
+
+        # 병합 이미지 생성
+        merged_dir = str(Path(pdf_path).parent / "solution_merged")
+        merged_images = await loop.run_in_executor(
+            None, merge_cross_page_solutions, fragments, merged_dir, 10, pdf_path
+        )
+
+        # 문제 이미지 로컬 경로
+        problem_local_paths: Dict[int, str] = {}
+        try:
+            from storage.supabase_client import get_solution_job as _gsj
+            from storage.image_uploader import download_image_to_temp
+            raw = _gsj(solution_job_id)
+            problem_image_urls = (raw.get("progress") or {}).get("problem_image_urls") or {}
+            for num, url in problem_image_urls.items():
+                if int(num) in target_set and url:
+                    tmp = download_image_to_temp(url)
+                    if tmp:
+                        problem_local_paths[int(num)] = tmp
+        except Exception:
+            pass
+
+        def _progress(processed, total, current_number):
+            if current_number in target_set:
+                retag_status[solution_job_id][current_number] = "tagging"
+
+        def _tag_runner():
+            return tag_all_solutions(
+                merged_images,
+                _progress,
+                numbers_filter=target_set,
+                problem_images=problem_local_paths or None,
+            )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            new_tag_results = await loop.run_in_executor(executor, _tag_runner)
+
+        for p in problem_local_paths.values():
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+
+        def _strip_raw(d: dict) -> dict:
+            return {k: v for k, v in d.items() if k != "raw_response"}
+
+        slim_new = {num: _strip_raw(r) for num, r in new_tag_results.items() if isinstance(r, dict)}
+
+        # 기존 tag_results에 병합
+        existing = dict(job.get("tag_results") or {})
+        existing.update(slim_new)
+        solution_jobs[solution_job_id]["tag_results"] = existing
+
+        base = dict(solution_jobs[solution_job_id].get("progress") or {})
+        base["tag_results"] = existing
+        solution_jobs[solution_job_id]["progress"] = base
+        update_solution_job(solution_job_id, status="done", progress=base)
+
+        for n in numbers:
+            retag_status[solution_job_id][n] = "done"
+
+    except Exception as e:
+        for n in numbers:
+            retag_status[solution_job_id][n] = "error"
+        logger.error(f"재태깅 오류: {e}")
+
+
 @app.get("/api/staging/{staging_id}/tags")
 async def get_staging_tags(staging_id: str):
     """staging 문제의 태그 목록 조회"""

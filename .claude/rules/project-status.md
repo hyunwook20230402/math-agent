@@ -29,7 +29,7 @@
 | 시간대 | VL Provider | Embed Provider |
 |--------|-------------|----------------|
 | 평일 09-19 KST (서버) | Ollama Gemma3 27B | bge-m3 (Ollama) |
-| 그 외 (집) | Gemini → OpenAI fallback | OpenAI text-embedding-3-small |
+| 그 외 (집) | OpenAI gpt-4o | OpenAI text-embedding-3-small |
 
 - 환경변수 `VL_PROVIDER` / `EMBED_PROVIDER` 로 강제 override 가능
 - 서버 Ollama 모델: `gemma3:27b` (17GB, RTX 4090 24GB)

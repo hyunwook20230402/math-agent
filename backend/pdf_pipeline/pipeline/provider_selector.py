@@ -1,9 +1,9 @@
 """Provider 시간대 기반 auto-select + 환경변수 override
 
 운영 전략 (2026-04-19 확정):
-  평일 09:00~19:00 KST (서버 근무)  → ollama  (Gemma 4 / bge-m3)
-  그 외 시간 (집)                   → gemini → openai fallback (VL)
-                                      openai                    (embed)
+  평일 09:00~19:00 KST (서버 근무)  → ollama  (Gemma3 27B / bge-m3)
+  그 외 시간 (집)                   → openai  (VL + embed)
+  (Gemini free tier 하루 20회 한도로 실용성 없어 제거)
 
 환경변수:
   VL_PROVIDER, EMBED_PROVIDER — 비어 있으면 시간대 기반 default 사용
@@ -30,7 +30,7 @@ def select_vl_provider() -> str:
   forced = os.environ.get("VL_PROVIDER", "").strip().lower()
   if forced:
     return forced
-  return "ollama" if is_work_hours() else "gemini"
+  return "ollama" if is_work_hours() else "openai"
 
 
 def select_embed_provider() -> str:

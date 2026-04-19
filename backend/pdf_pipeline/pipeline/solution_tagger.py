@@ -54,10 +54,11 @@ Rules:
 - skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석")
 - solution_summary: max 20 words IN KOREAN
 - pitfall: max 20 words IN KOREAN
-- solution_steps: max 5 steps, each description max 15 words IN KOREAN
+- solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
 All text fields (concept_tags, skill_tags, solution_summary, pitfall, solution_steps.description, common_mistakes.text) MUST be in Korean.
+For any mathematical expression in text fields, wrap it in \( ... \). Examples: \(f(x)\), \(x^2\), \(\frac{a}{b}\), \(\log_5 3\), \(a_n\).
 Output valid JSON only."""
 
 _TAGGING_PROMPT_WITH_PROBLEM_AND_SOLUTION = """You are analyzing a Korean high school math problem and its solution.
@@ -74,10 +75,11 @@ Rules:
 - skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석") — techniques used in the solution
 - solution_summary: max 20 words IN KOREAN — describe the core approach
 - pitfall: max 20 words IN KOREAN — the most likely mistake given the problem's trap
-- solution_steps: max 5 steps, each description max 15 words IN KOREAN
+- solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
 All text fields MUST be in Korean.
+For any mathematical expression in text fields, wrap it in \( ... \). Examples: \(f(x)\), \(x^2\), \(\frac{a}{b}\), \(\log_5 3\), \(a_n\).
 Output valid JSON only."""
 
 _TAGGING_PROMPT_NO_SOLUTION = """You are analyzing a Korean high school math problem image (no solution shown).
@@ -92,6 +94,7 @@ Rules:
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
 All text fields MUST be in Korean.
+For any mathematical expression in text fields, wrap it in \( ... \). Examples: \(f(x)\), \(x^2\), \(\frac{a}{b}\), \(\log_5 3\), \(a_n\).
 Output valid JSON only."""
 
 
@@ -153,8 +156,9 @@ def _apply_suggested_fixes(
 ) -> None:
   """validator 의 suggested_fixes 를 조건부로 tag_result 에 반영.
 
-  - concept_tags / skill_tags: tag_normalizer 로 canonical 매칭 성공한 항목만 덮어쓰기
+  - concept_tags / skill_tags: suggested_fixes 있으면 severity 무관 교체 (low 포함)
   - unit: match_unit 재매칭 후 신규 score 가 기존보다 높을 때만 덮어쓰기
+  - difficulty_score: medium/high 이슈 + suggested_fixes 있을 때 반영
   - 원본은 validation["original_values"] 에 보존
   - 덮어쓴 issue 는 applied=True 플래그
   """
@@ -162,42 +166,68 @@ def _apply_suggested_fixes(
   if status not in ("warning", "reject"):
     return
   fixes = validation.get("suggested_fixes") or {}
-  if not fixes:
-    return
 
   original = {
     "unit": tag_result.get("unit", ""),
     "concept_tags": list(tag_result.get("concept_tags", [])),
     "skill_tags": list(tag_result.get("skill_tags", [])),
+    "difficulty_score": tag_result.get("difficulty_score"),
   }
 
   issues = validation.get("issues", []) or []
 
-  def _any_medium_plus(field_names: set[str]) -> list[dict]:
+  def _any_severity(field_names: set[str], min_severity: str = "low") -> list[dict]:
+    levels = {"low": 0, "medium": 1, "high": 2}
+    min_lvl = levels.get(min_severity, 0)
     return [
       i for i in issues
-      if i.get("field") in field_names and i.get("severity") in ("medium", "high")
+      if i.get("field") in field_names and levels.get(i.get("severity", "low"), 0) >= min_lvl
     ]
 
   applied_fields: set[str] = set()
 
-  # concept_tags
+  if not fixes:
+    # suggested_fixes 없어도 difficulty_score medium/high 이슈는 이슈 텍스트에서 숫자 파싱 시도
+    for iss in issues:
+      if iss.get("field") == "difficulty_score" and iss.get("severity") in ("medium", "high"):
+        import re as _re
+        m = _re.search(r'\b([1-9]|10)\b(?=\s*(?:점|로|이|으로|가)\s*(?:적절|조정|변경|평가))', iss.get("reason", ""))
+        if m:
+          tag_result["difficulty_score"] = int(m.group(1))
+          iss["applied"] = True
+          applied_fields.add("difficulty_score")
+          logger.info(f"difficulty_score 이슈에서 파싱 반영: {m.group(1)}")
+    return
+
+  # concept_tags — low 포함 suggested_fixes 있으면 교체
   suggested_concepts = fixes.get("concept_tags") or []
-  concept_issues = _any_medium_plus({"concept_tags", "concept_tags/skill_tags"})
+  concept_issues = _any_severity({"concept_tags", "concept_tags/skill_tags"}, "low")
   if suggested_concepts and concept_issues:
     normalized = normalize_tags(suggested_concepts, "concept", concept_embeddings, threshold=0.65)
     if normalized:
       tag_result["concept_tags"] = normalized
       applied_fields.add("concept_tags")
 
-  # skill_tags
+  # skill_tags — low 포함 suggested_fixes 있으면 교체
   suggested_skills = fixes.get("skill_tags") or []
-  skill_issues = _any_medium_plus({"skill_tags", "concept_tags/skill_tags"})
+  skill_issues = _any_severity({"skill_tags", "concept_tags/skill_tags"}, "low")
   if suggested_skills and skill_issues:
     normalized = normalize_tags(suggested_skills, "skill", skill_embeddings, threshold=0.65)
     if normalized:
       tag_result["skill_tags"] = normalized
       applied_fields.add("skill_tags")
+
+  # difficulty_score — medium/high 이슈 있고 suggested_fixes에 명시된 경우 반영
+  diff_issues = _any_severity({"difficulty_score"}, "medium")
+  if diff_issues:
+    import re as _re
+    for iss in diff_issues:
+      m = _re.search(r'\b([1-9]|10)\b(?=\s*(?:점|로|이|으로|가)\s*(?:적절|조정|변경|평가))', iss.get("reason", ""))
+      if m:
+        tag_result["difficulty_score"] = int(m.group(1))
+        applied_fields.add("difficulty_score")
+        logger.info(f"difficulty_score 조정: {original['difficulty_score']} → {m.group(1)}")
+        break
 
   # unit — validator 가 직접 제안한 unit path 또는 수정된 concept/skill 로 재매칭
   if leaf_embeddings is not None:
