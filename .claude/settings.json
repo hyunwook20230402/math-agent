@@ -10,11 +10,33 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/check_path_hook.py write"
+            "command": "bash -c 'if echo \"$CLAUDE_TOOL_INPUT\" | grep -q -- \"--no-verify\"; then echo \"BLOCK: --no-verify 사용 금지 (git hook 우회 불가)\"; exit 2; fi'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'CMD=$(echo \"$CLAUDE_TOOL_INPUT\" | jq -r .command 2>/dev/null || echo \"\"); if echo \"$CMD\" | grep -qiE \"(rm |rm -|del |move |mv )\"; then SAFE=\"/c/Users/user/workspaces/math\"; if echo \"$CMD\" | grep -oE \"(/[a-zA-Z0-9_./ -]+|[A-Z]:\\\\[^ ]+)\" | grep -qvE \"^($SAFE|C:\\\\\\\\Users\\\\\\\\user\\\\\\\\workspaces\\\\\\\\math)\"; then echo \"BLOCK: math/ 프로젝트 외부 경로 삭제/이동 금지\"; exit 2; fi; fi'"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/user/workspaces/math/.claude/check_path_hook.py\" 수정"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/user/workspaces/math/.claude/check_path_hook.py\" 쓰기"
           }
         ]
       }

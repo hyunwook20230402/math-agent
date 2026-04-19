@@ -58,8 +58,8 @@ math/
 - Python 3.11, FastAPI (포트 8000)
 - EasyOCR + Surya OCR (문제 크롭)
 - YOLO (모의고사 문제 감지)
-- Ollama — Qwen2.5-VL 7B (해설지 AI 태깅, RTX 4070 8GB)
-- bge-m3 (임베딩)
+- VL 모델 — Ollama Gemma3 27B (서버 RTX 4090 24GB) / Gemini / OpenAI — provider_selector 로 시간대 자동 선택
+- bge-m3 / OpenAI text-embedding-3-small (임베딩, provider 분기)
 
 ---
 
@@ -163,12 +163,13 @@ import type { Database } from '@shared/types/database';
 - [x] PDF 교재 문제 자동 추출 (쎈 OCR 기반, 모의고사 YOLO 기반)
 - [x] bbox 편집기 (크롭 검수 UI, 수동 편집 전용)
 - [x] 해설지 PDF 파이프라인 (정답 파싱 + 해설 크롭 + AI 태깅)
-- [x] 문제별 개념/스킬 태그 (problem_tags 테이블, Qwen2.5-VL)
+- [x] 문제별 개념/스킬 태그 (problem_tags 테이블, VL 모델 + bge-m3 정규화)
 - [x] 해설 태깅 샘플/이어서 모드 (4개 먼저 → 나머지 26개)
-- [x] 4단 단원 계통도 (공통수학1/2, 대수, 미적분I, 확률과 통계)
-- [x] unit/difficulty/pitfall 자동 추출 + 환각 차단 (`validate_unit`)
+- [x] 단원 계통도 (공통수학1/2, 대수, 미적분I, 확률과 통계 — concepts 375 / skills 359 / units 15)
+- [x] unit 자동 매핑 (bge-m3 cosine, `unit_matcher.py`) + difficulty/pitfall/solution_steps/common_mistakes AI 추출
+- [x] 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크)
 - [x] SolutionReview 같은 번호 묶기 + 그룹 확정 UI
-- [x] Supabase 마이그레이션 006 까지 적용 (`solution_jobs`, `problem_tags`, `problem_staging.pitfall`)
+- [x] Supabase 마이그레이션 008 까지 적용 (`solution_steps`, `common_mistakes` JSONB)
 
 ## 향후 작업
 

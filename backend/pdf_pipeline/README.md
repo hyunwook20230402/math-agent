@@ -3,9 +3,10 @@
 수학 교재 PDF에서 문제를 자동 추출해서 검수 후 Supabase `problems` 테이블에 저장하는 백엔드.
 
 ## 환경 요구사항
-- Python 3.10+
-- RTX 4070 8GB VRAM
-- Ollama (기본 VL 모델: Gemma3 27B — 서버 RTX 4090 24GB 기준. 로컬은 provider_selector 가 Gemini / OpenAI 로 auto-select)
+- Python 3.11+
+- 서버: RTX 4090 24GB — Ollama Gemma3 27B (vision, 17GB)
+- 로컬(집): Gemini API 또는 OpenAI API — provider_selector 가 시간대 기반 자동 선택
+- 임베딩: 서버 bge-m3 (Ollama) / 로컬 text-embedding-3-small (OpenAI)
 
 ## 설정
 
@@ -56,23 +57,41 @@ uvicorn main:app --reload --port 8000
 pdf_pipeline/
 ├── main.py                    # FastAPI 서버 (포트 8000)
 ├── config.py                  # 환경변수
+├── ARCHITECTURE.md            # AI 튜터 데이터 파이프라인 전체 구조 ← 읽어볼 것
 ├── requirements.txt
+├── data/
+│   └── concept_taxonomy.json  # concepts 375 / skills 359 / units 15 / bugs 14
 ├── pipeline/
-│   ├── file_converter.py      # PDF → 텍스트/이미지 (PyMuPDF)
-│   ├── text_splitter.py       # 정규식 문제 분리
-│   └── structurizer.py        # VL 모델 (Ollama / Gemini / OpenAI) 구조화
+│   ├── file_converter.py      # PDF → 페이지 이미지 (PyMuPDF)
+│   ├── image_cropper.py       # 문제 박스 크롭 (OpenCV, 한글 경로 대응)
+│   ├── ocr_engine.py          # EasyOCR 래퍼
+│   ├── yolo_detector.py       # 모의고사 YOLO 추론
+│   ├── solution_parser.py     # 해설 크롭 + 정답 파싱 + 페이지 걸침 병합
+│   ├── vl_providers.py        # VL provider 분기 (Ollama/Gemini/OpenAI + fallback)
+│   ├── provider_selector.py   # 시간대 기반 provider 자동 선택
+│   ├── solution_tagger.py     # VL 태깅 + tag_normalizer/unit_matcher 후처리
+│   ├── tag_normalizer.py      # 태그 → canonical 매칭 (bge-m3 cosine ≥ 0.65)
+│   ├── unit_matcher.py        # 태그 → units leaf 경로 매핑 (bge-m3)
+│   ├── tag_validator.py       # 3-layer 태깅 검증 에이전트
+│   ├── embedder.py            # 임베딩 (Ollama bge-m3 / OpenAI 3-small)
+│   └── solution_matcher.py    # 문제 ↔ 해설 번호 매칭
 └── storage/
-    └── supabase_client.py     # staging 테이블 CRUD
+    └── supabase_client.py     # problem_staging / solution_jobs CRUD
 ```
 
 ## 처리 흐름
 
 ```
-PDF 업로드 → 텍스트 추출 (PyMuPDF) → 문제 분리 (정규식)
-          → VL 모델 구조화 (Ollama Gemma3 / Gemini / OpenAI — provider_selector) → problem_staging INSERT
-          → CMS 검수 UI → problems 테이블 최종 등록
+문제 PDF → OCR/YOLO 크롭 → problem_staging → CMS 검수 → problems 테이블
+
+해설 PDF → 페이지 이미지 → 걸침 병합 → VL 태깅
+         → tag_normalizer (canonical) → unit_matcher (단원) → tag_validator (검증)
+         → problem_staging (solution_steps/common_mistakes 포함) → problem_tags
+         → CMS 검수 → problems 테이블
 ```
 
+상세 구조는 `ARCHITECTURE.md` 참조.
+
 ## 향후 추가 예정
-- **3단계**: 이미지형 PDF — Surya OCR + Nougat 수식 인식
-- **4단계**: HWP 지원 — pyhwp + LibreOffice headless
+- DeepTutor AI 튜터링 (`backend/deeptutor/` — 현재 스켈레톤만)
+  - solution_steps 단계별 힌트, common_mistakes 오답 진단, problem_tags 유사 문제 추천

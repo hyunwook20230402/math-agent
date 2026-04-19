@@ -47,13 +47,27 @@ curl -X POST "http://localhost:8000/solutions/<id>/upload-and-tag?mode=continue"
 
 적용 이후 상태(`status='done'`)면 staging 도 확인:
 ```sql
-SELECT problem_number, match_confidence, solution_summary IS NOT NULL AS has_summary
+SELECT problem_number, match_confidence, solution_summary IS NOT NULL AS has_summary,
+       validation_status, validation_score
 FROM problem_staging
 WHERE solution_job_id = '<job_id>' AND match_confidence < 0.5
 ORDER BY problem_number;
 ```
 
 `confidence < 0.5` 행이 있으면 "번호 매칭 실패 or 해설 이미지 없음 — SolutionReview 에서 수동 묶기 필요" 로 안내.
+
+### 5. 태깅 품질 경고 (validation_status)
+
+```sql
+SELECT problem_number, validation_status, validation_score,
+       validation_issues
+FROM problem_staging
+WHERE solution_job_id = '<job_id>'
+  AND validation_status IN ('warning', 'reject')
+ORDER BY validation_score ASC;
+```
+
+`reject` 행은 재태깅 권장. `warning` 은 수동 확인 후 판단. `validation_issues` 에서 field/reason/severity 로 원인 파악.
 
 ### 5. 판단 기준
 

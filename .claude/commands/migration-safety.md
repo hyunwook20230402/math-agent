@@ -55,6 +55,6 @@ mcp__supabase__apply_migration
 
 ## 참고
 
-- 현재 적용 상태: 006 (`problem_staging.pitfall`)
+- 현재 적용 상태: 008 (`solution_steps`, `common_mistakes` JSONB — problems + problem_staging)
 - 마이그레이션 히스토리: `supabase/migrations/`
 - DB 규칙: `.claude/rules/db-conventions.md`

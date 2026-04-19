@@ -23,11 +23,11 @@ CMS 는 `apps/cms/src/pages/SolutionReview.tsx` 에서 이 흐름을 UI 로 제�
 
 ## 실패 시 체크리스트
 
-- **Ollama 미기동** — `ollama serve` 로 띄워두고 Qwen2.5-VL 모델 pull 돼있는지 (`ollama list`).
+- **VL provider 확인** — 서버(업무시간): `ollama list` 에 `gemma3:27b` 있어야 함. 로컬(집): `GEMINI_API_KEY` 또는 `OPENAI_API_KEY` 환경변수 필요 (`VL_PROVIDER` 로 강제 가능).
 - **Supabase 키 누락** — `.env` 의 `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
 - **UPLOAD_DIR 불일치** — 업로드 파일이 안 보이면 `.env` 의 `UPLOAD_DIR` 가 실제 디렉토리 가리키는지 확인 (보통 `backend/pdf_pipeline/uploads`).
-- **VRAM OOM** — YOLO/Qwen 동시 실행 금지. 각 단계가 독립 요청으로 쪼개진 이유.
-- **마이그레이션** — `problem_staging.pitfall`, `solution_jobs` 컬럼 필요. 006 까지 적용 상태여야 함.
+- **VRAM OOM** — YOLO/VL 모델 동시 실행 금지. 각 단계가 독립 요청으로 쪼개진 이유.
+- **마이그레이션** — `solution_steps`, `common_mistakes` JSONB 컬럼 필요. 008 까지 적용 상태여야 함.
 
 ## 참고
 

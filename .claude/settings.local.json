@@ -7,120 +7,40 @@
       "Bash(git *)",
       "Bash(python *)",
       "Bash(pip install:*)",
-      "Bash(pip show:*)",
-      "Bash(npx tsc:*)",
-      "Bash(npx --prefix apps/cms tsc --noEmit)",
-      "Bash(grep -E \"\\\\.\\(tsx?|json\\)$\")",
-      "Bash(npx vite:*)",
-      "Bash(netstat -ano)",
-      "Bash(node_modules/.bin/tsc --noEmit)",
-      "Bash(node_modules/.bin/tsc --project apps/cms/tsconfig.json --noEmit)",
-      "Bash(echo \"exit: $?\")",
-      "Bash(cp dataset/images/train/exam_2026_page_03.png dataset/images/val/)",
-      "Bash(cp dataset/images/train/exam_2026_page_07.png dataset/images/val/)",
-      "Bash(cp dataset/images/train/exam_2026_page_11.png dataset/images/val/)",
-      "Bash(cp dataset/labels/train/exam_2026_page_03.txt dataset/labels/val/)",
-      "Bash(cp dataset/labels/train/exam_2026_page_07.txt dataset/labels/val/)",
-      "Bash(cp images/train/exam_2021_page_04.png images/val/)",
-      "Bash(cp images/train/exam_2021_page_08.png images/val/)",
-      "Bash(cp images/train/exam_odd_page_03.png images/val/)",
-      "Bash(cp images/train/exam_odd_page_07.png images/val/)",
-      "Bash(cp images/train/exam_odd_page_15.png images/val/)",
-      "Bash(curl:*)",
-      "Bash(uvicorn main:app --host 0.0.0.0 --port 8000)",
-      "Bash(taskkill //F //PID 30356)",
-      "Bash(venv/Scripts/pip install:*)",
-      "Bash(venv/Scripts/python:*)",
-      "Bash(taskkill:*)",
-      "Bash(venv/Scripts/uvicorn main:app --host 0.0.0.0 --port 8000)",
-      "Read(//c/tmp/pdf_pipeline//**)",
-      "Read(//c/tmp/pdf_pipeline/**)",
-      "Bash(../../venv/Scripts/python manual_labels.py)",
-      "Bash(../../venv/Scripts/python manual_labels_2021.py)",
-      "Bash(../../venv/Scripts/python manual_labels_odd.py)",
-      "Bash(\"/c/Users/user/workspaces/math/backend/pdf_pipeline/venv/Scripts/pip.exe\" install:*)",
-      "Bash(..\\\\venv\\\\Scripts\\\\python manual_labels_2021.py)",
-      "Bash(..\\\\venv\\\\Scripts\\\\python manual_labels.py)",
-      "Bash(..\\\\venv\\\\Scripts\\\\python manual_labels_odd.py)",
-      "Bash(\"C:\\\\Users\\\\user\\\\workspaces\\\\math\\\\backend\\\\pdf_pipeline\\\\venv\\\\Scripts\\\\python.exe\" manual_labels_2021.py)",
-      "Bash(\"C:\\\\Users\\\\user\\\\workspaces\\\\math\\\\backend\\\\pdf_pipeline\\\\venv\\\\Scripts\\\\python.exe\" manual_labels.py)",
-      "Bash(\"C:\\\\Users\\\\user\\\\workspaces\\\\math\\\\backend\\\\pdf_pipeline\\\\venv\\\\Scripts\\\\python.exe\" manual_labels_odd.py)",
-      "Bash(\"C:\\\\Users\\\\user\\\\workspaces\\\\math\\\\backend\\\\pdf_pipeline\\\\venv\\\\Scripts\\\\python.exe\" train.py)",
-      "Bash(venv\\\\Scripts\\\\pip install:*)",
-      "Bash(C:\\\\Users\\\\user\\\\workspaces\\\\math\\\\backend\\\\pdf_pipeline\\\\venv\\\\Scripts\\\\pip.exe install:*)",
-      "Bash(/c/Users/user/workspaces/math/backend/pdf_pipeline/venv/Scripts/python.exe test_crop.py \"C:/Users/user/workspaces/math/2교시_수학영역_문제지_23.pdf\")",
-      "Bash(ls:*)",
-      "Bash(export CLAUDE_TOOL_INPUT='{\"file_path\":\"C:\\\\\\\\Users\\\\\\\\user\\\\\\\\.claude\\\\\\\\projects\\\\\\\\C--Users-user-workspaces-math\\\\\\\\memory\\\\\\\\test_hook.md\",\"content\":\"test\"}')",
-      "Bash(/c/Users/user/workspaces/math/backend/pdf_pipeline/venv/Scripts/python.exe:*)",
-      "Bash(dir:*)",
-      "Bash(start python:*)",
       "Bash(pip uninstall:*)",
-      "Bash(../venv/Scripts/python bbox_tool_new.py)",
-      "Bash(../venv/Scripts/python -c \"import cv2; print\\(cv2.__version__\\); print\\(cv2.getBuildInformation\\(\\)[:200]\\)\")",
-      "Bash(../venv/Scripts/python -c \"import cv2; info = cv2.getBuildInformation\\(\\); print\\([l for l in info.split\\('\\\\n'\\) if 'GUI' in l or 'Win32' in l or 'GTK' in l or 'Qt' in l]\\)\")",
-      "Bash(../venv/Scripts/python -c ':*)",
-      "Bash(../venv/Scripts/python train_finetune.py)",
-      "Bash(grep -v \"^$\")",
-      "Bash(xargs grep:*)",
-      "Bash(grep -n \"PdfUploadDialog\\\\|textbook\" /c/Users/user/workspaces/math/apps/cms/src/pages/*.tsx)",
-      "Bash(echo \"EXIT:$?\")",
+      "Bash(pip show:*)",
       "Bash(pip check:*)",
-      "Bash(du -sh backend/pdf_pipeline/yolo_training/*/)",
+      "Bash(venv/Scripts/python.exe *)",
+      "Bash(venv/Scripts/pip install:*)",
+      "Bash(venv/Scripts/uvicorn *)",
+      "Bash(uvicorn main:app *)",
       "Bash(ollama list *)",
-      "Bash(uvicorn main:app --port 8000)",
-      "Read(//c/Users/user/workspaces/math/**)",
-      "Bash(find /c/Users/user/workspaces/math/backend/pdf_pipeline/yolo_training/dataset* -type f -name \"*.png\")",
-      "Bash(grep -E \"\\\\.py$\")",
-      "mcp__supabase__execute_sql",
+      "Bash(ollama pull *)",
+      "Bash(taskkill:*)",
+      "Bash(netstat -ano)",
+      "Bash(ls:*)",
+      "Bash(find *)",
       "Bash(grep *)",
+      "Bash(curl:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite:*)",
+      "Bash(node_modules/.bin/tsc *)",
       "Bash(./node_modules/.bin/tsc --noEmit)",
-      "Bash(../../node_modules/.bin/tsc.cmd --noEmit -p tsconfig.app.json)",
-      "Bash(sort -k6,7)",
-      "Bash(head \"C:/Users/user/workspaces/math/backend/pdf_pipeline/uploads/solutions/dataset/labels/train/\"*.txt)",
-      "Bash(rm -rf \"2021학년도_수능_수리\\(나형\\)_해설\")",
-      "Bash(find dataset *)",
-      "Bash(echo \"{}\")",
+      "Bash(du -sh *)",
+      "Bash(powershell *)",
+      "Bash(sort *)",
+      "Bash(head *)",
+      "Bash(2>/dev/null)",
+      "Read(//c/Users/user/workspaces/math/**)",
+      "Read(//c/tmp/pdf_pipeline/**)",
+      "WebSearch",
+      "WebFetch(domain:ollama.com)",
+      "mcp__supabase__execute_sql",
       "mcp__supabase__list_tables",
       "mcp__supabase__apply_migration",
-      "Bash(ollama pull *)",
-      "Bash(2>/dev/null)",
-      "WebSearch",
-      "Bash(xargs cat *)"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash -c 'if echo \"$CLAUDE_TOOL_INPUT\" | grep -q -- \"--no-verify\"; then echo \"BLOCK: --no-verify 사용 금지 (git hook 우회 불가)\"; exit 2; fi'"
-          },
-          {
-            "type": "command",
-            "command": "bash -c 'CMD=$(echo \"$CLAUDE_TOOL_INPUT\" | jq -r .command 2>/dev/null || echo \"$CLAUDE_TOOL_INPUT\"); if echo \"$CMD\" | grep -qiE \"(rm |rm -|del |move |mv )\"; then SAFE_PATH=\"/c/Users/user/workspaces/math\"; if echo \"$CMD\" | grep -oE \"(/[a-zA-Z0-9_./-]+|[A-Z]:\\\\[^ ]+)\" | grep -qvE \"^($SAFE_PATH|C:\\\\\\\\Users\\\\\\\\user\\\\\\\\workspaces\\\\\\\\math)\"; then echo \"BLOCK: math/ 프로젝트 외부 경로 삭제/이동 금지. 현재 프로젝트 안에서만 작업하세요.\"; exit 2; fi; fi'"
-          }
-        ]
-      },
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"C:/Users/user/workspaces/math/.claude/check_path_hook.py\" 수정"
-          }
-        ]
-      },
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"C:/Users/user/workspaces/math/.claude/check_path_hook.py\" 쓰기"
-          }
-        ]
-      }
+      "mcp__supabase__list_migrations",
+      "mcp__supabase__get_advisors",
+      "mcp__supabase__list_extensions"
     ]
   }
 }
