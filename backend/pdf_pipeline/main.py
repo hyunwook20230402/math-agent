@@ -16,8 +16,7 @@ from pydantic import BaseModel
 
 from config import UPLOAD_DIR
 from pipeline.file_converter import extract_images_from_pdf
-from pipeline.ocr_engine import ocr_detect_boxes, release_reader
-from pipeline.image_cropper import detect_problem_numbers, compute_crop_regions, crop_and_save, detect_footer_y
+from pipeline.image_cropper import crop_and_save
 from pipeline.yolo_detector import load_model as yolo_load, detect_problems as yolo_detect, release_model as yolo_release, model_exists as yolo_model_exists
 from storage.supabase_client import (
     insert_staging_problems,
@@ -64,21 +63,6 @@ def _unique_dir(base: Path, folder_name: str) -> Path:
     return base / f"{folder_name}_{n}"
 
 
-# 교재별 문제 번호 패턴
-PROBLEM_PATTERNS = {
-    "쎈": r"^\d{4}$",          # 0038, 0039...
-    "모의고사": r"^\d{1,2}$",   # 1~30
-    "연산": r"^\d{1,3}$",       # 추후 확인
-    "자작": r"^\d{1,3}$",       # 추후 확인
-}
-
-# 교재별 레이아웃 설정
-PROBLEM_LAYOUTS = {
-    "쎈": "auto",        # 2단 자동 감지
-    "모의고사": "double",  # 항상 2단 (우열 번호 미감지 시에도 mid_x 기준 분할)
-    "연산": "single",
-    "자작": "auto",
-}
 
 app = FastAPI(title="PDF Pipeline API", version="1.0.0")
 
@@ -148,91 +132,57 @@ async def _run_extraction(
 
         loop = asyncio.get_event_loop()
 
-        # 모의고사: YOLO 기반 크롭
-        if category == "모의고사" and yolo_model_exists():
-            from PIL import Image as PILImage
-            from concurrent.futures import ThreadPoolExecutor
-            Path(crop_dir).mkdir(parents=True, exist_ok=True)
+        # YOLO 기반 크롭 (모든 교재 공통)
+        if not yolo_model_exists():
+            raise RuntimeError(f"YOLO 모델이 없습니다. 학습 후 models/ 에 배치하세요.")
 
-            def _run_yolo():
-                model = yolo_load()
-                results = []
-                num = 1
-                # 페이지별 원본 이미지 URL 캐시 (page_num → url)
-                page_image_urls: dict = {}
-                for pi in page_images:
-                    ipath = pi["image_path"]
-                    pnum = pi["page"]
-                    with PILImage.open(ipath) as _img:
-                        pw, ph = _img.size
+        from PIL import Image as PILImage
+        from concurrent.futures import ThreadPoolExecutor
+        Path(crop_dir).mkdir(parents=True, exist_ok=True)
 
-                    # 원본 페이지 이미지 업로드
-                    page_url = upload_page_image(job_id, pnum, ipath)
-                    page_image_urls[pnum] = page_url
+        def _run_yolo():
+            model = yolo_load()
+            results = []
+            num = 1
+            page_image_urls: dict = {}
+            for pi in page_images:
+                ipath = pi["image_path"]
+                pnum = pi["page"]
+                with PILImage.open(ipath) as _img:
+                    pw, ph = _img.size
 
-                    debug_dir = str(Path(crop_dir).parent / "yolo_debug")
-                    dets = yolo_detect(model, ipath, page_width=pw, conf=0.3, start_number=num, debug_dir=debug_dir)
-                    if not dets:
-                        continue
+                page_url = upload_page_image(job_id, pnum, ipath)
+                page_image_urls[pnum] = page_url
 
-                    with PILImage.open(ipath) as img:
-                        for det in dets:
-                            x1, y1, x2, y2 = det["bbox"]
-                            cropped_img = img.crop((x1, y1, x2, y2))
-                            fname = f"page{pnum:03d}_prob{det['number']:03d}.png"
-                            cpath = str(Path(crop_dir) / fname)
-                            cropped_img.save(cpath)
-                            results.append({
-                                "number": det["number"],
-                                "cropped_path": cpath,
-                                "page": pnum,
-                                "bbox": {
-                                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                                    "page_width": pw, "page_height": ph,
-                                },
-                                "source_page_image_url": page_url,
-                            })
-                    num += len(dets)
-
-                yolo_release(model)
-                return results
-
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                all_cropped = await asyncio.get_event_loop().run_in_executor(executor, _run_yolo)
-
-        else:
-            # 기존 OCR 기반 크롭 (쎈 등)
-            pattern = PROBLEM_PATTERNS.get(category, r"\d{3,4}")
-            seen_numbers: set = set()
-
-            for page_info in page_images:
-                img_path = page_info["image_path"]
-                page_num = page_info["page"]
-
-                ocr_results = await loop.run_in_executor(
-                    None, ocr_detect_boxes, img_path
-                )
-
-                from PIL import Image as PILImage
-                img = PILImage.open(img_path)
-                w, h = img.size
-                img.close()
-
-                layout = PROBLEM_LAYOUTS.get(category, "auto")
-                detections = detect_problem_numbers(
-                    ocr_results, pattern, h, w, layout=layout,
-                    skip_numbers=seen_numbers,
-                )
-                seen_numbers.update(d["number"] for d in detections)
-                if not detections:
+                debug_dir = str(Path(crop_dir).parent / "yolo_debug")
+                dets = yolo_detect(model, ipath, page_width=pw, conf=0.3, start_number=num, debug_dir=debug_dir)
+                if not dets:
                     continue
-                footer = detect_footer_y(ocr_results, h)
-                regions = compute_crop_regions(detections, w, h, layout=layout, footer_y=footer, ocr_results=ocr_results)
-                cropped = crop_and_save(img_path, regions, crop_dir, page_num)
-                all_cropped.extend(cropped)
 
-            # OCR VRAM 해제
-            release_reader()
+                with PILImage.open(ipath) as img:
+                    for det in dets:
+                        x1, y1, x2, y2 = det["bbox"]
+                        cropped_img = img.crop((x1, y1, x2, y2))
+                        fname = f"page{pnum:03d}_prob{det['number']:03d}.png"
+                        cpath = str(Path(crop_dir) / fname)
+                        cropped_img.save(cpath)
+                        results.append({
+                            "number": det["number"],
+                            "cropped_path": cpath,
+                            "page": pnum,
+                            "bbox": {
+                                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                                "page_width": pw, "page_height": ph,
+                            },
+                            "source_page_image_url": page_url,
+                        })
+                num += len(dets)
+
+            yolo_release(model)
+            return results
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            all_cropped = await asyncio.get_event_loop().run_in_executor(executor, _run_yolo)
 
         jobs[job_id]["total_problems"] = len(all_cropped)
 
