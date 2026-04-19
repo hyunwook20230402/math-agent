@@ -5,7 +5,7 @@
 ## 환경 요구사항
 - Python 3.10+
 - RTX 4070 8GB VRAM
-- Ollama (Qwen2.5-7B 설치됨)
+- Ollama (기본 VL 모델: Gemma3 27B — 서버 RTX 4090 24GB 기준. 로컬은 provider_selector 가 Gemini / OpenAI 로 auto-select)
 
 ## 설정
 
@@ -60,7 +60,7 @@ pdf_pipeline/
 ├── pipeline/
 │   ├── file_converter.py      # PDF → 텍스트/이미지 (PyMuPDF)
 │   ├── text_splitter.py       # 정규식 문제 분리
-│   └── structurizer.py        # Qwen2.5-7B (Ollama) 구조화
+│   └── structurizer.py        # VL 모델 (Ollama / Gemini / OpenAI) 구조화
 └── storage/
     └── supabase_client.py     # staging 테이블 CRUD
 ```
@@ -69,7 +69,7 @@ pdf_pipeline/
 
 ```
 PDF 업로드 → 텍스트 추출 (PyMuPDF) → 문제 분리 (정규식)
-          → Qwen2.5-7B 구조화 (Ollama) → problem_staging INSERT
+          → VL 모델 구조화 (Ollama Gemma3 / Gemini / OpenAI — provider_selector) → problem_staging INSERT
           → CMS 검수 UI → problems 테이블 최종 등록
 ```
 

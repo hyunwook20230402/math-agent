@@ -8,10 +8,13 @@
 import re
 import logging
 from pathlib import Path
-from PIL import Image
+
+import cv2
+import numpy as np
 
 from pipeline.file_converter import extract_images_from_pdf
 from pipeline.ocr_engine import ocr_detect_boxes
+from pipeline.image_cropper import _imread_unicode, _imwrite_unicode
 
 logger = logging.getLogger(__name__)
 
@@ -184,9 +187,11 @@ def crop_solutions(
         img_path = pi["image_path"]
         page_num = pi["page"]
 
-        img = Image.open(img_path)
-        w, h = img.size
-        img.close()
+        img_arr = _imread_unicode(img_path)
+        if img_arr is None:
+            logger.warning(f"페이지 이미지 읽기 실패: {img_path}")
+            continue
+        h, w = img_arr.shape[:2]
 
         pages_data[page_num] = {
             "page_image_path": img_path,
@@ -246,38 +251,39 @@ def merge_cross_page_solutions(
             merged[num] = resolved_paths[0]
             continue
 
-        # 여러 조각: 너비 통일 후 세로 병합
-        images = [Image.open(p) for p in resolved_paths]
-        images = [_trim_whitespace(img) for img in images]
+        # 여러 조각: 너비 통일 후 세로 병합 (BGR ndarray)
+        images = []
+        for p in resolved_paths:
+            arr = _imread_unicode(p)
+            if arr is None:
+                logger.warning(f"조각 읽기 실패, 건너뜀: {p}")
+                continue
+            images.append(_trim_whitespace(arr))
+        if not images:
+            continue
 
         # 최대 너비 기준으로 모든 조각 너비 통일 (우측 패딩)
-        max_w = max(img.width for img in images)
+        max_w = max(im.shape[1] for im in images)
         padded = []
-        for img in images:
-            if img.width < max_w:
-                canvas = Image.new("RGB", (max_w, img.height), (255, 255, 255))
-                canvas.paste(img, (0, 0))
-                padded.append(canvas)
-            else:
-                padded.append(img.convert("RGB"))
+        for im in images:
+            if im.shape[1] < max_w:
+                pad = np.full((im.shape[0], max_w - im.shape[1], 3), 255, dtype=np.uint8)
+                im = np.concatenate([im, pad], axis=1)
+            padded.append(im)
 
-        # 세로 병합
-        gap = Image.new("RGB", (max_w, gap_px), (255, 255, 255))
-        total_h = sum(img.height for img in padded) + gap_px * (len(padded) - 1)
-        result = Image.new("RGB", (max_w, total_h), (255, 255, 255))
-        y = 0
-        for i, img in enumerate(padded):
-            result.paste(img, (0, y))
-            y += img.height
+        # 세로 병합 (조각 사이 gap_px 흰 여백)
+        gap = np.full((gap_px, max_w, 3), 255, dtype=np.uint8)
+        parts: list[np.ndarray] = []
+        for i, im in enumerate(padded):
+            parts.append(im)
             if i < len(padded) - 1:
-                result.paste(gap, (0, y))
-                y += gap_px
+                parts.append(gap)
+        result = np.concatenate(parts, axis=0)
 
         save_path = str(out_dir / f"merged_{num:04d}.png")
-        result.save(save_path)
-        merged[num] = save_path
-
-        for img in images:
-            img.close()
+        if _imwrite_unicode(save_path, result):
+            merged[num] = save_path
+        else:
+            logger.warning(f"병합 이미지 저장 실패: {save_path}")
 
     return merged

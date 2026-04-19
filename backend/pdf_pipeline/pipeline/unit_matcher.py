@@ -74,8 +74,8 @@ def load_or_build_embeddings(
     taxonomy = json.load(f)
 
   tax_hash = _taxonomy_hash(taxonomy)
-  model_tag = embedder.EMBED_MODEL.replace(":", "_").replace("/", "_")
-  cache_path = cache_dir / f"unit_embeddings_{model_tag}_{tax_hash}.pkl"
+  provider, model_tag = embedder.get_provider_model_tag()
+  cache_path = cache_dir / f"unit_embeddings_{provider}_{model_tag}_{tax_hash}.pkl"
 
   if cache_path.exists():
     try:
@@ -90,7 +90,7 @@ def load_or_build_embeddings(
   leaves = flatten_units(taxonomy)
   if not leaves:
     logger.warning("taxonomy units 비어 있음 — 빈 임베딩 반환")
-    return {"paths": [], "vectors": np.zeros((0, 1024)), "hash": tax_hash}
+    return {"paths": [], "vectors": np.zeros((0, 0)), "hash": tax_hash}
 
   t0 = time.time()
   logger.info(f"unit 임베딩 생성 시작: leaf {len(leaves)}개")

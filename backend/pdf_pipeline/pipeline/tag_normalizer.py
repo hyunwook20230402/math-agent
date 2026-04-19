@@ -64,7 +64,7 @@ def _build_embeddings(section: dict) -> dict:
   if not canonicals or not texts:
     return {
       "canonicals": canonicals,
-      "vectors": np.zeros((0, 1024), dtype=np.float32),
+      "vectors": np.zeros((0, 0), dtype=np.float32),
       "owner_idx": np.zeros((0,), dtype=np.int32),
     }
 
@@ -99,8 +99,8 @@ def load_or_build_section_embeddings(
 
   section = taxonomy.get(section_name, {})
   sec_hash = _section_hash(section)
-  model_tag = embedder.EMBED_MODEL.replace(":", "_").replace("/", "_")
-  cache_path = cache_dir / f"tag_embeddings_{section_name}_{model_tag}_{sec_hash}.pkl"
+  provider, model_tag = embedder.get_provider_model_tag()
+  cache_path = cache_dir / f"tag_embeddings_{section_name}_{provider}_{model_tag}_{sec_hash}.pkl"
 
   if cache_path.exists():
     try:

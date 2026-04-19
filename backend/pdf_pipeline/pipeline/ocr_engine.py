@@ -14,7 +14,7 @@ def get_reader() -> easyocr.Reader:
 
 
 def release_reader():
-    """VRAM 해제 (Qwen 실행 전 호출)"""
+    """VRAM 해제 (VL 모델 실행 전 호출)"""
     global _reader
     if _reader is not None:
         del _reader
@@ -56,6 +56,6 @@ def ocr_pages(page_images: List[Dict]) -> List[Dict]:
             'page': item['page'],
             'text': text,
         })
-    # OCR 완료 후 VRAM 해제 (Qwen 실행 위해)
+    # OCR 완료 후 VRAM 해제 (VL 모델 실행 위해)
     release_reader()
     return pages

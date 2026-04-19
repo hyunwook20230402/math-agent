@@ -573,7 +573,7 @@ structurize_jobs: Dict[str, dict] = {}
 
 
 async def _run_structurize(job_id: str):
-    """승인된 문제들을 비동기로 구조화 (Surya → Qwen → bge-m3)"""
+    """승인된 문제들을 비동기로 구조화 (Surya → VL 모델 → bge-m3)"""
     from storage.supabase_client import get_client
     client = get_client()
 
@@ -611,7 +611,7 @@ async def _run_structurize(job_id: str):
                 None, download_image, prob["image_url"]
             )
 
-            # Surya OCR + Qwen 구조화
+            # Surya OCR + VL 모델 구조화
             structured = await loop.run_in_executor(
                 None, structurize_problem, image_path
             )
@@ -652,7 +652,7 @@ async def _run_structurize(job_id: str):
 
 @app.post("/api/structurize/{job_id}")
 async def start_structurize(job_id: str, background_tasks: BackgroundTasks):
-    """승인된 문제들 구조화 시작 (Surya OCR + Qwen + bge-m3)"""
+    """승인된 문제들 구조화 시작 (Surya OCR + VL 모델 + bge-m3)"""
     if job_id in structurize_jobs and structurize_jobs[job_id]["status"] == "processing":
         raise HTTPException(400, "이미 구조화 진행 중입니다.")
 
@@ -912,7 +912,7 @@ async def _run_solution_upload_and_tag(
     """해설지 병합 + Storage 업로드 + AI 태깅 (백그라운드)
 
     extract 단계에서 크롭 + 정답 추출은 이미 완료되어 있음.
-    여기서는 fragments를 병합하여 최종 해설 이미지 생성 → 업로드 → Qwen 태깅.
+    여기서는 fragments를 병합하여 최종 해설 이미지 생성 → 업로드 → VL 모델 태깅.
 
     Args:
       sample_count: 앞 N개만 태깅 (fresh 모드에서 샘플 검증용). None 이면 대상 전체.
@@ -1001,7 +1001,7 @@ async def _run_solution_upload_and_tag(
         merged_urls.update(new_urls)
         solution_jobs[solution_job_id]["solution_image_urls"] = merged_urls
 
-        # 3. Qwen2.5-VL 태깅 — 타겟 번호만
+        # 3. VL 모델 태깅 — 타겟 번호만
         solution_jobs[solution_job_id]["status"] = "tagging"
         update_solution_job(
             solution_job_id, status="tagging",
@@ -1353,7 +1353,7 @@ async def solution_upload_and_tag(
     sample_count: int | None = None,
     mode: str = "fresh",
 ):
-    """검수 완료 후 병합 + Storage 업로드 + Qwen 태깅 (백그라운드)
+    """검수 완료 후 병합 + Storage 업로드 + VL 모델 태깅 (백그라운드)
 
     쿼리 파라미터:
       sample_count: 앞 N개만 태깅 (예: 4) — 샘플 검증용. None 이면 대상 전체.

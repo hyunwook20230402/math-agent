@@ -1,4 +1,4 @@
-"""크롭 이미지 구조화: Surya OCR + Qwen2.5-7B (Ollama)"""
+"""크롭 이미지 구조화: Surya OCR + Ollama (기본 Gemma3 27B)"""
 import json
 import re
 import tempfile
@@ -75,7 +75,7 @@ def texify_image(image_path: str) -> str:
 
 
 def structurize_with_llm(ocr_text: str, latex_text: str) -> dict:
-  """Qwen2.5-7B (Ollama)로 OCR 결과를 구조화 JSON으로 변환"""
+  """Ollama VL 모델로 OCR 결과를 구조화 JSON으로 변환"""
   prompt = f"""다음은 수학 문제의 OCR 결과입니다. JSON으로 정리하세요.
 
 OCR 텍스트:

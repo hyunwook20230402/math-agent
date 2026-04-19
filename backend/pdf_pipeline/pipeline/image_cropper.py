@@ -1,9 +1,9 @@
 """이미지형 PDF → 문제 번호 감지 + 영역 크롭"""
 import re
+import cv2
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Optional
-from PIL import Image
 
 from pipeline.ocr_engine import ocr_detect_boxes
 
@@ -11,7 +11,28 @@ from pipeline.ocr_engine import ocr_detect_boxes
 _SECTION_HEADER_KEYWORDS = ["유형", "개념", "도전", "코너", "단원", "보기", "Review", "확인 학습"]
 
 
-def _remove_color_sidebar(img: Image.Image, sat_threshold: float = 0.25, val_threshold: int = 100, edge_ratio: float = 0.12) -> Image.Image:
+def _imread_unicode(path: str) -> Optional[np.ndarray]:
+  """Windows 한글 경로 대응 cv2 로드 (BGR ndarray)."""
+  try:
+    arr = np.fromfile(path, dtype=np.uint8)
+    return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+  except Exception:
+    return None
+
+
+def _imwrite_unicode(path: str, img: np.ndarray, ext: str = ".png") -> bool:
+  """Windows 한글 경로 대응 cv2 저장."""
+  ok, buf = cv2.imencode(ext, img)
+  if not ok:
+    return False
+  try:
+    buf.tofile(path)
+    return True
+  except Exception:
+    return False
+
+
+def _remove_color_sidebar(img: np.ndarray, sat_threshold: float = 0.25, val_threshold: int = 100, edge_ratio: float = 0.12) -> np.ndarray:
   """노란/주황 등 컬러 사이드바를 이미지 좌우 가장자리에서 감지하여 제거
 
   쎈 교재 우측의 노란 탭, 또는 좌측 컬러 바 등을 제거.
@@ -19,12 +40,12 @@ def _remove_color_sidebar(img: Image.Image, sat_threshold: float = 0.25, val_thr
   이미지 edge_ratio 범위 내에 연속적으로 존재하면 해당 열 범위를 잘라냄.
 
   Args:
-    img: 크롭된 PIL 이미지
+    img: 크롭된 BGR ndarray
     sat_threshold: 채도 임계값 (0~1)
     val_threshold: 명도 임계값 (0~255)
     edge_ratio: 가장자리로 간주할 이미지 너비 비율
   """
-  arr_rgb = np.array(img.convert("RGB")).astype(np.float32)
+  arr_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
   h, w, _ = arr_rgb.shape
   edge_px = max(5, int(w * edge_ratio))
 
@@ -65,11 +86,11 @@ def _remove_color_sidebar(img: Image.Image, sat_threshold: float = 0.25, val_thr
 
   if left_crop > 0 or right_crop < w:
     if left_crop < right_crop:
-      img = img.crop((left_crop, 0, right_crop, h))
+      img = img[:, left_crop:right_crop]
   return img
 
 
-def _trim_whitespace(img: Image.Image, threshold: int = 235, padding: int = 5) -> Image.Image:
+def _trim_whitespace(img: np.ndarray, threshold: int = 235, padding: int = 5) -> np.ndarray:
   """크롭된 이미지의 빈 여백 제거 (상하좌우)
 
   크롭 후 호출되므로 이미 열 단위로 분리된 상태.
@@ -77,14 +98,16 @@ def _trim_whitespace(img: Image.Image, threshold: int = 235, padding: int = 5) -
   열 콘텐츠 감지 시 이미지 가장자리 2% 범위는 무시.
 
   Args:
-    img: 크롭된 PIL 이미지
+    img: 크롭된 BGR ndarray
     threshold: 이 값 미만이면 콘텐츠 픽셀로 간주 (235 = 약간 더 엄격)
     padding: 내용 주변에 남길 여백 (px)
   """
   # 컬러 사이드바 먼저 제거
   img = _remove_color_sidebar(img)
+  if img.size == 0:
+    return img
 
-  arr = np.array(img.convert("L"))  # 그레이스케일
+  arr = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
   h, w = arr.shape
 
   # 열(세로줄): 어두운 픽셀이 하나라도 있는 열 (가장자리 2% 제외 — 2단 구분선 무시)
@@ -112,7 +135,7 @@ def _trim_whitespace(img: Image.Image, threshold: int = 235, padding: int = 5) -
   bottom = min(h, int(content_rows[-1]) + padding)
 
   if top < bottom and left < right:
-    return img.crop((left, top, right, bottom))
+    return img[top:bottom, left:right]
   return img
 
 
@@ -473,27 +496,29 @@ def crop_and_save(
   out = Path(output_dir)
   out.mkdir(parents=True, exist_ok=True)
 
-  img = Image.open(image_path)
+  img = _imread_unicode(image_path)
+  if img is None:
+    raise ValueError(f"이미지 읽기 실패: {image_path}")
   results = []
 
   for region in regions:
     x1, y1, x2, y2 = region["crop_box"]
     if x2 <= x1 or y2 <= y1:
       continue
-    cropped = img.crop(region["crop_box"])
-    if cropped.width == 0 or cropped.height == 0:
+    cropped = img[y1:y2, x1:x2]
+    if cropped.size == 0:
       continue
     cropped = _trim_whitespace(cropped)
-    if cropped.width == 0 or cropped.height == 0:
+    if cropped.size == 0:
       continue
     filename = f"page_{page_num:03d}_{region['number']:04d}.png"
     save_path = str(out / filename)
-    cropped.save(save_path)
+    if not _imwrite_unicode(save_path, cropped):
+      continue
     results.append({
       "number": region["number"],
       "cropped_path": save_path,
       "page": page_num,
     })
 
-  img.close()
   return results
