@@ -4,7 +4,7 @@
  * 1) 해설지 PDF 업로드
  * 2) 백엔드에서 자동 크롭 + 정답 추출
  * 3) 페이지별 bbox 편집기로 검수
- * 4) "AI 태깅 시작" 버튼 → 병합/업로드/Qwen 태깅 (백그라운드)
+ * 4) "AI 태깅 시작" 버튼 → 병합/업로드/VL 태깅 (백그라운드)
  * 5) 완료 시 매칭 결과를 문제 staging에 적용 → 상세 입력 페이지로 이동
  */
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
@@ -577,7 +577,7 @@ export default function SolutionReview() {
       const label = mode === 'sample' ? '샘플 4개'
         : mode === 'continue' ? '남은 문제 이어서'
         : '전체 태깅';
-      toast({ title: `AI 태깅 시작 (${label})`, description: 'Qwen 태깅 진행 중. 중간 종료 말고 기다려 주세요.' });
+      toast({ title: `AI 태깅 시작 (${label})`, description: 'AI 태깅 진행 중. 중간 종료 말고 기다려 주세요.' });
     } catch (e: any) {
       toast({ title: '오류', description: e.message, variant: 'destructive' });
     }
@@ -916,9 +916,9 @@ export default function SolutionReview() {
               </p>
             )}
             <p className="text-xs text-muted-foreground">
-              Qwen2.5-VL 7B가 해설 이미지를 분석하고 있습니다.
+              VL 모델이 문제+해설 이미지를 분석하고 있습니다.
               <br />
-              로컬 GPU 사용 — 속도는 하드웨어에 따라 다릅니다.
+              시간대에 따라 Gemini / OpenAI / Ollama 자동 선택됩니다.
             </p>
           </div>
         </div>
@@ -1255,12 +1255,29 @@ export default function SolutionReview() {
                           : 'bg-white hover:bg-gray-50'
                       }`}
                     >
-                      <span className="text-base font-medium flex-1 min-w-0 truncate">
+                      <span className="text-base font-medium flex-1 min-w-0 truncate flex items-center gap-1">
                         {isTable ? (
                           <span className="text-gray-600">정답표</span>
                         ) : (
                           <>
-                            <span className="text-red-600">{it.number}번</span>
+                            <input
+                              type="number"
+                              min={1}
+                              value={it.number}
+                              onClick={e => e.stopPropagation()}
+                              onChange={e => {
+                                const val = parseInt(e.target.value, 10);
+                                if (!isNaN(val) && val > 0) {
+                                  updateCurrentPageBboxes(prev => {
+                                    const items = [...prev];
+                                    items[idx] = { ...items[idx], number: val };
+                                    return items;
+                                  });
+                                }
+                              }}
+                              className="w-14 text-red-600 font-medium border border-transparent hover:border-gray-300 focus:border-blue-400 rounded px-1 py-0 text-sm bg-transparent focus:bg-white focus:outline-none"
+                            />
+                            <span className="text-red-600 text-sm">번</span>
                             {it.groupId && <span className="ml-1 text-sm text-purple-600">◆</span>}
                           </>
                         )}
