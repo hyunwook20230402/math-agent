@@ -52,3 +52,23 @@
 ### 데이터 파이프라인 상세
 
 `backend/pdf_pipeline/ARCHITECTURE.md` 참조 — AI 튜터용 데이터 구조 전체 설명.
+
+### YOLO 학습 데이터 경로
+
+현재 UI(CMS) 기반 워크플로우만 사용. GUI 툴은 제거됨(2026-04-19).
+
+| 용도 | 경로 |
+|------|------|
+| 문제 박스 학습 데이터 | `uploads/problems/dataset/images/`, `labels/` |
+| 해설 박스 학습 데이터 | `uploads/solutions/dataset/images/`, `labels/` |
+| 학습 스크립트 | `yolo_training/train_finetune.py`, `train_solution_finetune.py` |
+| 현재 모델 | `yolo_training/runs/exam_finetune_v2/weights/best.pt` |
+
+**제거된 GUI 툴 (복원 필요 시 git log 참조):**
+- `yolo_training/bbox_tool.py`, `bbox_tool_new.py` — tkinter 기반 bbox 수동 라벨링 GUI
+- `apply_user_labels.py` — GUI에서 그린 라벨 → YOLO txt 변환
+- `add_hard_negatives.py` — 오탐 페이지를 hard negative로 추가
+- `labels_new.py`, `labels_output.py` — 구형 라벨 변환 유틸
+- `visualize_labels.py` — 라벨 시각화
+- `promote_model.py` — 학습 완료 모델을 운영 경로로 복사
+- `debug_user_labels/` — GUI 라벨 디버그 이미지들
