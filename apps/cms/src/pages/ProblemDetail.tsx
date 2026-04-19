@@ -22,7 +22,8 @@ interface TagItem {
 interface StagingProblem {
   id: string;
   problem_number: number;
-  difficulty: 'easy' | 'medium' | 'hard';
+  difficulty_score: number | null;
+  difficulty: 'very_easy' | 'easy' | 'medium' | 'hard' | 'very_hard' | null;
   answer_type: 'multiple_choice' | 'short_answer';
   correct_answer: string;
   explanation: string | null;
@@ -162,7 +163,7 @@ const ProblemDetail = () => {
   const selectProblem = async (p: StagingProblem) => {
     setSelectedId(p.id);
     setEditValues({
-      difficulty: p.difficulty,
+      difficulty_score: p.difficulty_score ?? 5,
       answer_type: p.answer_type,
       correct_answer: p.correct_answer || '',
       explanation: p.explanation || '',
@@ -414,15 +415,14 @@ const ProblemDetail = () => {
 
               <div>
                 <Label className="text-sm">난이도</Label>
-                <select
-                  value={editValues.difficulty || 'medium'}
-                  onChange={e => setEditValues(prev => ({ ...prev, difficulty: e.target.value as any }))}
-                  className={`mt-1 ${selectClassName}`}
-                >
-                  <option value="easy">쉬움</option>
-                  <option value="medium">보통</option>
-                  <option value="hard">어려움</option>
-                </select>
+                <Input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={editValues.difficulty_score ?? 5}
+                  onChange={e => setEditValues(prev => ({ ...prev, difficulty_score: Math.min(10, Math.max(1, parseInt(e.target.value) || 5)) }))}
+                  className="mt-1"
+                />
               </div>
 
               <div>

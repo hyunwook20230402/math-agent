@@ -68,7 +68,7 @@ const AddProblemNew = () => {
   const [formData, setFormData] = useState({
     title: '',
     problem_number: 1,
-    difficulty: 'medium' as 'easy' | 'medium' | 'hard',
+    difficulty_score: 5,
     problem_type: 'multiple_choice' as 'multiple_choice' | 'short_answer' | 'essay',
     correct_answer: '',
     explanation: '',
@@ -420,15 +420,6 @@ const AddProblemNew = () => {
 
       console.log('조회된 문제 데이터:', problem);
 
-      // 난이도 변환: 숫자 문자열 → easy/medium/hard
-      let difficulty: 'easy' | 'medium' | 'hard' = 'medium';
-      if (problem.difficulty === 'easy' || problem.difficulty === 'medium' || problem.difficulty === 'hard') {
-        difficulty = problem.difficulty;
-      } else if (/^\d+$/.test(String(problem.difficulty))) {
-        const n = parseInt(String(problem.difficulty));
-        difficulty = n <= 2 ? 'easy' : n >= 4 ? 'hard' : 'medium';
-      }
-
       // 객관식 정답 번호 추출 (1~5 숫자 문자열)
       let correctAnswer = problem.correct_answer || '';
       if (problem.answer_type === 'multiple_choice' && !/^\d+$/.test(correctAnswer)) {
@@ -438,7 +429,7 @@ const AddProblemNew = () => {
       setFormData({
         title: problem.title || '',
         problem_number: problem.problem_number || 1,
-        difficulty,
+        difficulty_score: (problem as any).difficulty_score || 5,
         problem_type: (problem.answer_type as 'multiple_choice' | 'short_answer' | 'essay') || 'multiple_choice',
         correct_answer: correctAnswer,
         explanation: problem.explanation || '',
@@ -619,7 +610,7 @@ const AddProblemNew = () => {
         teacher_id: teacherId,
         title: formData.title,
         problem_number: formData.problem_number || 1,
-        difficulty: formData.difficulty,
+        difficulty_score: formData.difficulty_score,
         category: formData.textbook || '기타',
         unit: unitString,
         image_url: finalImageUrl,
@@ -665,7 +656,7 @@ const AddProblemNew = () => {
         setFormData({
           title: '',
           problem_number: 1,
-          difficulty: 'medium',
+          difficulty_score: 5,
           problem_type: 'multiple_choice',
           correct_answer: '1',
           explanation: '',
@@ -821,16 +812,15 @@ const AddProblemNew = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="difficulty">난이도</Label>
-                  <select
-                    value={formData.difficulty}
-                    onChange={(e) => setFormData({ ...formData, difficulty: e.target.value as 'easy' | 'medium' | 'hard' })}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                  >
-                    <option value="easy">쉬움 (A단계)</option>
-                    <option value="medium">보통 (B단계)</option>
-                    <option value="hard">어려움 (C단계)</option>
-                  </select>
+                  <Label htmlFor="difficulty_score">난이도 (1~10)</Label>
+                  <Input
+                    id="difficulty_score"
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={formData.difficulty_score}
+                    onChange={(e) => setFormData({ ...formData, difficulty_score: Math.min(10, Math.max(1, parseInt(e.target.value) || 5)) })}
+                  />
                 </div>
               </div>
 

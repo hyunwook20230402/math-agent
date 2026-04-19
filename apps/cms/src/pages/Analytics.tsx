@@ -76,9 +76,10 @@ const Analytics = () => {
     return acc;
   }, {} as Record<string, number>);
 
-  // 난이도별 문제 분포
+  // 난이도별 문제 분포 (5단계 GENERATED 라벨 기반)
   const difficultyStats = problems.reduce((acc, problem) => {
-    acc[problem.difficulty] = (acc[problem.difficulty] || 0) + 1;
+    const label = problem.difficulty || 'medium';
+    acc[label] = (acc[label] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
 
@@ -209,26 +210,25 @@ const Analytics = () => {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {Object.entries(difficultyStats).map(([difficulty, count]) => (
-                <div key={difficulty} className="flex items-center justify-between">
-                  <span className="text-sm font-medium">
-                    {difficulty === 'easy' ? '쉬움' : 
-                     difficulty === 'medium' ? '보통' : '어려움'}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-32 bg-gray-200 rounded-full h-2">
-                      <div 
-                        className={`h-2 rounded-full ${
-                          difficulty === 'easy' ? 'bg-green-500' :
-                          difficulty === 'medium' ? 'bg-yellow-500' : 'bg-red-500'
-                        }`}
-                        style={{ width: `${(count / stats.totalProblems) * 100}%` }}
-                      ></div>
+              {(['very_easy', 'easy', 'medium', 'hard', 'very_hard'] as const).map(label => {
+                const count = difficultyStats[label] || 0;
+                const labelKo = { very_easy: '아주 쉬움', easy: '쉬움', medium: '보통', hard: '어려움', very_hard: '최상위' }[label];
+                const color = { very_easy: 'bg-green-500', easy: 'bg-blue-500', medium: 'bg-yellow-500', hard: 'bg-orange-500', very_hard: 'bg-red-500' }[label];
+                return (
+                  <div key={label} className="flex items-center justify-between">
+                    <span className="text-sm font-medium">{labelKo}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-32 bg-gray-200 rounded-full h-2">
+                        <div
+                          className={`h-2 rounded-full ${color}`}
+                          style={{ width: `${stats.totalProblems ? (count / stats.totalProblems) * 100 : 0}%` }}
+                        ></div>
+                      </div>
+                      <span className="text-sm text-muted-foreground w-8">{count}</span>
                     </div>
-                    <span className="text-sm text-muted-foreground w-8">{count}</span>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>

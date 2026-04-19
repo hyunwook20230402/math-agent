@@ -73,6 +73,10 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
   if not tag_result.get("common_mistakes"):
     issues.append(ValidationIssue(field="common_mistakes", reason="common_mistakes 비어 있음", severity="low"))
 
+  difficulty_score = tag_result.get("difficulty_score")
+  if difficulty_score is not None and not (1 <= int(difficulty_score) <= 10):
+    issues.append(ValidationIssue(field="difficulty_score", reason=f"difficulty_score={difficulty_score} 범위 초과 (1~10)", severity="high"))
+
   unit_score = tag_result.get("unit_score", 1.0)
   if unit_score < 0.5:
     issues.append(ValidationIssue(
@@ -165,6 +169,7 @@ _VALIDATION_PROMPT_TEMPLATE = """\
 1. concept_tags / skill_tags 중 명백히 누락된 개념이나 오태깅이 있는가?
 2. unit (단원 경로) 이 이미지 내용과 맞는가?
 3. solution_steps 가 실제 풀이 흐름과 맞는가?
+4. difficulty_score (1~10 정수) 가 문제 난이도와 맞는가? (1-2=아주 쉬움, 3-4=쉬움, 5-6=보통, 7-8=어려움, 9-10=최상위 킬러)
 
 태깅 결과:
 {tag_json}

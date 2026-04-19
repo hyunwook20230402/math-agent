@@ -264,7 +264,7 @@ async def _run_extraction(
                 "source_page": item["page"],
                 "confidence": 0.9 if category == "모의고사" else 0.8,
                 "answer_type": answer_type,
-                "difficulty": "medium",
+                "difficulty_score": 5,
                 "unit": "미분류",
                 "category": category,
                 "bbox": item.get("bbox"),
@@ -511,7 +511,7 @@ async def update_bboxes(job_id: str, body: UpdateBboxesRequest):
                 "source_page": body.page_number,
                 "confidence": 0.9,
                 "answer_type": answer_type,
-                "difficulty": "medium",
+                "difficulty_score": 5,
                 "unit": "미분류",
                 "category": category,
                 "bbox": bbox_data,
@@ -1541,15 +1541,15 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
         # unit/difficulty 는 override > 기존 staging 값이 비어있을 때만 AI 결과로
         existing_row = staging_map.get(sid, {})
         ai_unit = data.get("unit") or None
-        ai_difficulty = data.get("difficulty") or None
+        ai_difficulty_score = data.get("difficulty_score")
 
         unit_val = ov.get("unit")
         if unit_val is None and not (existing_row.get("unit") or "").strip() and ai_unit:
             unit_val = ai_unit
 
-        diff_val = ov.get("difficulty")
-        if diff_val is None and not (existing_row.get("difficulty") or "").strip() and ai_difficulty:
-            diff_val = ai_difficulty
+        diff_score_val = ov.get("difficulty_score")
+        if diff_score_val is None and existing_row.get("difficulty_score") is None and ai_difficulty_score:
+            diff_score_val = ai_difficulty_score
 
         # staging 업데이트
         update_staging_solution(
@@ -1562,7 +1562,7 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
             answer_type=answer_type,
             pitfall=data.get("pitfall"),
             unit=unit_val,
-            difficulty=diff_val,
+            difficulty_score=diff_score_val,
             solution_steps=data.get("solution_steps") or None,
             common_mistakes=data.get("common_mistakes") or None,
         )

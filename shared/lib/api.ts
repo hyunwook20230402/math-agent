@@ -375,6 +375,7 @@ export const problemSetApi = {
       .insert(items);
 
     if (error) throw error;
+    await supabase.rpc('recalc_set_difficulty', { p_set_id: problemSetId });
   },
 
   // 문제 세트의 문제 순서 재정렬
@@ -433,6 +434,7 @@ export const problemSetApi = {
 
       if (insertError) throw insertError;
     }
+    await supabase.rpc('recalc_set_difficulty', { p_set_id: problemSetId });
   }
 };
 

@@ -18,7 +18,8 @@ interface StagingProblem {
   problem_number: number | null;
   title: string;
   unit: string;
-  difficulty: 'easy' | 'medium' | 'hard';
+  difficulty_score: number | null;
+  difficulty: 'very_easy' | 'easy' | 'medium' | 'hard' | 'very_hard' | null;
   answer_type: 'multiple_choice' | 'short_answer';
   correct_answer: string;
   explanation: string | null;

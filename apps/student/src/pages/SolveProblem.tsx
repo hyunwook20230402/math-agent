@@ -28,6 +28,7 @@ interface Problem {
   choices?: string[];
   image_url?: string;
   unit?: string;
+  difficulty_score?: number;
   difficulty?: string;
 }
 

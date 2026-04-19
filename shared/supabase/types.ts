@@ -20,7 +20,8 @@ export type Database = {
           choices: Json | null
           correct_answer: string
           created_at: string
-          difficulty: string
+          difficulty_score: number
+          difficulty: string // GENERATED: very_easy | easy | medium | hard | very_hard
           explanation: string | null
           id: string
           image_url: string | null
@@ -35,7 +36,7 @@ export type Database = {
           choices?: Json | null
           correct_answer: string
           created_at?: string
-          difficulty: string
+          difficulty_score: number // GENERATED 컬럼 difficulty 는 제외
           explanation?: string | null
           id?: string
           image_url?: string | null
@@ -50,7 +51,7 @@ export type Database = {
           choices?: Json | null
           correct_answer?: string
           created_at?: string
-          difficulty?: string
+          difficulty_score?: number
           explanation?: string | null
           id?: string
           image_url?: string | null

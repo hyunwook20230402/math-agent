@@ -34,7 +34,8 @@ interface Problem {
   teacher_id: string;
   title: string;
   problem_number: number;
-  difficulty: string;
+  difficulty_score: number;
+  difficulty: string; // GENERATED
   category: string;
   unit: string;
   image_url: string;
@@ -76,12 +77,14 @@ const ProblemManagement = () => {
     { value: '확률과통계', label: '확률과통계' }
   ];
 
-  // 난이도 옵션
+  // 난이도 옵션 (5단계)
   const difficulties = [
     { value: 'all', label: '전체' },
+    { value: 'very_easy', label: '아주 쉬움' },
     { value: 'easy', label: '쉬움' },
     { value: 'medium', label: '보통' },
-    { value: 'hard', label: '어려움' }
+    { value: 'hard', label: '어려움' },
+    { value: 'very_hard', label: '최상위' },
   ];
 
   // 답안 타입 옵션
@@ -285,26 +288,20 @@ const ProblemManagement = () => {
   // 필터링된 문제 목록 (클라이언트 사이드 필터링은 제거, 서버 사이드로 처리)
   const filteredProblems = problems;
 
-  const getDifficultyColor = (difficulty: string) => {
-    switch (difficulty) {
-      case '1': return 'bg-green-100 text-green-800';
-      case '2': return 'bg-blue-100 text-blue-800';
-      case '3': return 'bg-yellow-100 text-yellow-800';
-      case '4': return 'bg-orange-100 text-orange-800';
-      case '5': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
+  const getDifficultyColor = (score: number) => {
+    if (score <= 2) return 'bg-green-100 text-green-800';
+    if (score <= 4) return 'bg-blue-100 text-blue-800';
+    if (score <= 6) return 'bg-yellow-100 text-yellow-800';
+    if (score <= 8) return 'bg-orange-100 text-orange-800';
+    return 'bg-red-100 text-red-800';
   };
 
-  const getDifficultyLabel = (difficulty: string) => {
-    switch (difficulty) {
-      case '1': return '매우 쉬움';
-      case '2': return '쉬움';
-      case '3': return '보통';
-      case '4': return '어려움';
-      case '5': return '매우 어려움';
-      default: return '미정';
-    }
+  const getDifficultyLabel = (score: number) => {
+    if (score <= 2) return `아주 쉬움 · ${score}/10`;
+    if (score <= 4) return `쉬움 · ${score}/10`;
+    if (score <= 6) return `보통 · ${score}/10`;
+    if (score <= 8) return `어려움 · ${score}/10`;
+    return `최상위 · ${score}/10`;
   };
 
   const getAnswerTypeLabel = (answerType: string) => {
@@ -551,8 +548,8 @@ const ProblemManagement = () => {
                           문제 #{problem.problem_number}
                         </p>
                         <div className="flex gap-2 mt-2">
-                          <Badge variant="outline" className={getDifficultyColor(problem.difficulty)}>
-                            {getDifficultyLabel(problem.difficulty)}
+                          <Badge variant="outline" className={getDifficultyColor(problem.difficulty_score ?? 5)}>
+                            {getDifficultyLabel(problem.difficulty_score ?? 5)}
                           </Badge>
                           <Badge variant="outline">
                             {getAnswerTypeLabel(problem.answer_type)}

@@ -404,7 +404,7 @@ const AnalysisPage = () => {
                     </h4>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span>{problem.unit}</span>
-                      <span>난이도: {problem.difficulty}/5</span>
+                      <span>난이도: {problem.difficulty}/10</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-4">

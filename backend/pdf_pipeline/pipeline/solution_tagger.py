@@ -35,7 +35,7 @@ class CommonMistake(BaseModel):
   text: str         # 한국어, 학생 UI 노출
 
 class TagResult(BaseModel):
-  difficulty: str                              # easy | medium | hard
+  difficulty_score: int = Field(ge=1, le=10)  # 1~10 정수 (1-2=very_easy, 3-4=easy, 5-6=medium, 7-8=hard, 9-10=very_hard)
   concept_tags: list[str] = Field(default_factory=list)
   skill_tags: list[str] = Field(default_factory=list)
   solution_summary: Optional[str] = None
@@ -49,7 +49,7 @@ class TagResult(BaseModel):
 _TAGGING_PROMPT_WITH_SOLUTION = """You are analyzing a Korean high school math solution image.
 
 Rules:
-- difficulty: easy / medium / hard
+- difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
 - concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분")
 - skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석")
 - solution_summary: max 20 words IN KOREAN
@@ -69,7 +69,7 @@ You are given TWO images in order:
 Use BOTH images together: the problem tells you what is being asked and which given conditions matter; the solution tells you which techniques were actually used. Tags must reflect both the problem's intent and the solution's method.
 
 Rules:
-- difficulty: easy / medium / hard
+- difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
 - concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분") — derived from the problem's underlying concept, cross-checked with the solution
 - skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석") — techniques used in the solution
 - solution_summary: max 20 words IN KOREAN — describe the core approach
@@ -83,7 +83,7 @@ Output valid JSON only."""
 _TAGGING_PROMPT_NO_SOLUTION = """You are analyzing a Korean high school math problem image (no solution shown).
 
 Rules:
-- difficulty: easy / medium / hard
+- difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
 - concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분")
 - skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석")
 - solution_summary: null
@@ -307,7 +307,7 @@ def extract_tags_from_image(
   fallback = {
     "unit": "",
     "unit_score": 0.0,
-    "difficulty": "",
+    "difficulty_score": 5,
     "concept_tags": [],
     "skill_tags": [],
     "solution_summary": None,
@@ -322,9 +322,7 @@ def extract_tags_from_image(
     concept_tags = normalize_tags(result.concept_tags, "concept", concept_embeddings, threshold=0.65)
     skill_tags = normalize_tags(result.skill_tags, "skill", skill_embeddings, threshold=0.65)
 
-    difficulty = result.difficulty.strip().lower()
-    if difficulty not in ("easy", "medium", "hard"):
-      difficulty = ""
+    difficulty_score = max(1, min(10, int(result.difficulty_score)))
 
     pitfall = result.pitfall.strip() if isinstance(result.pitfall, str) else None
     solution_summary = result.solution_summary
@@ -348,7 +346,7 @@ def extract_tags_from_image(
     tag_result = {
       "unit": unit,
       "unit_score": unit_score,
-      "difficulty": difficulty,
+      "difficulty_score": difficulty_score,
       "concept_tags": concept_tags,
       "skill_tags": skill_tags,
       "solution_summary": solution_summary,

@@ -40,7 +40,8 @@ export interface Database {
           teacher_id: string;
           title: string;
           problem_number: number;
-          difficulty: 'easy' | 'medium' | 'hard';
+          difficulty_score: number; // 1~10 정수
+          difficulty: 'very_easy' | 'easy' | 'medium' | 'hard' | 'very_hard'; // GENERATED
           category: string; // 카테고리 (예: '수학', '기하', '대수' 등)
           unit: string; // 단원
           image_url: string | null; // 문제 이미지 URL
@@ -66,7 +67,7 @@ export interface Database {
           teacher_id: string;
           title: string;
           problem_number: number;
-          difficulty: 'easy' | 'medium' | 'hard';
+          difficulty_score: number; // GENERATED 컬럼 difficulty 는 제외
           category: string;
           unit: string;
           image_url?: string | null;
@@ -92,7 +93,7 @@ export interface Database {
           teacher_id?: string;
           title?: string;
           problem_number?: number;
-          difficulty?: 'easy' | 'medium' | 'hard';
+          difficulty_score?: number;
           category?: string;
           unit?: string;
           image_url?: string | null;
@@ -229,7 +230,10 @@ export interface Database {
           set_type: 'quiz' | 'exam' | 'practice' | 'review'; // 문제 세트 타입
           total_problems: number; // 총 문제 수
           estimated_time: number; // 예상 소요 시간 (분)
-          difficulty_level: 'easy' | 'medium' | 'hard' | 'mixed'; // 전체 난이도
+          difficulty_score_avg: number | null; // 세트 평균 난이도 (1~10)
+          difficulty_score_p75: number | null; // 상위 25% 난이도 (1~10)
+          difficulty_score_max: number | null; // 최고 난이도 (1~10)
+          difficulty_level: 'very_easy' | 'easy' | 'medium' | 'hard' | 'very_hard' | null; // GENERATED (avg 기준)
           sort_order: number;
           is_favorite: boolean;
           is_published: boolean; // 학생들에게 공개 여부
@@ -245,7 +249,6 @@ export interface Database {
           set_type: 'quiz' | 'exam' | 'practice' | 'review';
           total_problems?: number;
           estimated_time?: number;
-          difficulty_level?: 'easy' | 'medium' | 'hard' | 'mixed';
           sort_order?: number;
           is_favorite?: boolean;
           is_published?: boolean;
@@ -261,7 +264,6 @@ export interface Database {
           set_type?: 'quiz' | 'exam' | 'practice' | 'review';
           total_problems?: number;
           estimated_time?: number;
-          difficulty_level?: 'easy' | 'medium' | 'hard' | 'mixed';
           sort_order?: number;
           is_favorite?: boolean;
           is_published?: boolean;
@@ -537,7 +539,8 @@ export interface ProblemWithTagsNew {
   teacher_id: string;
   title: string;
   problem_number: number;
-  difficulty: "easy" | "medium" | "hard";
+  difficulty_score: number;
+  difficulty: 'very_easy' | 'easy' | 'medium' | 'hard' | 'very_hard';
   category: string;
   unit: string;
   image_url: string;
@@ -648,7 +651,8 @@ export interface ProblemStaging {
   problem_number: number | null;
   title: string | null;
   unit: string | null;
-  difficulty: 'easy' | 'medium' | 'hard' | null;
+  difficulty_score: number | null;
+  difficulty: 'very_easy' | 'easy' | 'medium' | 'hard' | 'very_hard' | null;
   answer_type: 'multiple_choice' | 'short_answer' | null;
   correct_answer: string | null;
   choices: any | null;

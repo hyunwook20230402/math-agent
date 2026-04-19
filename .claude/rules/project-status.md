@@ -12,7 +12,7 @@
 - unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty/pitfall/solution_steps/common_mistakes AI 추출
 - 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크)
 - SolutionReview 같은 번호 묶기 + 그룹 확정 UI
-- Supabase 마이그레이션 **008** 까지 적용 (`solution_steps`, `common_mistakes` JSONB)
+- Supabase 마이그레이션 **010** 까지 적용 (`difficulty_score` INT 1~10 + 5단계 GENERATED 라벨, `problem_sets` 3지표 avg/p75/max, `recalc_set_difficulty` RPC)
 - Provider 시간대 자동 선택 (`provider_selector.py` — 평일 09-18 KST Ollama, 그외 Gemini→OpenAI)
 
 ## 향후 작업

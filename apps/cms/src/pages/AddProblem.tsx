@@ -20,7 +20,7 @@ const AddProblem = () => {
     title: '',
     answer: '',
     answerType: 'short_answer' as 'short_answer' | 'multiple_choice',
-    difficulty: 1,
+    difficulty_score: 5,
     category: ''
   });
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -134,7 +134,7 @@ const AddProblem = () => {
         .insert({
           title: formData.title,
           unit: formData.category || '기타',
-          difficulty: formData.difficulty === 1 ? 'easy' : formData.difficulty === 2 ? 'medium' : 'hard',
+          difficulty_score: formData.difficulty_score,
           answer_type: formData.answerType,
           correct_answer: formData.answer,
           image_url: imageUrl || '',
@@ -252,14 +252,14 @@ const AddProblem = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="difficulty">난이도 (1-5)</Label>
+                  <Label htmlFor="difficulty_score">난이도 (1-10)</Label>
                   <Input
-                    id="difficulty"
+                    id="difficulty_score"
                     type="number"
                     min="1"
-                    max="5"
-                    value={formData.difficulty}
-                    onChange={(e) => setFormData(prev => ({ ...prev, difficulty: parseInt(e.target.value) }))}
+                    max="10"
+                    value={formData.difficulty_score}
+                    onChange={(e) => setFormData(prev => ({ ...prev, difficulty_score: Math.min(10, Math.max(1, parseInt(e.target.value) || 5)) }))}
                   />
                 </div>
               </div>

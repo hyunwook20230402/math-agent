@@ -26,7 +26,7 @@ def insert_staging_problems(job_id: str, teacher_id: str, problems: list) -> lis
             "problem_number": p.get("problem_number"),
             "title": _build_title(p),
             "unit": p.get("unit", "미분류"),
-            "difficulty": p.get("difficulty", "medium"),
+            "difficulty_score": p.get("difficulty_score", 5),
             "answer_type": p.get("answer_type", "short_answer"),
             "correct_answer": p.get("correct_answer", ""),
             "choices": None,
@@ -147,7 +147,7 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
             "teacher_id": teacher_id,
             "title": p.get("title") or _build_title(p),
             "problem_number": p.get("problem_number", 1),
-            "difficulty": p.get("difficulty", "medium"),
+            "difficulty_score": p.get("difficulty_score", 5),
             "category": p.get("category", "기타"),
             "unit": p.get("unit", "미분류"),
             "image_url": p.get("source_image_url"),
@@ -403,7 +403,7 @@ def update_staging_solution(
     answer_type: str | None = None,
     pitfall: str | None = None,
     unit: str | None = None,
-    difficulty: str | None = None,
+    difficulty_score: int | None = None,
     solution_steps: list | None = None,
     common_mistakes: list | None = None,
 ) -> dict:
@@ -426,8 +426,8 @@ def update_staging_solution(
         payload["pitfall"] = pitfall
     if unit is not None:
         payload["unit"] = unit
-    if difficulty is not None:
-        payload["difficulty"] = difficulty
+    if difficulty_score is not None:
+        payload["difficulty_score"] = difficulty_score
     if solution_steps is not None:
         payload["solution_steps"] = solution_steps
     if common_mistakes is not None:

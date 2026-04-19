@@ -42,7 +42,8 @@ interface Problem {
   id: string;
   title: string;
   problem_number: number;
-  difficulty: string;
+  difficulty_score: number;
+  difficulty: string; // GENERATED
   answer_type: string;
   image_url: string;
   category: string;
@@ -51,12 +52,20 @@ interface Problem {
   created_at: string;
 }
 
-const difficultyLabel = (d: string) => ({ easy: '쉬움', medium: '보통', hard: '어려움' }[d] ?? d);
-const difficultyColor = (d: string) => ({
-  easy: 'bg-green-100 text-green-800',
-  medium: 'bg-blue-100 text-blue-800',
-  hard: 'bg-red-100 text-red-800',
-}[d] ?? 'bg-gray-100 text-gray-800');
+const difficultyLabel = (score: number) => {
+  if (score <= 2) return `아주 쉬움 · ${score}/10`;
+  if (score <= 4) return `쉬움 · ${score}/10`;
+  if (score <= 6) return `보통 · ${score}/10`;
+  if (score <= 8) return `어려움 · ${score}/10`;
+  return `최상위 · ${score}/10`;
+};
+const difficultyColor = (score: number) => {
+  if (score <= 2) return 'bg-green-100 text-green-800';
+  if (score <= 4) return 'bg-blue-100 text-blue-800';
+  if (score <= 6) return 'bg-yellow-100 text-yellow-800';
+  if (score <= 8) return 'bg-orange-100 text-orange-800';
+  return 'bg-red-100 text-red-800';
+};
 
 const TextbookManagementNew = () => {
   const navigate = useNavigate();
@@ -636,8 +645,8 @@ const TextbookManagementNew = () => {
                         <div className="min-w-0">
                           <p className="font-medium text-sm truncate">{problem.title}</p>
                           <div className="flex items-center gap-1.5 mt-1">
-                            <Badge variant="outline" className={`text-xs ${difficultyColor(problem.difficulty)}`}>
-                              {difficultyLabel(problem.difficulty)}
+                            <Badge variant="outline" className={`text-xs ${difficultyColor(problem.difficulty_score ?? 5)}`}>
+                              {difficultyLabel(problem.difficulty_score ?? 5)}
                             </Badge>
                             <Badge variant="outline" className="text-xs">
                               {problem.answer_type === 'multiple_choice' ? '객관식' : '주관식'}

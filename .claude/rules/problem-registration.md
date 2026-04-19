@@ -17,12 +17,17 @@
 | `'연산'` | 연산 교재 |
 | `'자작'` | 선생님 자작 문제 |
 
-### `difficulty` — 난이도
-| 값 | 설명 |
-|----|------|
-| `'easy'` | 쉬움 (쎈 A단계) |
-| `'medium'` | 보통 (쎈 B단계) |
-| `'hard'` | 어려움 (쎈 C단계) |
+### `difficulty_score` — 난이도 (1~10 정수, **쓰기 컬럼**)
+| 범위 | 파생 라벨 (`difficulty`) | 기준 |
+|------|--------------------------|------|
+| 1~2 | `very_easy` | 아주 쉬움 — 공식 직접 대입, 쎈 A, 모의 2점 |
+| 3~4 | `easy` | 쉬움 — 쎈 B 초반, 모의 3점 쉬움 |
+| 5~6 | `medium` | 보통 — 쎈 B, 모의 3점 표준 |
+| 7~8 | `hard` | 어려움 — 쎈 C, 모의 4점 준킬러 |
+| 9~10 | `very_hard` | 최상위 킬러 — 수능 21/29/30번류 |
+
+- `difficulty` 컬럼은 GENERATED ALWAYS AS … STORED — insert 에 포함 금지
+- insert 예: `difficulty_score: 7` → DB가 자동으로 `difficulty='hard'` 파생
 
 ### `answer_type` — 문제 유형
 | 값 | 설명 |

@@ -696,7 +696,7 @@ const ProblemSetManagement = () => {
                         {problem.title}
                       </Label>
                       <p className="text-sm text-muted-foreground">
-                        카테고리: {problem.unit || '기타'} | 난이도: {problem.difficulty}
+                        카테고리: {problem.unit || '기타'} | 난이도: {(problem as any).difficulty_score ?? '-'}/10
                       </p>
                     </div>
                   </div>

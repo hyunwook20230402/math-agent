@@ -553,7 +553,7 @@ const ProblemSetManagement = () => {
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-sm truncate">{problem.title}</div>
                           <div className="text-xs text-muted-foreground mt-1">
-                            {problem.category} | 난이도: {problem.difficulty}
+                            {problem.category} | 난이도: {(problem as any).difficulty_score ?? '-'}/10
                           </div>
                           <div className="text-xs text-muted-foreground">
                             {problem.unit}
@@ -724,7 +724,7 @@ const ProblemSetManagement = () => {
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-sm truncate">{problem.title}</div>
                           <div className="text-xs text-muted-foreground mt-1">
-                            {problem.category} | 난이도: {problem.difficulty}
+                            {problem.category} | 난이도: {(problem as any).difficulty_score ?? '-'}/10
                           </div>
                           <div className="text-xs text-muted-foreground">
                             {problem.unit}
