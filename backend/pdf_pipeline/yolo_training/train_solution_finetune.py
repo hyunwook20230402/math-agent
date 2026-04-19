@@ -1,12 +1,13 @@
-"""YOLO fine-tune — 해설지 solution_block detection
+"""YOLO11 fine-tune — 해설지 solution_block detection
 
-기존 best.pt(또는 pretrained yolov8n.pt)를 시작점으로 해설지 데이터 학습.
+YOLO11n pretrained → 해설지 데이터 파인튜닝.
+weights 파일이 없으면 ultralytics가 자동 다운로드함.
 
 사용법:
   cd backend/pdf_pipeline/yolo_training
   ../venv/Scripts/python train_solution_finetune.py
   ../venv/Scripts/python train_solution_finetune.py \\
-      --base-weights models/yolov8n.pt \\
+      --base-weights yolo11n.pt \\
       --epochs 100 \\
       --run-name solution_finetune_v1
 """
@@ -15,7 +16,7 @@ from pathlib import Path
 from ultralytics import YOLO
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_WEIGHTS = str(SCRIPT_DIR / "models" / "yolov8n.pt")
+DEFAULT_WEIGHTS = "yolo11n.pt"  # ultralytics 자동 다운로드
 
 
 def main():
@@ -28,12 +29,14 @@ def main():
                         help="결과 저장 디렉토리 이름 (runs/ 하위)")
     args = parser.parse_args()
 
-    base_weights = Path(args.base_weights)
-    if not base_weights.exists():
-        print(f"[ERROR] 가중치 파일 없음: {base_weights}")
-        raise SystemExit(1)
+    # 로컬 파일이면 존재 체크, ultralytics 모델명(yolo11n.pt 등)이면 자동 다운로드
+    base_weights_path = Path(args.base_weights)
+    if base_weights_path.is_absolute() or len(base_weights_path.parts) > 1:
+        if not base_weights_path.exists():
+            print(f"[ERROR] 가중치 파일 없음: {base_weights_path}")
+            raise SystemExit(1)
 
-    model = YOLO(str(base_weights))
+    model = YOLO(args.base_weights)
 
     model.train(
         data=str(SCRIPT_DIR / "solution_data.yaml"),
@@ -47,7 +50,6 @@ def main():
         name=args.run_name,
         lr0=0.001,
         lrf=0.01,
-        # 문서 이미지 augmentation (흑백 스캔본 특화)
         hsv_h=0.0,
         hsv_s=0.0,
         hsv_v=0.2,
@@ -64,9 +66,13 @@ def main():
     print(f"BEST_MODEL_PATH={best_pt}")
     print(f"\n학습 완료! Best model: {best_pt}")
 
-    # 학습 직후 추론용 models/ 로 자동 복사
-    from promote_model import promote
-    promote(SCRIPT_DIR / "runs" / args.run_name, "solution")
+    # 학습 완료 모델을 추론용 경로로 복사
+    import shutil
+    dest = SCRIPT_DIR / "models" / "solution_detector.pt"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if best_pt.exists():
+        shutil.copy2(best_pt, dest)
+        print(f"모델 복사 완료: {dest}")
 
 
 if __name__ == "__main__":

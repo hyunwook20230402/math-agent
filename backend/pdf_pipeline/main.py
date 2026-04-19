@@ -1707,7 +1707,7 @@ async def get_solution_export_status(solution_job_id: str):
 
 
 class RetrainSolutionRequest(BaseModel):
-    base_weights: str = "models/yolov8n.pt"  # 첫 학습은 pretrained에서 시작
+    base_weights: str = "yolo11n.pt"  # pretrained, ultralytics 자동 다운로드
     epochs: int = 100
     run_name: str | None = None
 
@@ -1748,17 +1748,19 @@ async def _run_retrain_solution(retrain_id: str, base_weights: str, epochs: int,
 
     retrain_solution_jobs[retrain_id]["status"] = "training"
 
-    # base_weights가 상대경로면 training dir 기준, 절대경로면 그대로
+    # base_weights가 절대경로거나 로컬 파일이면 존재 체크, 아니면 ultralytics 자동 다운로드
     base_weights_path = Path(base_weights)
-    if not base_weights_path.is_absolute():
-        base_weights_path = _YOLO_TRAINING_DIR.parent / base_weights
-
-    if not base_weights_path.exists():
-        retrain_solution_jobs[retrain_id] = {
-            "status": "error",
-            "message": f"가중치 파일 없음: {base_weights_path}",
-        }
-        return
+    is_local = base_weights_path.is_absolute() or (len(base_weights_path.parts) > 1)
+    if is_local:
+        if not base_weights_path.is_absolute():
+            base_weights_path = _YOLO_TRAINING_DIR.parent / base_weights
+        if not base_weights_path.exists():
+            retrain_solution_jobs[retrain_id] = {
+                "status": "error",
+                "message": f"가중치 파일 없음: {base_weights_path}",
+            }
+            return
+        base_weights = str(base_weights_path)
 
     venv_python = _YOLO_TRAINING_DIR.parent / "venv" / "Scripts" / "python.exe"
     python_bin = str(venv_python) if venv_python.exists() else "python"
@@ -1766,7 +1768,7 @@ async def _run_retrain_solution(retrain_id: str, base_weights: str, epochs: int,
     cmd = [
         python_bin,
         str(_YOLO_TRAINING_DIR / "train_solution_finetune.py"),
-        "--base-weights", str(base_weights_path),
+        "--base-weights", base_weights,
         "--epochs", str(epochs),
         "--run-name", run_name,
     ]

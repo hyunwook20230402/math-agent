@@ -134,10 +134,6 @@ def detect_problems(
   # ── 단계 1: raw 예측 시각화 ─────────────────────────
   if debug_dir is not None and _img_bgr is not None:
     _dbg_raw = _img_bgr.copy()
-    # 위선/중앙선 표시
-    _cv2.line(_dbg_raw, (0, _top_line_y), (page_width, _top_line_y), (255, 165, 0), 3)
-    _cv2.line(_dbg_raw, (0, content_top), (page_width, content_top), (0, 165, 255), 2)
-    _cv2.line(_dbg_raw, (mid_line_x, 0), (mid_line_x, page_height), (200, 200, 0), 2)
     for i in range(len(boxes)):
       rx1, ry1, rx2, ry2 = [int(v) for v in boxes.xyxy[i].cpu().numpy()]
       rc = float(boxes.conf[i].cpu().numpy())
@@ -185,8 +181,6 @@ def detect_problems(
   # ── 단계 2: 필터링 결과 시각화 ──────────────────────
   if debug_dir is not None and _img_bgr is not None:
     _dbg_filt = _img_bgr.copy()
-    _cv2.line(_dbg_filt, (0, content_top), (page_width, content_top), (0, 165, 255), 2)
-    _cv2.line(_dbg_filt, (mid_line_x, 0), (mid_line_x, page_height), (200, 200, 0), 2)
     for (fx1, fy1, fx2, fy2, fc) in filtered_out:
       _cv2.rectangle(_dbg_filt, (fx1, fy1), (fx2, fy2), (0, 0, 255), 3)
       _cv2.putText(_dbg_filt, f"FILT {fc:.2f}", (fx1, max(fy1 - 8, 20)),
@@ -221,8 +215,6 @@ def detect_problems(
   # ── 단계 3: 최종 bbox + 번호 시각화 ────────────────
   if debug_dir is not None and _img_bgr is not None:
     _dbg_final = _img_bgr.copy()
-    _cv2.line(_dbg_final, (0, content_top), (page_width, content_top), (0, 165, 255), 2)
-    _cv2.line(_dbg_final, (mid_line_x, 0), (mid_line_x, page_height), (200, 200, 0), 2)
     for r in result:
       fx1, fy1, fx2, fy2 = r["bbox"]
       _cv2.rectangle(_dbg_final, (fx1, fy1), (fx2, fy2), (255, 100, 0), 4)
