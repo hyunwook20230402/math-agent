@@ -757,7 +757,7 @@ async def health():
 retrain_jobs: Dict[str, dict] = {}  # 재학습 진행 상태 캐시
 
 _YOLO_TRAINING_DIR = Path(__file__).parent / "yolo_training"
-_YOLO_MODEL_PATH = Path(__file__).parent / "models" / "exam_problem_detector.pt"
+from config import PROBLEM_MODEL_PATH as _YOLO_MODEL_PATH
 
 
 class RetrainRequest(BaseModel):
@@ -770,7 +770,7 @@ class RetrainRequest(BaseModel):
 async def start_retrain(body: RetrainRequest):
     """YOLO 재학습 시작 (백그라운드)
 
-    완료 시 best.pt를 models/exam_problem_detector.pt로 자동 교체.
+    완료 시 best.pt를 yolo_training/models/problem_detector.pt로 자동 교체.
     """
     import re
     # 자동 run_name 생성 (exam_finetune_v{N+1})
@@ -850,7 +850,7 @@ async def _run_retrain(retrain_id: str, base_weights: str, epochs: int, run_name
         # 기존 모델 백업 후 교체
         if _YOLO_MODEL_PATH.exists():
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            bak = _YOLO_MODEL_PATH.with_name(f"exam_problem_detector.bak_{ts}.pt")
+            bak = _YOLO_MODEL_PATH.with_name(f"problem_detector.bak_{ts}.pt")
             shutil.copy2(_YOLO_MODEL_PATH, bak)
 
         shutil.copy2(best_pt, _YOLO_MODEL_PATH)

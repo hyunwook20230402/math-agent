@@ -27,7 +27,7 @@ SOLUTION_EXPORT_LOG = _UP / "solutions" / "export_log.json"
 
 # 추론용 모델 (학습 후 자동 복사 대상)
 MODELS_DIR = Path(__file__).parent / "yolo_training" / "models"
-PROBLEM_MODEL_PATH = MODELS_DIR / "exam_problem_detector.pt"
+PROBLEM_MODEL_PATH = MODELS_DIR / "problem_detector.pt"
 SOLUTION_MODEL_PATH = MODELS_DIR / "solution_detector.pt"
 
 
