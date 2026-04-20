@@ -75,7 +75,6 @@ def detect_problems(
   start_number: int = 1,
   padding: int = 30,
   min_height: int = 100,
-  col_margin: int = 20,
   top_margin: int = 80,
   mid_line_x: int = 1753,
   debug_dir: Optional[str] = None,
@@ -94,8 +93,7 @@ def detect_problems(
     padding: bbox 상하좌우 여백 (픽셀)
     min_height: 이 높이 미만 박스는 필터링 (유의사항 등 제거)
     top_margin: 위선에서 이만큼 내려온 곳부터 박스 허용 (픽셀)
-    col_margin: 중앙선 안쪽 여백 (픽셀)
-    mid_line_x: 페이지 중앙 구분선 x좌표 (픽셀, 3509x4963 기준)
+    mid_line_x: 페이지 중앙 구분선 x좌표 (2단 레이아웃 정렬용, 3509x4963 기준)
     debug_dir: 디버그 이미지 저장 디렉토리 (None이면 저장 안 함)
 
   Returns:
@@ -126,10 +124,8 @@ def detect_problems(
 
   boxes = results[0].boxes
 
-  # 위선/중앙선 기준으로 유효 영역 계산
+  # 위선 기준으로 유효 영역 계산
   content_top = _top_line_y + top_margin
-  content_left_max = mid_line_x - col_margin
-  content_right_min = mid_line_x + col_margin
 
   # ── 단계 1: raw 예측 시각화 ─────────────────────────
   if debug_dir is not None and _img_bgr is not None:
@@ -159,12 +155,6 @@ def detect_problems(
 
     # 위선 아래로 클리핑
     y1 = max(y1, content_top)
-
-    # 중앙선 기준 컬럼 클리핑
-    if cx < mid_line_x:
-      x2 = min(x2, content_left_max)
-    else:
-      x1 = max(x1, content_right_min)
 
     # 너무 작은 박스 필터링 (유의사항, 저작권 표시 등)
     if (y2 - y1) < min_height:
