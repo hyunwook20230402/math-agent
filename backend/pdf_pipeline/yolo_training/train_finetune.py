@@ -12,18 +12,24 @@ from pathlib import Path
 from ultralytics import YOLO
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_WEIGHTS = str(SCRIPT_DIR / "runs/exam_problem_detector/weights/best.pt")
+DEFAULT_WEIGHTS = "yolo11n.pt"  # ultralytics 자동 다운로드
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-weights", default=DEFAULT_WEIGHTS,
-                        help="시작점 가중치 경로")
+                        help="시작점 가중치 경로 (기본: yolo11n.pt 자동 다운로드)")
     parser.add_argument("--epochs", type=int, default=100,
                         help="학습 epoch 수")
     parser.add_argument("--run-name", default="exam_finetune_v2",
                         help="결과 저장 디렉토리 이름 (runs/ 하위)")
     args = parser.parse_args()
+
+    base_weights_path = Path(args.base_weights)
+    if base_weights_path.is_absolute() or len(base_weights_path.parts) > 1:
+        if not base_weights_path.exists():
+            print(f"[ERROR] 가중치 파일 없음: {base_weights_path}")
+            raise SystemExit(1)
 
     model = YOLO(args.base_weights)
 
@@ -52,13 +58,16 @@ def main():
         mixup=0.0,
     )
 
-    best_pt = str(SCRIPT_DIR / "runs" / args.run_name / "weights" / "best.pt")
+    best_pt = SCRIPT_DIR / "runs" / args.run_name / "weights" / "best.pt"
     print(f"BEST_MODEL_PATH={best_pt}")
     print(f"\n학습 완료! Best model: {best_pt}")
 
-    # 학습 직후 추론용 models/ 로 자동 복사
-    from promote_model import promote
-    promote(SCRIPT_DIR / "runs" / args.run_name, "problem")
+    import shutil
+    dest = SCRIPT_DIR / "models" / "problem_detector.pt"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if best_pt.exists():
+        shutil.copy2(best_pt, dest)
+        print(f"모델 복사 완료: {dest}")
 
 
 if __name__ == "__main__":
