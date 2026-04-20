@@ -4,7 +4,7 @@
 
 1. **백엔드 기동**
    ```bash
-   cd backend/pdf_pipeline && uvicorn main:app --reload --port 8000
+   cd backend/pdf_pipeline && uvicorn main:app --reload --port 8001
    ```
 2. **CMS 에서 업로드** — `http://localhost:8081/pdf-import` 에서 PDF 선택 + 교재(`쎈`/`모의고사`) 지정.
 3. **자동 추출** — `POST /api/extract/{job_id}` 가 비동기로 OCR/YOLO 실행. `GET /api/staging/{job_id}` 로 폴링.

@@ -69,3 +69,14 @@ backend/pdf_pipeline/yolo_training/models/
 backend/pdf_pipeline/yolo_training/dataset_new/
 backend/pdf_pipeline/yolo_training/debug_user_labels/
 *.pt
+
+# PDF 파이프라인 캐시/임시 산출물
+backend/pdf_pipeline/data/tag_embeddings_*.pkl
+backend/pdf_pipeline/data/canonical_suggestions.json
+backend/pdf_pipeline/data/concept_taxonomy.backup*.json
+backend/pdf_pipeline/scripts/smoke_results/
+backend/pdf_pipeline/tmp_*.json
+backend/pdf_pipeline/tmp_*.txt
+
+# Claude 세션 lock
+.claude/scheduled_tasks.lock

@@ -10,8 +10,9 @@
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Radix UI, TanStack Query v5, React Router v6
 - **Backend (DB/Auth)**: Supabase (PostgreSQL, Auth, Storage)
-- **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, EasyOCR + Surya, YOLO (ultralytics), Ollama (Qwen2.5-VL 7B)
-- **개발 환경**: Windows 11, RTX 4070 8GB
+- **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, EasyOCR + Surya, YOLO11n (ultralytics), VL 모델 (서버 근무시간 Ollama Gemma3 27B / 오프시간 OpenAI — `provider_selector` 자동 전환)
+- **Backend (AI 튜터)**: Python 3.11, FastAPI, LangGraph 기반 다중턴 대화 (`backend/deeptutor/`)
+- **개발 환경**: Windows 11, 로컬 RTX 4070 8GB / 서버 RTX 4090 24GB
 
 ---
 
@@ -26,7 +27,7 @@ math/
 ├── shared/           # ui, supabase, hooks, types, lib
 ├── backend/
 │   ├── pdf_pipeline/ # PDF 문제·해설 자동 추출 (운영 중)
-│   └── deeptutor/    # AI 튜터링 (예정, stub)
+│   └── deeptutor/    # AI 튜터링 (LangGraph 다중턴 대화, 운영 중)
 └── supabase/migrations/
 ```
 
@@ -50,10 +51,10 @@ cd apps/cms && npm run dev       # http://localhost:8081
 # 3. PDF 파이프라인 백엔드
 cd backend/pdf_pipeline
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8001
 
-# 4. Ollama 모델 (해설 태깅용)
-ollama pull qwen2.5vl:7b
+# 4. Ollama 모델 (해설 태깅용, 서버 전용)
+ollama pull gemma3:27b
 ```
 
 ---
@@ -69,8 +70,13 @@ ollama pull qwen2.5vl:7b
 ### 해설지 태깅
 1. CMS `/solution-review` 에서 해설 PDF 업로드.
 2. 해설 크롭 + 정답 파싱.
-3. "샘플 (앞 4개)" → "이어서" → 전체 30개 Qwen2.5-VL 태깅 (unit, difficulty, concept/skill, summary, pitfall).
+3. "샘플 (앞 4개)" → "이어서" → 전체를 VL 태깅 (unit, difficulty, concept/skill, summary, pitfall, solution_steps, common_mistakes).
 4. "문제에 적용" → `problem_staging` 에 병합.
+
+### AI 튜터 (DeepTutor)
+1. 학생이 문제를 풀고 오답 → `POST /api/tutor/start` (problem_id, student_answer) → 정오답 판정 + 첫 힌트.
+2. 후속 질문 → `POST /api/tutor/chat/{conversation_id}` → LangGraph 노드가 `solution_steps` / `common_mistakes` / `problem_tags` 를 참조해 단계별 응답.
+3. 대화 상태는 `student_conversations` 테이블에 저장.
 
 ---
 
@@ -79,7 +85,7 @@ ollama pull qwen2.5vl:7b
 - **개발 규칙 / 컨벤션** — `CLAUDE.md`, `.claude/rules/`
 - **슬래시 커맨드** — `.claude/commands/` (`/pdf-import`, `/solution-tagging-status`, `/migration-safety`, `/bbox-verify`, `/cms-dev-check`)
 - **에이전트** — `.claude/agents/pdf-extractor.md`
-- **Supabase 마이그레이션** — `supabase/migrations/` (현재 006 까지 적용)
+- **Supabase 마이그레이션** — 원격 DB 기준 **010 까지 적용**. 로컬 `supabase/migrations/` 폴더는 **008 까지만** 파일 존재 (009·010 은 원격 DB 직접 적용 — Supabase MCP `list_migrations` 로 확인)
 
 ---
 
@@ -90,5 +96,6 @@ ollama pull qwen2.5vl:7b
 | CMS | 8081 |
 | Teacher | 8082 |
 | Student | 8083 |
-| PDF 파이프라인 API | 8000 |
+| PDF 파이프라인 API | 8001 |
+| DeepTutor API | 8001 ⚠️ (`backend/deeptutor/main.py` 주석상 8001. pdf_pipeline 과 충돌 — 동시 구동 시 한쪽 포트 변경 필요) |
 | Ollama | 11434 |

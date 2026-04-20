@@ -37,7 +37,7 @@ supabase/migrations/001_fix_image_url_and_add_staging.sql
 ### 4. 서버 실행
 
 ```bash
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8001
 ```
 
 ## API
@@ -55,7 +55,7 @@ uvicorn main:app --reload --port 8000
 
 ```
 pdf_pipeline/
-├── main.py                    # FastAPI 서버 (포트 8000)
+├── main.py                    # FastAPI 서버 (포트 8001)
 ├── config.py                  # 환경변수
 ├── ARCHITECTURE.md            # AI 튜터 데이터 파이프라인 전체 구조 ← 읽어볼 것
 ├── requirements.txt
@@ -92,6 +92,9 @@ pdf_pipeline/
 
 상세 구조는 `ARCHITECTURE.md` 참조.
 
-## 향후 추가 예정
-- DeepTutor AI 튜터링 (`backend/deeptutor/` — 현재 스켈레톤만)
-  - solution_steps 단계별 힌트, common_mistakes 오답 진단, problem_tags 유사 문제 추천
+## 연관 백엔드
+
+- `backend/deeptutor/` — AI 튜터링 (운영 중, LangGraph 다중턴 대화)
+  - `problem_tags` + `solution_steps` + `common_mistakes` 를 활용해 학생 답안 진단 및 단계별 힌트 생성
+  - API: `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}`
+  - 상세: `backend/deeptutor/routers/tutor.py`, `graph/`, `handlers/`

@@ -71,12 +71,12 @@
 | 시간대 | 위치 | VL Provider | Embed Provider |
 |--------|------|-------------|----------------|
 | 평일 09:00~18:00 KST | 서버 (회사) | **Ollama Gemma3 27B** | **bge-m3** (Ollama) |
-| 그 외 | 집 | **Gemini** → quota 소진 시 OpenAI fallback | **OpenAI** (text-embedding-3-small) |
+| 그 외 | 집 | **OpenAI gpt-4o** (오프시간 기본) | **OpenAI** (text-embedding-3-small) |
 
 - `pipeline/provider_selector.py` 가 시간대 감지 → `VL_PROVIDER` / `EMBED_PROVIDER` 결정
-- 환경변수로 강제 override 가능: `VL_PROVIDER=gemini`, `EMBED_PROVIDER=openai`
+- 환경변수로 강제 override 가능: `VL_PROVIDER=openai`, `EMBED_PROVIDER=openai`
 - Ollama 접속 실패 시 OpenAI 자동 fallback (집에서 서버 OFF 대응)
-- Gemini RESOURCE_EXHAUSTED(429) 시 OpenAI 자동 fallback
+- 근무시간 범위 조정 이력: 09~18 → **09~19 KST** (커밋 `dd436d6`)
 
 **모든 LLM 호출은 Pydantic structured output 강제** — free-form JSON 파싱 없음.
 
@@ -252,9 +252,14 @@ AI 튜터 온톨로지의 기반. 이 파일을 기준으로 모든 태깅이 �
 
 ---
 
-## 8. AI 튜터 활용 포인트
+## 8. AI 튜터 활용 포인트 (DeepTutor)
 
-현재 `backend/deeptutor/` 는 스켈레톤만 존재. 아래는 설계 참고용.
+`backend/deeptutor/` 는 **운영 중** (LangGraph 다중턴 대화, ~800 LOC).
+API: `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}` (`routers/tutor.py`)
+대화 상태 저장: `student_conversations` 테이블 (마이그레이션 007)
+유사 문제 검색: `handlers/similar_problems.py`
+
+아래 쿼리는 DeepTutor 가 실제로 참조하는 데이터 패턴.
 
 ### 단계별 힌트 (solution_steps)
 ```sql
@@ -284,9 +289,10 @@ WHERE pt.canonical = $concept_canonical
 LIMIT 5;
 ```
 
-### 임베딩 기반 유사 문제 (deeptutor 구현 시)
+### 임베딩 기반 유사 문제
 - `problem_tags.canonical` 벡터 + unit_matcher 임베딩 캐시 활용
 - `embedder.generate_embedding(concept_text)` 로 실시간 cosine 검색
+- 구현: `backend/deeptutor/handlers/similar_problems.py`
 
 ---
 
@@ -320,5 +326,9 @@ Supabase Storage (`problem-images` 버킷) 에는 CMS 검수 완료 후 승인�
 | 004 | `004_add_bbox_columns.sql` | bbox JSONB 컬럼 |
 | 005 | `005_add_solution_and_tags.sql` | solution_jobs, problem_tags 테이블 |
 | 006 | `006_problem_staging_pitfall.sql` | pitfall, match_confidence 컬럼 |
-| 007 | `007_deeptutor_conversation.sql` | DeepTutor 대화 테이블 |
-| **008** | `008_add_ontology_columns.sql` | **solution_steps, common_mistakes JSONB** ← 현재 |
+| 007 | `007_deeptutor_conversation.sql` | DeepTutor `student_conversations` 테이블 |
+| 008 | `008_add_ontology_columns.sql` | solution_steps, common_mistakes JSONB |
+| 009 | `add_validation_columns` (원격 DB 전용) | validation_status/score/issues 컬럼 |
+| **010** | `add_difficulty_score` (원격 DB 전용) | **difficulty_score INT 1~10 + 5단계 GENERATED 라벨** ← 현재 |
+
+⚠️ 009·010 은 로컬 `supabase/migrations/` 폴더엔 파일 없음. 원격 DB 에만 적용된 상태(Supabase MCP `list_migrations` 확인). 로컬 SQL 파일 역추출 필요.

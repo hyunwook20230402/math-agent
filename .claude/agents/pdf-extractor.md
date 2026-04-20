@@ -12,9 +12,9 @@
 
 ## 환경
 
-- Python 3.11, FastAPI (포트 8000)
+- Python 3.11, FastAPI (포트 8001)
 - 서버: RTX 4090 24GB — Ollama Gemma3 27B (vision, 17GB)
-- 로컬(집): Gemini API / OpenAI API — provider_selector 시간대 자동 선택
+- 로컬(집): OpenAI API — provider_selector 시간대 자동 선택 (평일 09-19 KST 서버, 그 외 로컬 OpenAI)
 - EasyOCR, Surya OCR (문제 크롭)
 - YOLO (ultralytics) — 모의고사/해설지 박스 검출
 - bge-m3 (Ollama) / text-embedding-3-small (OpenAI) — canonical 매칭 임베딩
@@ -68,10 +68,10 @@ backend/pdf_pipeline/
 2. **provider 분기 이해** — VL 호출은 항상 `vl_providers.call_vl()` 경유. provider 는 `provider_selector` 가 자동 결정. 직접 Ollama/Gemini API 호출 금지.
 3. **staging → problems 2단 구조** — 자동 추출 결과는 항상 `problem_staging` 에 먼저 저장. 사용자 검수(bbox 편집, 번호 수정)를 거쳐 `approve-all` 로 이관.
 4. **샘플/이어서 태깅 지원** — `mode=fresh&sample_count=4` 로 앞 4개 먼저 확인 → 프롬프트 점검 → `mode=continue` 로 나머지.
-5. **마이그레이션 008 까지 적용 완료** — `solution_steps`, `common_mistakes` JSONB 컬럼 존재.
+5. **마이그레이션 010 까지 원격 DB 적용** — 009 `add_validation_columns`, 010 `add_difficulty_score` 는 원격 DB 전용 (로컬 `supabase/migrations/` 폴더엔 008 까지만). Supabase MCP `list_migrations` 로 확인.
 6. **bbox 자동 보정 금지** — 사용자 피드백: 편집기에서 수동 수정. 코드 휴리스틱으로 bbox 보정하면 안 됨.
 7. **UPLOAD_DIR 주의** — `.env` 의 값이 실제 경로. `config.py` 기본값(`/tmp/pdf_pipeline`) 아님.
-8. **VL provider 확인** — Ollama(서버): `ollama list` 에 `gemma3:27b` 있어야 함. 로컬(집): `GEMINI_API_KEY` 또는 `OPENAI_API_KEY` 필요.
+8. **VL provider 확인** — Ollama(서버): `ollama list` 에 `gemma3:27b` 있어야 함. 로컬(집): `OPENAI_API_KEY` 필요.
 
 ## 관련 CMS UI
 

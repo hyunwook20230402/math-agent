@@ -40,7 +40,7 @@ status: tagging|done|...
 남음: 26개 (5..30)
 
 → 이어서 태깅:
-curl -X POST "http://localhost:8000/solutions/<id>/upload-and-tag?mode=continue"
+curl -X POST "http://localhost:8001/solutions/<id>/upload-and-tag?mode=continue"
 ```
 
 ### 4. match_confidence 저조 경고

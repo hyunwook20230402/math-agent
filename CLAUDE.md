@@ -13,7 +13,7 @@ math/
 ├── shared/           # 공통 코드 (ui, supabase, hooks, types, lib)
 └── backend/
     ├── pdf_pipeline/ # PDF 문제/해설 자동 추출 파이프라인 (운영 중)
-    └── deeptutor/    # AI 튜터링 (스켈레톤만, 코드 0)
+    └── deeptutor/    # AI 튜터링 (LangGraph 다중턴 대화, 운영 중)
 ```
 
 ## 기술 스택
@@ -22,13 +22,15 @@ math/
 
 **백엔드 (Supabase)**: PostgreSQL, Auth (이메일), Storage (`problem-images` 버킷)
 
-**백엔드 (pdf_pipeline)**: Python 3.11, FastAPI (포트 8000), EasyOCR + YOLO, VL 모델 (Ollama Gemma3 27B / Gemini / OpenAI), bge-m3 임베딩
+**백엔드 (pdf_pipeline)**: Python 3.11, FastAPI (포트 8001), EasyOCR + YOLO11n, VL 모델 (Ollama Gemma3 27B 서버 근무시간 / OpenAI 오프시간 — provider_selector 자동 전환), bge-m3 임베딩
+
+**백엔드 (deeptutor)**: LangGraph + LLM, FastAPI, `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}` (대화 상태: `student_conversations` 테이블)
 
 ## 앱 실행
 
 ```bash
 cd apps/cms && npm run dev          # http://localhost:8081
-cd backend/pdf_pipeline && uvicorn main:app --reload --port 8000
+cd backend/pdf_pipeline && uvicorn main:app --reload --port 8001
 ```
 
 ## 공통 코드 import
