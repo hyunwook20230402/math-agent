@@ -46,6 +46,12 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 - 실행 시 반드시 `cd backend/pdf_pipeline/yolo_training` — yaml 내 `../uploads/...` 가 CWD 기준으로 해석됨
 - 학습 후 `models/problem_detector.pt` / `solution_detector.pt` **자동 덮어쓰기 금지** — metric 확인 후 수동 `cp`
 
+## VL 모델 고정 방침 (2026-04-21 확정)
+
+- **VL 모델은 gemma4:26b 로 고정**. qwen2.5-vl (7B/32B/72B 전부) 은 실측에서 gemma4 대비 품질 낮아 검토 대상 아님
+- 대안 검토 시 OpenAI/Gemini/Anthropic 등 유료 API 도 금지 (비용 이유)
+- 품질 개선은 VL 교체 대신 프롬프트 튜닝, 후처리 강화, 구조화 스키마 (segments) 로 접근
+
 ## 모델 파일 동기화
 
 - 학습 기본은 **서버** (평일 GPU 접근 가능). 주말 등 서버 미사용 시 **로컬 학습** 허용 — 기능적으로 동일

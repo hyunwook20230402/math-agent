@@ -47,46 +47,58 @@ class TagResult(BaseModel):
 
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
 
+_MATH_RULES_BLOCK = """MATH NOTATION (STRICT — violations make output invalid):
+1. NEVER use \\text{...}. Korean prose is plain text (no wrapper). Math goes in \\( ... \\).
+2. Wrap every math expression in \\( ... \\). Even a single variable: \\(x\\), \\(2\\), \\(f(2)\\), \\(x^2\\), \\(\\sum a_k\\), \\(\\lim_{x \\to 0} f(x)\\).
+3. Every backslash must be DOUBLE-escaped in JSON: write "\\\\sum", "\\\\frac", "\\\\lim", "\\\\to", "\\\\times", "\\\\cdot", "\\\\int".
+4. ONLY these commands are allowed inside \\( \\): \\sum \\frac \\sqrt \\lim \\int \\to \\times \\cdot \\infty \\log \\ln \\sin \\cos \\tan \\alpha \\beta \\gamma \\theta \\pi \\mu \\sigma \\delta \\epsilon. NEVER invent \\textascript, \\textstyle, or similar.
+5. If you cannot express cleanly, write plain Korean words. Example: write "좌극한" as plain text, NEVER "\\text{좌극한}".
+6. LaTeX commands live ONLY inside \\( \\). Outside, they are literal characters and must not appear.
+
+GOOD vs BAD (study these 4 pairs carefully):
+
+BAD:  "\\\\text{\\\\sum (a_k+1)=9}에서 \\\\text{\\\\sum a_k}를 구한다"
+GOOD: "\\\\(\\\\sum (a_k+1)=9\\\\) 에서 \\\\(\\\\sum a_k\\\\) 를 구한다"
+
+BAD:  "\\\\text{\\\\lim_{x \\\\to 0^+} f(x) = 2}"
+GOOD: "\\\\(\\\\lim_{x \\\\to 0^+} f(x) = 2\\\\)"
+
+BAD:  "좌극한과우극한을혼동"         (spaces collapsed — symptom of hidden \\text{})
+GOOD: "좌극한과 우극한을 혼동"
+
+BAD:  "함수 \\\\toe f(x)의 미분계수"   (invented \\toe fused with next letter)
+GOOD: "함수 \\\\(f(x)\\\\) 의 미분계수"
+"""
+
+
 _TAGGING_PROMPT_WITH_SOLUTION = """You are analyzing a Korean high school math solution image.
 
 Rules:
 - difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
 - answer_type: "multiple_choice" if the problem has numbered options (①②③④⑤), otherwise "short_answer"
-- concept_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). 한국 고등학교 수학 대단원 수준 용어 사용 (예: "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
-- skill_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). 문제 풀이에 실제 쓰인 기법 (예: "인수분해", "치환", "그래프 해석", "시그마 분배")
-- solution_summary: max 20 words IN KOREAN
+- concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Use Korean high-school math unit-level terms (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
+- skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Techniques actually used in the solution (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
+- solution_summary: max 20 words IN KOREAN, MUST NOT be empty or null
 - pitfall: max 20 words IN KOREAN
-- solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN
+- solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN. MUST NOT be empty.
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
-All text fields MUST be in Korean.
+All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
 
-MATH NOTATION RULES (반드시 준수):
-1. 모든 수학 표현은 \\( ... \\) 로 감쌀 것. 단일 변수/숫자도 포함: \\(x\\), \\(2\\), \\(f(2)\\), \\(x+2\\), \\(x^2\\).
-2. \\text{...} 절대 사용 금지. 한글 설명은 그냥 평문으로 쓰고, 수식 부분만 \\( ... \\) 로 감싼다.
-3. 모든 백슬래시는 JSON 에서 두 개로 이스케이프할 것: \\\\sum, \\\\frac, \\\\lim, \\\\to, \\\\text 금지.
-4. LaTeX 명령어는 반드시 수식 구간 안에서만. \\(x \\to 0^+\\) ✅, x \\to 0 ❌ (평문에 명령어 금지).
-5. 닫는 괄호 확인: 열린 \\( 는 반드시 \\) 로 닫는다.
-
-예시 (올바른 형식):
+""" + _MATH_RULES_BLOCK + """
+Reference output (well-formed):
 {
   "difficulty_score": 4,
   "concept_tags": ["수열", "시그마"],
   "skill_tags": ["시그마 분배 법칙", "수열의 합 계산"],
   "answer_type": "short_answer",
-  "solution_summary": "\\(\\sum_{k=1}^{5}(a_k+1)=9\\) 에서 \\(\\sum a_k\\) 를 구한 뒤 \\(a_6\\) 을 더한다.",
-  "pitfall": "\\(\\sum_{k=1}^{5} 1\\) 을 1로 착각",
-  "solution_steps": [{"step":1,"description":"\\(\\sum (a_k+1)\\) 을 분리하여 \\(\\sum a_k + 5 = 9\\) 로 정리"}],
-  "common_mistakes": [{"text":"\\(\\sum 1\\) 을 1로 계산"}]
+  "solution_summary": "\\\\(\\\\sum_{k=1}^{5}(a_k+1)=9\\\\) 에서 \\\\(\\\\sum a_k\\\\) 를 구한 뒤 \\\\(a_6\\\\) 을 더한다.",
+  "pitfall": "\\\\(\\\\sum_{k=1}^{5} 1\\\\) 을 1로 착각",
+  "solution_steps": [{"step":1,"description":"\\\\(\\\\sum (a_k+1)\\\\) 을 분리하여 \\\\(\\\\sum a_k + 5 = 9\\\\) 로 정리"}],
+  "common_mistakes": [{"text":"\\\\(\\\\sum 1\\\\) 을 1로 계산"}]
 }
 
-잘못된 예시 (이렇게 쓰지 말 것):
-- "\\text{\\sum a_k}" ❌ → "\\(\\sum a_k\\)" ✅
-- "함수 f(x) = x^2 + x + 2" ❌ → "함수 \\(f(x) = x^2 + x + 2\\)" ✅
-- "x → 0+ 일 때" ❌ → "\\(x \\to 0^+\\) 일 때" ✅
-- "\\text{그래프에서...}" ❌ → "그래프에서..." (한글은 평문, 수식만 \\( \\))
-
-Output valid JSON only."""
+Output valid JSON only. No prose, no markdown fences."""
 
 _TAGGING_PROMPT_WITH_PROBLEM_AND_SOLUTION = """You are analyzing a Korean high school math problem and its solution.
 
@@ -99,53 +111,99 @@ Use BOTH images together: the problem tells you what is being asked and which gi
 Rules:
 - difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
-- concept_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). 문제의 핵심 개념을 풀이와 교차 확인 (예: "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
-- skill_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). 풀이에서 실제로 사용된 기법 (예: "인수분해", "치환", "그래프 해석", "시그마 분배")
-- solution_summary: max 20 words IN KOREAN — describe the core approach
+- concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Cross-check problem and solution (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
+- skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Techniques actually used (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
+- solution_summary: max 20 words IN KOREAN, MUST NOT be empty or null — describe the core approach
 - pitfall: max 20 words IN KOREAN — the most likely mistake given the problem's trap
-- solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN
+- solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN. MUST NOT be empty.
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
-All text fields MUST be in Korean.
-For any mathematical expression in text fields, wrap it in \\( ... \\). Examples: \\(f(x)\\), \\(x^2\\), \\(\\frac{a}{b}\\), \\(\\log_5 3\\), \\(a_n\\).
+All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
 
-예시:
+""" + _MATH_RULES_BLOCK + """
+Reference output (well-formed):
 {
   "difficulty_score": 4,
   "concept_tags": ["수열", "시그마"],
   "skill_tags": ["시그마 분배 법칙", "수열의 합 계산"],
   "answer_type": "short_answer",
-  "solution_summary": "\\(\\sum (a_k+1)=9\\) 에서 \\(\\sum a_k\\) 를 구한 뒤 \\(a_6\\) 을 더한다.",
-  "pitfall": "\\(\\sum 1\\) 을 1로 착각",
-  "solution_steps": [{"step":1,"description":"\\(\\sum (a_k+1)\\) 을 분리하여 \\(\\sum a_k + 5 = 9\\) 로 정리"}],
-  "common_mistakes": [{"text":"\\(\\sum 1\\) 을 1로 계산"}]
+  "solution_summary": "\\\\(\\\\sum (a_k+1)=9\\\\) 에서 \\\\(\\\\sum a_k\\\\) 를 구한 뒤 \\\\(a_6\\\\) 을 더한다.",
+  "pitfall": "\\\\(\\\\sum 1\\\\) 을 1로 착각",
+  "solution_steps": [{"step":1,"description":"\\\\(\\\\sum (a_k+1)\\\\) 을 분리하여 \\\\(\\\\sum a_k + 5 = 9\\\\) 로 정리"}],
+  "common_mistakes": [{"text":"\\\\(\\\\sum 1\\\\) 을 1로 계산"}]
 }
-Output valid JSON only."""
+Output valid JSON only. No prose, no markdown fences."""
 
 _TAGGING_PROMPT_NO_SOLUTION = """You are analyzing a Korean high school math problem image (no solution shown).
 
 Rules:
 - difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
-- concept_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). (예: "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
-- skill_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). (예: "인수분해", "치환", "그래프 해석", "시그마 분배")
+- concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
+- skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
 - solution_summary: null
 - pitfall: max 20 words IN KOREAN
 - solution_steps: []
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
-All text fields MUST be in Korean.
+All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
 
-MATH NOTATION RULES (반드시 준수):
-1. 모든 수학 표현은 \\( ... \\) 로 감쌀 것. 단일 변수/숫자도 포함: \\(x\\), \\(2\\), \\(f(2)\\), \\(x+2\\).
-2. \\text{...} 절대 사용 금지. 한글 설명은 평문, 수식만 \\( ... \\) 로 감싼다.
-3. 모든 백슬래시는 두 개로 이스케이프: \\\\sum, \\\\frac, \\\\lim, \\\\to.
-4. 열린 \\( 는 반드시 \\) 로 닫는다.
-
-Output valid JSON only."""
+""" + _MATH_RULES_BLOCK + """
+Output valid JSON only. No prose, no markdown fences."""
 
 
 # ── 내부 유틸 ─────────────────────────────────────────────────────────────────
+
+def _strip_text_wrapper(s: str) -> str:
+  """`\\text{INNER}` 를 balanced brace 로 파싱하여 처리.
+
+  INNER 에 backslash 가 하나라도 있으면 수식으로 간주 → `\\(INNER\\)`.
+  없으면 wrapper 만 벗겨 평문에 흡수. 중첩된 `\\text{}` 는 재귀로 먼저 푼다.
+  """
+  out: list[str] = []
+  i = 0
+  n = len(s)
+  while i < n:
+    if s.startswith(r'\text{', i):
+      start = i + len(r'\text{')
+      j = start
+      depth = 1
+      while j < n and depth > 0:
+        ch = s[j]
+        if ch == '{':
+          depth += 1
+        elif ch == '}':
+          depth -= 1
+        j += 1
+      if depth != 0:
+        out.append(s[i])
+        i += 1
+        continue
+      inner = s[start : j - 1]
+      inner = _strip_text_wrapper(inner)
+      if '\\' in inner:
+        out.append(r'\(' + inner.strip() + r'\)')
+      else:
+        out.append(inner)
+      i = j
+    else:
+      out.append(s[i])
+      i += 1
+  return ''.join(out)
+
+
+def _to_plain(s: str) -> str:
+  """모든 LaTeX wrapper/명령어를 벗겨 한국어+숫자 평문만 남김 (sanity 실패 fallback)."""
+  import re as _re
+  s = _re.sub(r'\\text\{([^{}]*)\}', r'\1', s)
+  s = _re.sub(r'\\\(([^)]*)\\\)', r'\1', s)
+  s = _re.sub(r'\\\[([^\]]*)\\\]', r'\1', s)
+  s = _re.sub(r'\\[a-zA-Z]+\{([^{}]*)\}', r'\1', s)
+  s = _re.sub(r'\\[a-zA-Z]+', '', s)
+  s = _re.sub(r'[_^]\{([^{}]*)\}', r'\1', s)
+  s = _re.sub(r'[_^]', '', s)
+  return s
+
 
 def _load_taxonomy() -> dict:
   taxonomy_path = Path(__file__).parent.parent / "data" / "concept_taxonomy.json"
@@ -435,66 +493,46 @@ def extract_tags_from_image(
         logger.info(f"unit 매칭: '{unit}' (score={unit_score:.3f})")
 
     # LLM이 $...$ 형식으로 수식을 줄 경우 \(...\) 로 정규화
-    # gemma4 `\text{...}` 남용 정리 (수식은 \(...\) 로, 중첩 해제)
+    # gemma4 `\text{...}` 남용 정리 — balanced brace parser 로 중첩 정확 처리
     def _nm(text):
       if not isinstance(text, str):
         return text
       import re as _re
 
-      # 0) JSON escape 가 소실된 "term{", "erm{", "ext{" 를 `\text{` 로 복구
-      #    (앞에 백슬래시/알파벳이 없을 때만 — 단어 중간의 term/erm 는 건드리지 않음)
+      # 0) JSON escape 소실 복구
+      #    - `term{`, `erm{`, `ext{` → `\text{` (앞에 \ 또는 알파벳 없을 때만)
+      #    - `\toe`, `\tof` 등 \to + 소문자 → `\to` + 공백 + 문자 (\top 은 보존)
+      #    - `\textascript{...}` 환각 명령은 wrapper 만 제거
       text = _re.sub(r'(?<![\\a-zA-Z])term\{', r'\\text{', text)
       text = _re.sub(r'(?<![\\a-zA-Z])erm\{', r'\\text{', text)
       text = _re.sub(r'(?<![\\a-zA-Z])ext\{', r'\\text{', text)
+      text = _re.sub(r'\\to(?=[a-oq-z])', r'\\to ', text)
+      text = _re.sub(r'\\textascript\{([^{}]*)\}', r'\1', text)
+      text = _re.sub(r'\\textstyle\b', '', text)
 
       # 1) $...$ → \(...\)
       text = _re.sub(r'\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=_re.DOTALL)
       text = _re.sub(r'\$([^$\n]+?)\$', r'\\(\1\\)', text)
 
-      # 2) `\text{\text{...}}` 같은 중첩을 안쪽 한 겹으로 축약 (여러 번 반복)
-      for _ in range(4):
-        new_text = _re.sub(r'\\text\{\s*\\text\{', r'\\text{', text)
-        if new_text == text:
-          break
-        text = new_text
+      # 2) balanced brace parser 로 `\text{INNER}` 처리 (중첩/아래첨자 안전)
+      #    INNER 에 backslash 가 있으면 수식으로 판단 → `\(INNER\)`
+      #    없으면 wrapper 만 벗겨 평문으로 흡수
+      text = _strip_text_wrapper(text)
 
-      # 3) `\text{ ... LaTeX 명령어 ... }` → `\( ... \)` 변환.
-      #    내용 안에 `\sum`, `\frac`, `\sqrt`, `\lim`, `\int`, `\to`, `a_k`, `^`, `_{`
-      #    등 수식 전용 토큰이 있으면 수식으로 간주. 한글만 있으면 평문으로 풀어버림.
-      _MATH_MARKER = _re.compile(
-        r'\\(sum|frac|sqrt|lim|int|to|times|cdot|left|right|binom|overline|bar|sqrt|infty|cdots|ldots|alpha|beta|gamma|theta|pi|mu|sigma|delta|text|rm)\b'
-        r'|[_^]\{|\^\d|=\s*\\|_[a-zA-Z0-9]'
-      )
-      def _text_to_math_or_plain(m: _re.Match) -> str:
-        inner = m.group(1)
-        # 안쪽의 `\text{` 한 번 더 제거 (중첩 잔존 대비)
-        inner = _re.sub(r'\\text\{([^{}]*)\}', r'\1', inner)
-        if _MATH_MARKER.search(inner):
-          return r'\(' + inner.strip() + r'\)'
-        # 한글/영어 평문 → 그대로 풀어버림
-        return inner
-
-      # `\text{...}` — 내부에 중첩된 `{}` 가 없는 가장 안쪽부터 처리
-      prev = None
-      guard = 0
-      while prev != text and guard < 6:
-        prev = text
-        text = _re.sub(r'\\text\{([^{}]*)\}', _text_to_math_or_plain, text)
-        guard += 1
-
-      # 4) 고아 `$` 제거 (쌍 안 맞아 남은 단일 `$` 는 렌더 깨뜨림)
+      # 3) 고아 `$` 제거
       if text.count('$') == 1:
         text = text.replace('$', '')
 
-      # 5) 열린 `\(` 와 닫힌 `\)` 개수 불일치 시 경고만 (함부로 보정하면 내용 꼬임)
+      # 4) 최종 sanity — \text/\term 잔존 시 수식 자체를 벗겨 평문으로 강등
+      if _re.search(r'\\(text|term|textascript)\{', text):
+        logger.warning(f"[_nm] sanitize 실패 → plain 변환: {text[:120]!r}")
+        text = _to_plain(text)
+
+      # 5) \( vs \) 개수 불일치 경고
       open_n = len(_re.findall(r'\\\(', text))
       close_n = len(_re.findall(r'\\\)', text))
       if open_n != close_n:
         logger.warning(f"[_nm] \\( vs \\) 불일치 ({open_n} vs {close_n}): {text[:120]!r}")
-
-      # 6) 여전히 backslash 가 유실된 LaTeX 명령어 흔적이 있으면 경고
-      if _re.search(r'(?<![\\a-zA-Z])(sum|frac|sqrt|lim|int)_?\{', text):
-        logger.warning(f"[_nm] LaTeX 명령 backslash 유실 의심: {text[:120]!r}")
 
       return text
 

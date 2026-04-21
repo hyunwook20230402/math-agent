@@ -1,7 +1,20 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { MathJaxContext } from 'better-react-mathjax';
 import { Toaster } from '@shared/ui/toaster';
 import { AuthProvider, useAuth } from '@shared/hooks/useAuth';
+
+const MATHJAX_CONFIG = {
+  loader: { load: ['[tex]/ams'] },
+  tex: {
+    inlineMath: [['\\(', '\\)']],
+    displayMath: [['\\[', '\\]']],
+    packages: { '[+]': ['ams'] },
+  },
+  options: {
+    enableMenu: false,
+  },
+};
 
 import Index from '@/pages/Index';
 import EmailConfirm from '@/pages/EmailConfirm';
@@ -51,10 +64,12 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <Router>
-        <AppContent />
-        <Toaster />
-      </Router>
+      <MathJaxContext version={3} config={MATHJAX_CONFIG}>
+        <Router>
+          <AppContent />
+          <Toaster />
+        </Router>
+      </MathJaxContext>
     </AuthProvider>
   );
 }

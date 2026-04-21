@@ -1,47 +1,17 @@
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
 import React from 'react';
+import { MathJax } from 'better-react-mathjax';
 
-function tryRenderKatex(expr: string, display = false): string | null {
-  try {
-    return katex.renderToString(expr, { displayMode: display, throwOnError: true });
-  } catch {
-    return null;
-  }
-}
-
+// MathJax 는 \( \) / \[ \] 구분자를 기본 처리. 본문 + 수식 혼재 문자열을 그대로 넘겨도
+// MathJax 가 스스로 분해해 렌더한다 (KaTeX 보다 관대 — \text{} 안 \sum 도 시도).
+//
+// 입력 텍스트가 바뀔 때마다 MathJax 가 재처리되게 dynamic prop 사용.
+// inline prop=false (기본) → inline + display 모두 처리.
 export function MathText({ text, className }: { text: string; className?: string }) {
-  const parts = text.split(/(\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)/g);
   return (
     <span className={className}>
-      {parts.map((part, i) => {
-        const display = part.startsWith('\\[') || part.startsWith('$$');
-        const inner = part.replace(/^\\\(|\\\)$|^\\\[|\\\]$|^\$\$|\$\$$|^\$|\$$/g, '');
-        if ((part.startsWith('\\(') && part.endsWith('\\)')) ||
-            (part.startsWith('\\[') && part.endsWith('\\]')) ||
-            (part.startsWith('$$') && part.endsWith('$$')) ||
-            (part.startsWith('$') && part.endsWith('$') && part.length > 2)) {
-          const html = tryRenderKatex(inner, display);
-          return html
-            ? <span key={i} dangerouslySetInnerHTML={{ __html: html }} />
-            : <span key={i}>{part}</span>;
-        }
-        const subParts: React.ReactNode[] = [];
-        let last = 0;
-        let m: RegExpExecArray | null;
-        const re = /([a-zA-Z0-9α-ωΑ-Ω]+(?:[\^_]\{?[^}\s]+\}?)+|\\[a-zA-Z]+(?:\{[^}]*\})*)/g;
-        while ((m = re.exec(part)) !== null) {
-          if (m.index > last) subParts.push(<span key={`t${i}_${last}`}>{part.slice(last, m.index)}</span>);
-          const html = tryRenderKatex(m[0]);
-          subParts.push(html
-            ? <span key={`m${i}_${m.index}`} dangerouslySetInnerHTML={{ __html: html }} />
-            : <span key={`m${i}_${m.index}`}>{m[0]}</span>
-          );
-          last = m.index + m[0].length;
-        }
-        if (last < part.length) subParts.push(<span key={`t${i}_end`}>{part.slice(last)}</span>);
-        return <span key={i}>{subParts}</span>;
-      })}
+      <MathJax dynamic inline hideUntilTypeset="first">
+        {text}
+      </MathJax>
     </span>
   );
 }

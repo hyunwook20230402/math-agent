@@ -42,16 +42,46 @@ logger = logging.getLogger(__name__)
 _LATEX_ESCAPE_FIX_PATTERNS = [
   # \text{ ... \textit, \textbf, \textrm, \textstyle 등 — { 또는 공백/non-alpha 경계로 명확히 끝남
   (re.compile(r'(?<!\\)\\(text[a-z]*)(?=\{|[^a-zA-Z])'), r'\\\\\1'),
-  # \t 시작 명령어
+  # \t 시작
   (re.compile(r'(?<!\\)\\(to|times|top|tan|theta|triangle|tilde|tau)(?![a-zA-Z])'), r'\\\\\1'),
   # \f 시작
   (re.compile(r'(?<!\\)\\(frac|forall|floor|flat)(?![a-zA-Z])'), r'\\\\\1'),
-  # \r 시작 (Rightarrow 는 R 대문자지만 포함)
+  # \r 시작
   (re.compile(r'(?<!\\)\\(rightarrow|Rightarrow|rho|rfloor|rceil|right)(?![a-zA-Z])'), r'\\\\\1'),
   # \n 시작
   (re.compile(r'(?<!\\)\\(nabla|neq|notin|not|nu|ne)(?![a-zA-Z])'), r'\\\\\1'),
   # \b 시작
   (re.compile(r'(?<!\\)\\(binom|biggl|biggr|bigg|bigl|bigr|big|bigcup|bigcap|bigoplus|bar|beta|bullet|bot)(?![a-zA-Z])'), r'\\\\\1'),
+  # \s 시작 — sum/sqrt/sigma 등
+  (re.compile(r'(?<!\\)\\(sum|sqrt|sigma|sin|subset|subseteq|supset|supseteq|setminus|substack|sec|star|succ|succeq)(?![a-zA-Z])'), r'\\\\\1'),
+  # \l 시작
+  (re.compile(r'(?<!\\)\\(lim|log|leq|langle|lambda|Lambda|left|ldots|leftrightarrow|ln|lfloor|lceil|le|ll)(?![a-zA-Z])'), r'\\\\\1'),
+  # \c 시작
+  (re.compile(r'(?<!\\)\\(cdot|cdots|cos|cup|cap|circ|colon|cong|chi|coth|csc)(?![a-zA-Z])'), r'\\\\\1'),
+  # \e 시작
+  (re.compile(r'(?<!\\)\\(exp|epsilon|equiv|ell|emptyset|eta|eq)(?![a-zA-Z])'), r'\\\\\1'),
+  # \i 시작
+  (re.compile(r'(?<!\\)\\(int|infty|iff|imath|iota|Im|in)(?![a-zA-Z])'), r'\\\\\1'),
+  # \m, \p, \q, \u, \v, \w, \x 계열
+  (re.compile(r'(?<!\\)\\(max|min|mod|mu|mapsto|mathbb|mathrm|mathcal|mathsf|mathbf|mathit)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(partial|pi|Pi|phi|Phi|psi|Psi|prod|prec|preceq|pm|perp|parallel|prime)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(quad|qquad)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(underline|underbrace|uparrow|Uparrow|upsilon|Upsilon|uplus)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(varphi|vec|vee|vdots|varepsilon|varsigma|vartheta|varrho)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(wedge|widetilde|widehat)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(xi|Xi)(?![a-zA-Z])'), r'\\\\\1'),
+  # \a, \d, \g, \h, \k, \o — 희소 명령
+  (re.compile(r'(?<!\\)\\(alpha|approx|angle|arcsin|arccos|arctan|ast|aleph)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(delta|Delta|div|ddots|dagger|dashv|det|dim|dots)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(gamma|Gamma|gcd|geq|gg|ge|grave|hat)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(hbar|hookrightarrow|hookleftarrow|hom)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(kappa|ker)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(omega|Omega|overbrace|overline|oplus|otimes|ominus|odot|oint|oslash|oint)(?![a-zA-Z])'), r'\\\\\1'),
+  (re.compile(r'(?<!\\)\\(zeta)(?![a-zA-Z])'), r'\\\\\1'),
+  # \to 뒤에 소문자 알파벳 붙은 경우 — \top 은 이미 위 \t 패턴에서 처리됨.
+  #   \toe, \tof 등은 원래 `\to e` 인데 공백 빠진 케이스로 가정 → `\\to ` + 문자.
+  #   문자 클래스 `[a-oq-z]` 는 p 만 제외 (p 는 \top, \pi 등과 혼동 방지).
+  (re.compile(r'(?<!\\)\\to(?=[a-oq-z])'), r'\\\\to '),
 ]
 
 # JSON escape 가 이미 소실되어 첫 글자가 사라진 `\text{` 잔재 복구.
@@ -260,7 +290,7 @@ def _call_ollama(image_path: ImagePaths, prompt: str, schema: type[T], timeout: 
       continue
 
     try:
-      return schema.model_validate_json(raw_fixed)
+      parsed = schema.model_validate_json(raw_fixed)
     except Exception as e:
       last_err = e
       logger.warning(
@@ -269,10 +299,39 @@ def _call_ollama(image_path: ImagePaths, prompt: str, schema: type[T], timeout: 
       )
       continue
 
+    # 파싱 성공했지만 핵심 필드가 모두 비어있으면 재시도 (빈 응답 / refusal 감지)
+    if _is_empty_payload(parsed):
+      if attempt_idx < len(attempts) - 1:
+        logger.warning(
+          f"[ollama VL] attempt={attempt_idx+1} 파싱은 성공했으나 핵심 필드 empty → 재시도"
+        )
+        last_err = RuntimeError(f"gemma4 empty payload (attempt={attempt_idx+1})")
+        continue
+      logger.warning(
+        f"[ollama VL] 모든 attempt 에서 empty payload — 마지막 결과 그대로 반환"
+      )
+    return parsed
+
   logger.error(
     f"[ollama VL] 재시도 {len(attempts)}회 모두 실패: {last_err}"
   )
   raise last_err if last_err else RuntimeError("ollama VL 재시도 모두 실패")
+
+
+def _is_empty_payload(parsed: BaseModel) -> bool:
+  """TagResult 의 핵심 필드 (solution_summary + solution_steps) 가 모두 비었으면 True.
+  해설 없는 경로 (solution_summary 가 None 허용) 는 concept_tags 까지 함께 봐서 판단."""
+  if not hasattr(parsed, "solution_summary"):
+    return False
+  summary = getattr(parsed, "solution_summary", None) or ""
+  steps = getattr(parsed, "solution_steps", None) or []
+  concepts = getattr(parsed, "concept_tags", None) or []
+  # 요약 비었고 단계 비었으면 empty. concept_tags 까지 비었으면 확실히 empty.
+  if not summary.strip() and not steps:
+    return True
+  if not concepts:
+    return True
+  return False
 
 
 # ── Gemini ────────────────────────────────────────────────────────────────────
