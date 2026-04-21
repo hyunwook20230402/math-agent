@@ -70,7 +70,7 @@
 
 | 시간대 | 위치 | VL Provider | Embed Provider |
 |--------|------|-------------|----------------|
-| 평일 09:00~18:00 KST | 서버 (회사) | **Ollama Gemma3 27B** | **bge-m3** (Ollama) |
+| 평일 09:00~19:00 KST | 서버 (회사) | **Ollama Gemma4 26B** | **bge-m3** (Ollama) |
 | 그 외 | 집 | **OpenAI gpt-4o** (오프시간 기본) | **OpenAI** (text-embedding-3-small) |
 
 - `pipeline/provider_selector.py` 가 시간대 감지 → `VL_PROVIDER` / `EMBED_PROVIDER` 결정
@@ -80,8 +80,7 @@
 
 **모든 LLM 호출은 Pydantic structured output 강제** — free-form JSON 파싱 없음.
 
-서버 Ollama 모델 현황: `gemma3:27b` (17GB, vision, 128K context, RTX 4090 24GB).
-Gemma 4 가 Ollama 에 공개되면 서버 세션에서 교체 검토.
+서버 Ollama 모델 현황: `gemma4:26b` (19GB, vision, RTX 4090 24GB). 이전 `gemma3:27b` 는 2026-04-21 gemma4 로 교체.
 
 ---
 

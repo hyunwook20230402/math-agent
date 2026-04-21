@@ -1570,6 +1570,13 @@ async def solution_upload_and_tag(
             raise HTTPException(404, "해설지 작업을 찾을 수 없습니다.")
 
     job = solution_jobs[solution_job_id]
+    # 메모리 status 가 queued/tagging 으로 박제된 경우 DB 값으로 재동기화
+    # (이전 uvicorn 실행이 강제 종료된 후 메모리에 stale 값 남은 케이스)
+    if job["status"] in ("queued", "tagging"):
+        fresh = _hydrate_solution_job(solution_job_id)
+        if fresh is not None:
+            job = solution_jobs[solution_job_id]
+            logger.info(f"[upload-and-tag] 메모리 status 재동기화: → {job['status']}")
     # continue 모드는 done 상태에서도 허용 (이미 일부 끝난 상태에서 이어서)
     allowed_statuses = {"reviewing", "error", "done"} if mode == "continue" else {"reviewing", "error", "done"}
     if job["status"] not in allowed_statuses:

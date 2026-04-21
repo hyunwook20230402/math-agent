@@ -4,7 +4,7 @@
 
 ## 환경 요구사항
 - Python 3.11+
-- 서버: RTX 4090 24GB — Ollama Gemma3 27B (vision, 17GB)
+- 서버: RTX 4090 24GB — Ollama Gemma4 26B (vision, 19GB)
 - 로컬(집): Gemini API 또는 OpenAI API — provider_selector 가 시간대 기반 자동 선택
 - 임베딩: 서버 bge-m3 (Ollama) / 로컬 text-embedding-3-small (OpenAI)
 
