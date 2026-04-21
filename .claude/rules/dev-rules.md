@@ -46,6 +46,15 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 - 실행 시 반드시 `cd backend/pdf_pipeline/yolo_training` — yaml 내 `../uploads/...` 가 CWD 기준으로 해석됨
 - 학습 후 `models/problem_detector.pt` / `solution_detector.pt` **자동 덮어쓰기 금지** — metric 확인 후 수동 `cp`
 
+## 모델 파일 동기화
+
+- 학습 기본은 **서버** (평일 GPU 접근 가능). 주말 등 서버 미사용 시 **로컬 학습** 허용 — 기능적으로 동일
+- `backend/pdf_pipeline/yolo_training/models/` 에 **문제/해설 2개 .pt 파일만 존재** — .gitignore 대상 (git 동기화 불가)
+- 재학습 직후 반대편으로 `scp` 덮어쓰기:
+  - 서버→로컬 (PowerShell): `scp wanted-1@wanted-1:/home/wanted-1/WantedPotenUp/personal/hyunwook/math/math-agent/backend/pdf_pipeline/yolo_training/models/*.pt C:\Users\user\workspaces\math\backend\pdf_pipeline\yolo_training\models\`
+  - 로컬→서버: 경로 반대로
+- 학습 위치는 커밋 메시지나 `runs/` 디렉토리명에 기록 (혼선 방지)
+
 ## 의사결정 규칙
 
 - **근본 해결 우선** — 휴리스틱 땜질 지양. 구조/모델/아키텍처 교체를 중심축으로 두고, 시간/비용 클 때만 단기 완화책 병기
