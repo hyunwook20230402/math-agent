@@ -69,6 +69,12 @@ def _build_embeddings(section: dict) -> dict:
     }
 
   vectors = np.array(embedder.generate_embeddings_batch(texts), dtype=np.float32)
+  zero_count = int((np.linalg.norm(vectors, axis=1) == 0).sum())
+  if zero_count:
+    logger.warning(
+      f"[_build_embeddings] zero vector {zero_count}/{len(texts)}개 "
+      f"(NaN fallback — 해당 텍스트는 매칭 풀에서 제외됨)"
+    )
   norms = np.linalg.norm(vectors, axis=1, keepdims=True)
   norms[norms == 0] = 1.0
   vectors = vectors / norms

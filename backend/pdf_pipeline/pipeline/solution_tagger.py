@@ -3,7 +3,7 @@
 환경변수:
   VL_PROVIDER    — ollama (기본) | gemini | openai
   VL_OLLAMA_URL  — Ollama 서버 URL (기본 http://localhost:11434)
-  VL_MODEL       — Ollama 모델 태그 (기본 gemma3:27b)
+  VL_MODEL       — Ollama 모델 태그 (기본 gemma4:26b)
   GEMINI_MODEL   — Gemini 모델 ID (기본 gemini-2.0-flash)
   VL_TIMEOUT     — 호출 타임아웃 초 (기본 180)
 
@@ -36,8 +36,8 @@ class CommonMistake(BaseModel):
 
 class TagResult(BaseModel):
   difficulty_score: int = Field(ge=1, le=10)  # 1~10 정수 (1-2=very_easy, 3-4=easy, 5-6=medium, 7-8=hard, 9-10=very_hard)
-  concept_tags: list[str] = Field(default_factory=list)
-  skill_tags: list[str] = Field(default_factory=list)
+  concept_tags: list[str] = Field(default_factory=list, min_length=1)
+  skill_tags: list[str] = Field(default_factory=list, min_length=1)
   answer_type: Optional[str] = None  # "multiple_choice" or "short_answer"
   solution_summary: Optional[str] = None
   pitfall: Optional[str] = None
@@ -52,15 +52,40 @@ _TAGGING_PROMPT_WITH_SOLUTION = """You are analyzing a Korean high school math s
 Rules:
 - difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
 - answer_type: "multiple_choice" if the problem has numbered options (①②③④⑤), otherwise "short_answer"
-- concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분")
-- skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석")
+- concept_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). 한국 고등학교 수학 대단원 수준 용어 사용 (예: "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
+- skill_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). 문제 풀이에 실제 쓰인 기법 (예: "인수분해", "치환", "그래프 해석", "시그마 분배")
 - solution_summary: max 20 words IN KOREAN
 - pitfall: max 20 words IN KOREAN
 - solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
-All text fields (concept_tags, skill_tags, solution_summary, pitfall, solution_steps.description, common_mistakes.text) MUST be in Korean.
-For any mathematical expression in text fields, wrap it in \( ... \). Examples: \(f(x)\), \(x^2\), \(\frac{a}{b}\), \(\log_5 3\), \(a_n\).
+All text fields MUST be in Korean.
+
+MATH NOTATION RULES (반드시 준수):
+1. 모든 수학 표현은 \\( ... \\) 로 감쌀 것. 단일 변수/숫자도 포함: \\(x\\), \\(2\\), \\(f(2)\\), \\(x+2\\), \\(x^2\\).
+2. \\text{...} 절대 사용 금지. 한글 설명은 그냥 평문으로 쓰고, 수식 부분만 \\( ... \\) 로 감싼다.
+3. 모든 백슬래시는 JSON 에서 두 개로 이스케이프할 것: \\\\sum, \\\\frac, \\\\lim, \\\\to, \\\\text 금지.
+4. LaTeX 명령어는 반드시 수식 구간 안에서만. \\(x \\to 0^+\\) ✅, x \\to 0 ❌ (평문에 명령어 금지).
+5. 닫는 괄호 확인: 열린 \\( 는 반드시 \\) 로 닫는다.
+
+예시 (올바른 형식):
+{
+  "difficulty_score": 4,
+  "concept_tags": ["수열", "시그마"],
+  "skill_tags": ["시그마 분배 법칙", "수열의 합 계산"],
+  "answer_type": "short_answer",
+  "solution_summary": "\\(\\sum_{k=1}^{5}(a_k+1)=9\\) 에서 \\(\\sum a_k\\) 를 구한 뒤 \\(a_6\\) 을 더한다.",
+  "pitfall": "\\(\\sum_{k=1}^{5} 1\\) 을 1로 착각",
+  "solution_steps": [{"step":1,"description":"\\(\\sum (a_k+1)\\) 을 분리하여 \\(\\sum a_k + 5 = 9\\) 로 정리"}],
+  "common_mistakes": [{"text":"\\(\\sum 1\\) 을 1로 계산"}]
+}
+
+잘못된 예시 (이렇게 쓰지 말 것):
+- "\\text{\\sum a_k}" ❌ → "\\(\\sum a_k\\)" ✅
+- "함수 f(x) = x^2 + x + 2" ❌ → "함수 \\(f(x) = x^2 + x + 2\\)" ✅
+- "x → 0+ 일 때" ❌ → "\\(x \\to 0^+\\) 일 때" ✅
+- "\\text{그래프에서...}" ❌ → "그래프에서..." (한글은 평문, 수식만 \\( \\))
+
 Output valid JSON only."""
 
 _TAGGING_PROMPT_WITH_PROBLEM_AND_SOLUTION = """You are analyzing a Korean high school math problem and its solution.
@@ -74,15 +99,27 @@ Use BOTH images together: the problem tells you what is being asked and which gi
 Rules:
 - difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
-- concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분") — derived from the problem's underlying concept, cross-checked with the solution
-- skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석") — techniques used in the solution
+- concept_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). 문제의 핵심 개념을 풀이와 교차 확인 (예: "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
+- skill_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). 풀이에서 실제로 사용된 기법 (예: "인수분해", "치환", "그래프 해석", "시그마 분배")
 - solution_summary: max 20 words IN KOREAN — describe the core approach
 - pitfall: max 20 words IN KOREAN — the most likely mistake given the problem's trap
 - solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
 All text fields MUST be in Korean.
-For any mathematical expression in text fields, wrap it in \( ... \). Examples: \(f(x)\), \(x^2\), \(\frac{a}{b}\), \(\log_5 3\), \(a_n\).
+For any mathematical expression in text fields, wrap it in \\( ... \\). Examples: \\(f(x)\\), \\(x^2\\), \\(\\frac{a}{b}\\), \\(\\log_5 3\\), \\(a_n\\).
+
+예시:
+{
+  "difficulty_score": 4,
+  "concept_tags": ["수열", "시그마"],
+  "skill_tags": ["시그마 분배 법칙", "수열의 합 계산"],
+  "answer_type": "short_answer",
+  "solution_summary": "\\(\\sum (a_k+1)=9\\) 에서 \\(\\sum a_k\\) 를 구한 뒤 \\(a_6\\) 을 더한다.",
+  "pitfall": "\\(\\sum 1\\) 을 1로 착각",
+  "solution_steps": [{"step":1,"description":"\\(\\sum (a_k+1)\\) 을 분리하여 \\(\\sum a_k + 5 = 9\\) 로 정리"}],
+  "common_mistakes": [{"text":"\\(\\sum 1\\) 을 1로 계산"}]
+}
 Output valid JSON only."""
 
 _TAGGING_PROMPT_NO_SOLUTION = """You are analyzing a Korean high school math problem image (no solution shown).
@@ -90,15 +127,21 @@ _TAGGING_PROMPT_NO_SOLUTION = """You are analyzing a Korean high school math pro
 Rules:
 - difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
-- concept_tags: max 3 terms IN KOREAN (e.g. "삼각함수", "이차방정식", "미분")
-- skill_tags: max 3 terms IN KOREAN (e.g. "인수분해", "치환", "그래프 해석")
+- concept_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). (예: "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
+- skill_tags: 반드시 1~3개 IN KOREAN (빈 리스트 금지). (예: "인수분해", "치환", "그래프 해석", "시그마 분배")
 - solution_summary: null
 - pitfall: max 20 words IN KOREAN
 - solution_steps: []
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
 All text fields MUST be in Korean.
-For any mathematical expression in text fields, wrap it in \( ... \). Examples: \(f(x)\), \(x^2\), \(\frac{a}{b}\), \(\log_5 3\), \(a_n\).
+
+MATH NOTATION RULES (반드시 준수):
+1. 모든 수학 표현은 \\( ... \\) 로 감쌀 것. 단일 변수/숫자도 포함: \\(x\\), \\(2\\), \\(f(2)\\), \\(x+2\\).
+2. \\text{...} 절대 사용 금지. 한글 설명은 평문, 수식만 \\( ... \\) 로 감싼다.
+3. 모든 백슬래시는 두 개로 이스케이프: \\\\sum, \\\\frac, \\\\lim, \\\\to.
+4. 열린 \\( 는 반드시 \\) 로 닫는다.
+
 Output valid JSON only."""
 
 
@@ -352,6 +395,21 @@ def extract_tags_from_image(
   try:
     result = _call_vl(vl_image_arg, prompt)
 
+    # gemma4 가 개념/스킬을 비우는 경향이 있어 빈 리스트면 1회 재시도
+    if not result.concept_tags or not result.skill_tags:
+      logger.warning(
+        f"concept/skill 비어 있음 → 재시도 [{image_path}] "
+        f"(concept={len(result.concept_tags)}, skill={len(result.skill_tags)})"
+      )
+      retry_prompt = prompt + (
+        "\n\nIMPORTANT: concept_tags 와 skill_tags 는 반드시 1개 이상 포함해야 한다. "
+        "빈 리스트는 허용되지 않는다."
+      )
+      try:
+        result = _call_vl(vl_image_arg, retry_prompt)
+      except Exception as re_e:
+        logger.warning(f"재시도 실패 (원본 결과 유지): {re_e}")
+
     concept_tags = normalize_tags(result.concept_tags, "concept", concept_embeddings, threshold=0.65)
     skill_tags = normalize_tags(result.skill_tags, "skill", skill_embeddings, threshold=0.65)
 
@@ -377,12 +435,67 @@ def extract_tags_from_image(
         logger.info(f"unit 매칭: '{unit}' (score={unit_score:.3f})")
 
     # LLM이 $...$ 형식으로 수식을 줄 경우 \(...\) 로 정규화
+    # gemma4 `\text{...}` 남용 정리 (수식은 \(...\) 로, 중첩 해제)
     def _nm(text):
       if not isinstance(text, str):
         return text
       import re as _re
+
+      # 0) JSON escape 가 소실된 "term{", "erm{", "ext{" 를 `\text{` 로 복구
+      #    (앞에 백슬래시/알파벳이 없을 때만 — 단어 중간의 term/erm 는 건드리지 않음)
+      text = _re.sub(r'(?<![\\a-zA-Z])term\{', r'\\text{', text)
+      text = _re.sub(r'(?<![\\a-zA-Z])erm\{', r'\\text{', text)
+      text = _re.sub(r'(?<![\\a-zA-Z])ext\{', r'\\text{', text)
+
+      # 1) $...$ → \(...\)
       text = _re.sub(r'\$\$(.+?)\$\$', r'\\[\1\\]', text, flags=_re.DOTALL)
       text = _re.sub(r'\$([^$\n]+?)\$', r'\\(\1\\)', text)
+
+      # 2) `\text{\text{...}}` 같은 중첩을 안쪽 한 겹으로 축약 (여러 번 반복)
+      for _ in range(4):
+        new_text = _re.sub(r'\\text\{\s*\\text\{', r'\\text{', text)
+        if new_text == text:
+          break
+        text = new_text
+
+      # 3) `\text{ ... LaTeX 명령어 ... }` → `\( ... \)` 변환.
+      #    내용 안에 `\sum`, `\frac`, `\sqrt`, `\lim`, `\int`, `\to`, `a_k`, `^`, `_{`
+      #    등 수식 전용 토큰이 있으면 수식으로 간주. 한글만 있으면 평문으로 풀어버림.
+      _MATH_MARKER = _re.compile(
+        r'\\(sum|frac|sqrt|lim|int|to|times|cdot|left|right|binom|overline|bar|sqrt|infty|cdots|ldots|alpha|beta|gamma|theta|pi|mu|sigma|delta|text|rm)\b'
+        r'|[_^]\{|\^\d|=\s*\\|_[a-zA-Z0-9]'
+      )
+      def _text_to_math_or_plain(m: _re.Match) -> str:
+        inner = m.group(1)
+        # 안쪽의 `\text{` 한 번 더 제거 (중첩 잔존 대비)
+        inner = _re.sub(r'\\text\{([^{}]*)\}', r'\1', inner)
+        if _MATH_MARKER.search(inner):
+          return r'\(' + inner.strip() + r'\)'
+        # 한글/영어 평문 → 그대로 풀어버림
+        return inner
+
+      # `\text{...}` — 내부에 중첩된 `{}` 가 없는 가장 안쪽부터 처리
+      prev = None
+      guard = 0
+      while prev != text and guard < 6:
+        prev = text
+        text = _re.sub(r'\\text\{([^{}]*)\}', _text_to_math_or_plain, text)
+        guard += 1
+
+      # 4) 고아 `$` 제거 (쌍 안 맞아 남은 단일 `$` 는 렌더 깨뜨림)
+      if text.count('$') == 1:
+        text = text.replace('$', '')
+
+      # 5) 열린 `\(` 와 닫힌 `\)` 개수 불일치 시 경고만 (함부로 보정하면 내용 꼬임)
+      open_n = len(_re.findall(r'\\\(', text))
+      close_n = len(_re.findall(r'\\\)', text))
+      if open_n != close_n:
+        logger.warning(f"[_nm] \\( vs \\) 불일치 ({open_n} vs {close_n}): {text[:120]!r}")
+
+      # 6) 여전히 backslash 가 유실된 LaTeX 명령어 흔적이 있으면 경고
+      if _re.search(r'(?<![\\a-zA-Z])(sum|frac|sqrt|lim|int)_?\{', text):
+        logger.warning(f"[_nm] LaTeX 명령 backslash 유실 의심: {text[:120]!r}")
+
       return text
 
     solution_summary = _nm(solution_summary)
@@ -420,17 +533,17 @@ def extract_tags_from_image(
 
     return tag_result
 
-  except requests.exceptions.ConnectionError:  # type: ignore[name-defined]
-    logger.error("Ollama 서버 연결 실패. 'ollama serve' 실행 여부 확인")
+  except requests.exceptions.ConnectionError as e:  # type: ignore[name-defined]
+    logger.error(f"Ollama 서버 연결 실패 [{image_path}]: {e}", exc_info=True)
     return fallback
-  except requests.exceptions.Timeout:  # type: ignore[name-defined]
-    logger.error(f"VL 모델 응답 타임아웃: {image_path}")
+  except requests.exceptions.Timeout as e:  # type: ignore[name-defined]
+    logger.error(f"VL 모델 응답 타임아웃 [{image_path}]: {e}", exc_info=True)
     return fallback
   except ValidationError as e:
-    logger.error(f"Pydantic 파싱 실패: {e}")
+    logger.error(f"Pydantic 파싱 실패 [{image_path}]: {e}", exc_info=True)
     return fallback
   except Exception as e:
-    logger.error(f"태깅 오류: {e}")
+    logger.error(f"태깅 오류 [{image_path}]: {e}", exc_info=True)
     return fallback
 
 
