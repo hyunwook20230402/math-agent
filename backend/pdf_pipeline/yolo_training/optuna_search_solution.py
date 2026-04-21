@@ -50,7 +50,7 @@ def objective(trial: optuna.Trial) -> float:
             save=False,
             plots=False,
             verbose=False,
-            project="runs",
+            project=str(SCRIPT_DIR / "runs"),
             name=run_name,
             exist_ok=True,
             optimizer=optimizer,

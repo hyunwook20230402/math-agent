@@ -28,7 +28,7 @@ model.train(
     device=0,
     patience=50,
     save=True,
-    project="runs",
+    project=str(SCRIPT_DIR / "runs"),
     name=RUN_NAME,
     exist_ok=True,
     optimizer="AdamW",
