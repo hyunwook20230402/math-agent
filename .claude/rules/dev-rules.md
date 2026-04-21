@@ -67,6 +67,79 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 - 로컬에서만 코드 수정 → commit → push. 서버는 `git pull` + 런타임 명령만
 - 예외: `ollama pull`, `pip install`, `uvicorn` 기동 등 런타임 명령은 서버 셸에서 직접 가능
 
+## 로컬 → 서버 Ollama 사용 (2026-04-21 확정)
+
+로컬에서 파이프라인 돌리되 VL/embed 는 서버 GPU 사용하는 방식. 서버 근무시간 외에도 서버 GPU 가용할 때 OpenAI 비용 아낄 수 있음.
+
+**준비물**
+- 서버 ollama 는 `127.0.0.1:11434` 만 바인딩 (`ollama` 유저 소유 프로세스라 건드리지 말 것)
+- Tailscale 로 로컬 ↔ 서버 연결 (`100.95.34.69`)
+- 로컬 PC 에도 ollama 가 돌고 있어 11434 포트 충돌 — 우회 포트 `21434` 사용
+
+**1. SSH 포트포워딩 (로컬 PowerShell 새 창, 닫으면 터널 끊김)**
+```
+ssh -N -L 21434:localhost:11434 wanted-server
+```
+비번 입력 후 멈춘 듯 가만히 있으면 성공. `curl http://localhost:21434/api/tags` 로 모델 목록 뜨면 OK.
+
+**2. 서버 설치된 모델 확인** — `gemma3:27b` 없으면 `gemma4:26b` 사용 (프롬프트는 gemma3 기준 튜닝이라 샘플 4개로 품질 먼저 검증)
+
+**3. `backend/pdf_pipeline/.env` 패치**
+```
+OLLAMA_BASE_URL=http://localhost:21434
+VL_OLLAMA_URL=http://localhost:21434
+OLLAMA_URL=http://localhost:21434
+VL_MODEL=gemma4:26b
+OLLAMA_MODEL=gemma4:26b
+VL_PROVIDER=ollama    # off-hours 자동 OpenAI fallback 차단
+EMBED_PROVIDER=ollama
+```
+
+**4. uvicorn 재기동 후 CMS "샘플 태깅 (앞 4개)" 로 품질 확인 → 문제없으면 전체**
+
+## 알려진 이슈 및 해결책
+
+### Ollama embedder 500 에러 (2026-04-21 해결)
+- 증상: `Ollama 접속 실패 → OpenAI fallback (batch): 500 Server Error for url: .../api/embeddings`
+- 원인 1: 신버전 ollama 는 `/api/embeddings` (구) 가 긴 한글 텍스트에서 500 — `/api/embed` (신) 사용해야 함
+- 원인 2: 파이프라인이 한 번에 수백 개 텍스트 배치 → 서버 OOM
+- 해결: `pipeline/embedder.py` 에서 `/api/embed` + 32개 청크 분할
+
+### solution_jobs status 박제 (재발 가능)
+- 증상: 태깅 실패/중단 후 `upload-and-tag` 가 400 `태깅 가능 상태 아님: tagging` 반환
+- 원인: 실패 경로에서 `status='error'` 복구 업데이트 없음 + uvicorn 메모리 dict 에 상태 남음
+- 해결:
+  1. Supabase MCP `execute_sql` 로 `UPDATE solution_jobs SET status='reviewing' WHERE id='...'`
+  2. `taskkill /F /IM python.exe` (Ctrl+C 안 먹을 때) — **주의: 모든 python 프로세스 죽음**
+  3. uvicorn 재기동 (메모리 초기화 필수 — `--reload` 만으론 `solution_jobs` dict 안 비워지는 경우 있음)
+  4. 재기동 직후 status 가 `reviewing` 인지 확인 후 샘플 태깅 재시도
+
+### uvicorn 종료 안 됨 (백그라운드 태스크 대기)
+- 증상: Ctrl+C 여러 번 눌러도 `Waiting for background tasks to complete. (CTRL+C to force quit)` 에서 멈춤
+- 원인: OpenAI fallback 호출 등 긴 요청 대기 중
+- 해결: 새 PowerShell 창에서 `taskkill /F /IM python.exe`
+
+## 로컬 실행 환경 (자주 묻는 것)
+
+터미널 2개로 나눠 실행. 혼동 금지.
+
+**백엔드 (Python, venv 필요)**
+```
+cd backend/pdf_pipeline
+venv\Scripts\activate        # (venv) 프롬프트 확인
+uvicorn main:app --reload --port 8001
+```
+- `(venv)` 프리픽스 없으면 전역 Python 으로 돌아 Pillow/ultralytics 꼬임
+- `Uvicorn running on http://127.0.0.1:8001` + `Started reloader process` 두 줄 뜨면 정상 기동
+
+**CMS (Node.js, venv 무관)**
+```
+cd apps/cms
+npm run dev                  # http://localhost:8081
+```
+- Node 앱이므로 venv activate 불필요. 브라우저 접속도 venv 와 무관
+- teacher=8082, student=8083 동일 원칙
+
 ## 비용 절감 규칙
 
 - 파일 탐색/검색 → Explore subagent 위임

@@ -49,11 +49,11 @@
 
 | 시간대 | VL Provider | Embed Provider |
 |--------|-------------|----------------|
-| 평일 09-19 KST (서버) | Ollama Gemma3 27B | bge-m3 (Ollama) |
+| 평일 09-19 KST (서버) | Ollama Gemma4 26B | bge-m3 (Ollama) |
 | 그 외 (집) | OpenAI gpt-4o | OpenAI text-embedding-3-small |
 
 - 환경변수 `VL_PROVIDER` / `EMBED_PROVIDER` 로 강제 override 가능
-- 서버 Ollama 모델: `gemma3:27b` (17GB, RTX 4090 24GB)
+- 서버 Ollama 모델: `gemma4:26b` (19GB, RTX 4090 24GB) — 이전 `gemma3:27b` 는 2026-04-21 교체
 - 오프시간 OpenAI 전환은 커밋 `57aff12` 에서 도입. Gemini 는 현재 스택에서 빠짐(README 참고)
 - 근무시간은 09~18 → **09~19 KST** 로 확장됨 (커밋 `dd436d6`)
 
