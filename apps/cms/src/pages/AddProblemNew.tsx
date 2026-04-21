@@ -5,7 +5,6 @@ import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
-import { Textarea } from '@shared/ui/textarea';
 import { Badge } from '@shared/ui/badge';
 import { toast } from '@shared/hooks/use-toast';
 import {
@@ -15,6 +14,7 @@ import {
   Save,
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
+import { EditableMath } from '@shared/ui/EditableMath';
 
 interface Textbook {
   id: string;
@@ -1101,8 +1101,8 @@ const AddProblemNew = () => {
                   <img
                     src={solutionImageUrl}
                     alt="해설 이미지"
-                    className="mt-1 max-w-full rounded border cursor-zoom-in hover:opacity-90 transition-opacity"
-                    style={{ maxHeight: '320px', objectFit: 'contain' }}
+                    className="mt-1 w-full rounded border cursor-zoom-in hover:opacity-90 transition-opacity"
+                    style={{ maxHeight: '900px', objectFit: 'contain' }}
                     onClick={() => setLightboxSrc(solutionImageUrl)}
                     onError={(e) => { e.currentTarget.style.display = 'none'; }}
                   />
@@ -1112,27 +1112,25 @@ const AddProblemNew = () => {
               {/* 해설 요약 */}
               <div>
                 <Label htmlFor="solution_summary" className="text-sm">해설 요약</Label>
-                <Textarea
-                  id="solution_summary"
-                  value={solutionSummary}
-                  onChange={(e) => setSolutionSummary(e.target.value)}
-                  placeholder="해설 요약"
-                  rows={2}
-                  className="mt-1 text-sm"
-                />
+                <div className="mt-1">
+                  <EditableMath
+                    value={solutionSummary}
+                    onChange={setSolutionSummary}
+                    placeholder="해설 요약"
+                  />
+                </div>
               </div>
 
               {/* 오답 포인트 */}
               <div>
                 <Label htmlFor="pitfall" className="text-sm">오답 포인트</Label>
-                <Textarea
-                  id="pitfall"
-                  value={pitfall}
-                  onChange={(e) => setPitfall(e.target.value)}
-                  placeholder="자주 틀리는 포인트"
-                  rows={2}
-                  className="mt-1 text-sm"
-                />
+                <div className="mt-1">
+                  <EditableMath
+                    value={pitfall}
+                    onChange={setPitfall}
+                    placeholder="자주 틀리는 포인트"
+                  />
+                </div>
               </div>
 
               {/* 단계별 풀이 */}
@@ -1153,16 +1151,17 @@ const AddProblemNew = () => {
                   {solutionSteps.map((s, i) => (
                     <div key={i} className="flex gap-2 items-start">
                       <span className="text-xs text-muted-foreground mt-2 w-12 shrink-0">Step {s.step}</span>
-                      <Textarea
-                        value={s.description}
-                        onChange={(e) => {
-                          const next = [...solutionSteps];
-                          next[i] = { ...next[i], description: e.target.value };
-                          setSolutionSteps(next);
-                        }}
-                        rows={2}
-                        className="text-sm flex-1"
-                      />
+                      <div className="flex-1">
+                        <EditableMath
+                          value={s.description}
+                          onChange={(v) => {
+                            const next = [...solutionSteps];
+                            next[i] = { ...next[i], description: v };
+                            setSolutionSteps(next);
+                          }}
+                          placeholder="단계 설명"
+                        />
+                      </div>
                       <Button
                         type="button"
                         size="sm"
@@ -1197,16 +1196,17 @@ const AddProblemNew = () => {
                 <div className="mt-1 space-y-2">
                   {commonMistakes.map((m, i) => (
                     <div key={i} className="flex gap-2 items-start">
-                      <Textarea
-                        value={m.text}
-                        onChange={(e) => {
-                          const next = [...commonMistakes];
-                          next[i] = { ...next[i], text: e.target.value };
-                          setCommonMistakes(next);
-                        }}
-                        rows={2}
-                        className="text-sm flex-1"
-                      />
+                      <div className="flex-1">
+                        <EditableMath
+                          value={m.text}
+                          onChange={(v) => {
+                            const next = [...commonMistakes];
+                            next[i] = { ...next[i], text: v };
+                            setCommonMistakes(next);
+                          }}
+                          placeholder="자주 하는 실수"
+                        />
+                      </div>
                       <Button
                         type="button"
                         size="sm"
