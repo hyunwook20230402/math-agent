@@ -1,4 +1,4 @@
-"""크롭 이미지 구조화: Surya OCR + Ollama (기본 Gemma3 27B)"""
+"""크롭 이미지 구조화: Surya OCR + Ollama (기본 Gemma4 26B)"""
 import json
 import re
 import tempfile
