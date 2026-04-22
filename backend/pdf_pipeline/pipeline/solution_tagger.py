@@ -20,9 +20,27 @@ import requests
 from pydantic import BaseModel, Field, ValidationError
 
 from . import tag_normalizer, unit_matcher
-from .vl_providers import call_vl
+from .vl_providers import attempts_scope, call_vl
 
 logger = logging.getLogger(__name__)
+
+
+def _route_call_b_provider(difficulty_score: int) -> str:
+  """Call B 호출용 provider 결정 (난이도 기반).
+
+  환경변수:
+    CALL_B_PROVIDER         = openai | ollama (강제 override, 비면 라우팅)
+    CALL_B_HARD_THRESHOLD   = 어려움 기준 difficulty_score (기본 7)
+    CALL_B_HARD_PROVIDER    = 어려움일 때 provider (기본 openai)
+    CALL_B_EASY_PROVIDER    = 쉬움일 때 provider (기본 ollama)
+  """
+  forced = os.environ.get("CALL_B_PROVIDER", "").strip().lower()
+  if forced:
+    return forced
+  threshold = int(os.environ.get("CALL_B_HARD_THRESHOLD", "7"))
+  if difficulty_score >= threshold:
+    return os.environ.get("CALL_B_HARD_PROVIDER", "openai").strip().lower()
+  return os.environ.get("CALL_B_EASY_PROVIDER", "ollama").strip().lower()
 
 
 # ── Pydantic 응답 스키마 ──────────────────────────────────────────────────────
@@ -37,6 +55,7 @@ class CommonMistake(BaseModel):
   text: str         # 한국어, 학생 UI 노출
 
 class TagResult(BaseModel):
+  """최종 병합 결과 타입 (Call A + Call B 합친 뒤). 하위호환용."""
   difficulty_score: int = Field(ge=1, le=10)  # 1~10 정수 (1-2=very_easy, 3-4=easy, 5-6=medium, 7-8=hard, 9-10=very_hard)
   concept_tags: list[str] = Field(default_factory=list, min_length=1)
   skill_tags: list[str] = Field(default_factory=list, min_length=1)
@@ -45,6 +64,25 @@ class TagResult(BaseModel):
   pitfall: Optional[str] = None
   solution_steps: list[SolutionStep] = Field(default_factory=list)
   common_mistakes: list[CommonMistake] = Field(default_factory=list)
+
+
+class TagResultMeta(BaseModel):
+  """Call A 전용 — solution_steps 제외한 메타 정보.
+
+  gemma4 가 한 번에 steps 까지 뱉다가 repetition 루프에 빠지는 문제 완화 (2026-04-22).
+  """
+  difficulty_score: int = Field(ge=1, le=10)
+  concept_tags: list[str] = Field(default_factory=list, min_length=1)
+  skill_tags: list[str] = Field(default_factory=list, min_length=1)
+  answer_type: Optional[str] = None
+  solution_summary: Optional[str] = None
+  pitfall: Optional[str] = None
+  common_mistakes: list[CommonMistake] = Field(default_factory=list)
+
+
+class SolutionStepsOnly(BaseModel):
+  """Call B 전용 — solution_steps 만 뽑는 좁은 스키마."""
+  solution_steps: list[SolutionStep] = Field(default_factory=list)
 
 
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
@@ -77,7 +115,7 @@ LANGUAGE (absolute — Korean only for prose):
 - If you are uncertain of the Korean word, use 한국어 synonyms (예: "최종 결과" 대신 "따라서", "정리하면" 사용).
 - NEVER repeat a phrase more than twice in one field. If you find yourself repeating "description_error:" or similar, STOP and rewrite.
 
-추가 규칙(한국어): 모든 description/summary/pitfall/mistakes 는 반드시 한국어 문장으로만 작성한다. 영어 단어 금지. 같은 어구 반복 금지. "description_error" 같은 placeholder 문자열 절대 출력 금지.
+추가 규칙(한국어): 모든 description/summary/pitfall/mistakes 는 반드시 한국어 문장으로만 작성한다. 영어 단어 금지. 같은 어구 반복 금지. "description_error" 같은 placeholder 문자열 절대 출력 금지. formula 는 반드시 \\\\( ... \\\\) 로 감싼다. reason 은 "null" 문자열 대신 null 값 또는 한국어 1~3단어.
 """
 
 
@@ -91,17 +129,15 @@ Rules:
     7-8 (hard): 아이디어 1개 필요. 다음 중 1개 해당 → 경우 분리 2개 / 그래프 해석+대수 조작 동시 / 합성함수·역함수·절댓값 중 1개 / 개념 2~3개 복합.
     9-10 (killer): 다음 중 2개 이상 해당 → 경우 분리 3개 이상 / 합성·역·절댓값 중첩 2개 이상 / 미지수 2개 이상을 여러 조건으로 동시 결정 / solution_steps 7단계 이상 / 그래프 해석+경우분리+대수 조작 모두 / 개념 3개 이상 복합.
     시대 무관 (2012 수능 30번, 2021 수능 30번, 최근 평가원 22/30 급 모두 9-10).
+    하한 규칙 (엄수): 경우 분리가 3개 이상이면 difficulty_score 최소 8 (7 이하 절대 금지). 위 구조 신호 중 2개 이상 동시 해당이면 최소 9 (8 이하 절대 금지). 보수적으로 8 에 몰리지 말고, 신호 카운트가 2+ 면 망설이지 말고 9~10 을 줘라.
 - answer_type: "multiple_choice" if the problem has numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Use Korean high-school math unit-level terms (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
 - skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Techniques actually used in the solution (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
 - solution_summary: max 20 words IN KOREAN, MUST NOT be empty or null
 - pitfall: max 20 words IN KOREAN
-- solution_steps: 난이도별 점진 증가 — 1-2: 2~3 steps / 3-4: 3~4 / 5-6: 4~6 / 7-8: 6~8 / 9-10: 8~12 (경우 분리 각각을 step 으로 쪼갠다). MUST NOT be empty.
-    각 step 은 세 필드:
-      description: 이 단계에서 *무엇을* 하는지 (한국어 한 문장, 수식 섞어도 됨)
-      formula: 이 단계의 *핵심 식 하나* 를 \\( ... \\) 로. 식이 없는 단계 (예: "조건 정리") 는 null.
-      reason: 이 단계가 *왜* 필요한지 — 개념/정리 이름으로 1~3단어 (예: "극값 정의", "미적분 기본정리"). 생략 가능 (null).
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
+
+NOTE: solution_steps 는 이 호출에서 뽑지 않는다. 별도 호출에서 다룬다. JSON 에 solution_steps 키 자체 포함 금지.
 
 All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
 
@@ -114,10 +150,6 @@ Reference output (well-formed):
   "answer_type": "short_answer",
   "solution_summary": "\\\\(\\\\sum_{k=1}^{5}(a_k+1)=9\\\\) 에서 \\\\(\\\\sum a_k\\\\) 를 구한 뒤 \\\\(a_6\\\\) 을 더한다.",
   "pitfall": "\\\\(\\\\sum_{k=1}^{5} 1\\\\) 을 1로 착각",
-  "solution_steps": [
-    {"step":1,"description":"시그마를 두 항으로 분리한다","formula":"\\\\(\\\\sum (a_k+1) = \\\\sum a_k + \\\\sum 1\\\\)","reason":"시그마 분배"},
-    {"step":2,"description":"상수항 시그마를 계산하여 \\\\(\\\\sum a_k\\\\) 를 구한다","formula":"\\\\(\\\\sum a_k + 5 = 9 \\\\Rightarrow \\\\sum a_k = 4\\\\)","reason":"상수합 공식"}
-  ],
   "common_mistakes": [{"text":"\\\\(\\\\sum 1\\\\) 을 1로 계산"}]
 }
 
@@ -139,17 +171,15 @@ Rules:
     7-8 (hard): 아이디어 1개 필요. 다음 중 1개 해당 → 경우 분리 2개 / 그래프 해석+대수 조작 동시 / 합성함수·역함수·절댓값 중 1개 / 개념 2~3개 복합.
     9-10 (killer): 다음 중 2개 이상 해당 → 경우 분리 3개 이상 / 합성·역·절댓값 중첩 2개 이상 / 미지수 2개 이상을 여러 조건으로 동시 결정 / solution_steps 7단계 이상 / 그래프 해석+경우분리+대수 조작 모두 / 개념 3개 이상 복합.
     시대 무관 (2012 수능 30번, 2021 수능 30번, 최근 평가원 22/30 급 모두 9-10).
+    하한 규칙 (엄수): 경우 분리가 3개 이상이면 difficulty_score 최소 8 (7 이하 절대 금지). 위 구조 신호 중 2개 이상 동시 해당이면 최소 9 (8 이하 절대 금지). 보수적으로 8 에 몰리지 말고, 신호 카운트가 2+ 면 망설이지 말고 9~10 을 줘라.
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Cross-check problem and solution (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
 - skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Techniques actually used (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
 - solution_summary: max 20 words IN KOREAN, MUST NOT be empty or null — describe the core approach
 - pitfall: max 20 words IN KOREAN — the most likely mistake given the problem's trap
-- solution_steps: 난이도별 점진 증가 — 1-2: 2~3 steps / 3-4: 3~4 / 5-6: 4~6 / 7-8: 6~8 / 9-10: 8~12 (경우 분리 각각을 step 으로 쪼갠다). MUST NOT be empty.
-    각 step 은 세 필드:
-      description: 이 단계에서 *무엇을* 하는지 (한국어 한 문장, 수식 섞어도 됨)
-      formula: 이 단계의 *핵심 식 하나* 를 \\( ... \\) 로. 식이 없는 단계 (예: "조건 정리") 는 null.
-      reason: 이 단계가 *왜* 필요한지 — 개념/정리 이름으로 1~3단어 (예: "극값 정의", "미적분 기본정리"). 생략 가능 (null).
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
+
+NOTE: solution_steps 는 이 호출에서 뽑지 않는다. 별도 호출에서 다룬다. JSON 에 solution_steps 키 자체 포함 금지.
 
 All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
 
@@ -162,10 +192,6 @@ Reference output (well-formed):
   "answer_type": "short_answer",
   "solution_summary": "\\\\(\\\\sum (a_k+1)=9\\\\) 에서 \\\\(\\\\sum a_k\\\\) 를 구한 뒤 \\\\(a_6\\\\) 을 더한다.",
   "pitfall": "\\\\(\\\\sum 1\\\\) 을 1로 착각",
-  "solution_steps": [
-    {"step":1,"description":"시그마를 두 항으로 분리한다","formula":"\\\\(\\\\sum (a_k+1) = \\\\sum a_k + \\\\sum 1\\\\)","reason":"시그마 분배"},
-    {"step":2,"description":"상수항 시그마를 계산하여 \\\\(\\\\sum a_k\\\\) 를 구한다","formula":"\\\\(\\\\sum a_k + 5 = 9 \\\\Rightarrow \\\\sum a_k = 4\\\\)","reason":"상수합 공식"}
-  ],
   "common_mistakes": [{"text":"\\\\(\\\\sum 1\\\\) 을 1로 계산"}]
 }
 Output valid JSON only. No prose, no markdown fences."""
@@ -179,18 +205,50 @@ Rules:
     5-6 (medium): 조건 2~3개 조합, 개념 1~2개.
     7-8 (hard): 아이디어 1개 필요 (경우 분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개).
     9-10 (killer): 경우 분리 3+ / 합성·역·절댓값 중첩 2+ / 미지수 2+ 동시 결정 / 그래프+경우분리+대수 모두 / 개념 3+ 복합 중 2개 이상 해당. 시대 무관.
+    하한 규칙 (엄수): 경우 분리 3+ 면 최소 8 (7 이하 금지). 구조 신호 2+ 면 최소 9 (8 이하 금지). 신호 카운트 2+ 면 망설이지 말고 9~10.
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
 - skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
 - solution_summary: null
 - pitfall: max 20 words IN KOREAN
-- solution_steps: []
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
+
+NOTE: solution_steps 필드는 이 호출에서 출력하지 않는다. JSON 에 solution_steps 키 포함 금지.
 
 All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
 
 """ + _MATH_RULES_BLOCK + """
 Output valid JSON only. No prose, no markdown fences."""
+
+
+_STEPS_ONLY_PROMPT = """You are analyzing a Korean high school math problem and its solution.
+
+You are given the problem image and the solution image. Your ONLY task now is to extract `solution_steps` — nothing else.
+
+- solution_steps: 풀이의 논리 단계만큼 step 을 만들어라. 개수 제한 없음. 한 step 에 여러 동작을 우겨넣지 말고, 한 step 에 한 가지 의미 있는 단계만 담아라. 단, 같은 step 을 의미 없이 반복하거나 같은 식을 두 번 쓰는 건 금지. MUST NOT be empty.
+  (경우 분리는 한 step 안에서 i)/ii)/iii) 로 묶어 표기 — 단순한 case 나누기로 step 을 인위적으로 쪼개지 마라.)
+
+- 각 step 의 세 필드 — 역할 엄격 분리 (STRICT):
+    description: *무엇을* 하는지 한국어 서술만. 수식 금지 (변수 \\(x\\) 하나도 금지). 영어 단어 단독 금지 (factorization → 인수분해). 영어 문장 금지. "case 1:" / "description:" / "final result" 같은 메타 라벨로 시작 금지.
+    formula: *핵심 식 하나* 를 \\( ... \\) 로 감싼다. 식 없으면 null.
+    reason: *왜* 필요한지 — 한국어 명사구 1~3단어 ("대수 계산", "인수분해", "대입"). 영어·코드 식별자 금지 (triangle_area_formula, product_rule, case 2 calculation 모두 금지). null 허용하나 가급적 채워라. "null" 문자열 금지.
+- description 안에 \\( ... \\) 가 등장하면 JSON 전체가 무효로 간주된다. 수식은 formula 로만.
+
+""" + _MATH_RULES_BLOCK + """
+Reference output (well-formed):
+{
+  "solution_steps": [
+    {"step":1,"description":"시그마를 두 항으로 분리한다","formula":"\\\\(\\\\sum (a_k+1) = \\\\sum a_k + \\\\sum 1\\\\)","reason":"시그마 분배"},
+    {"step":2,"description":"상수항 시그마를 계산하여 합을 구한다","formula":"\\\\(\\\\sum a_k + 5 = 9 \\\\Rightarrow \\\\sum a_k = 4\\\\)","reason":"상수합 공식"}
+  ]
+}
+
+부정 예시 (절대 금지):
+  ❌ {"description":"factorization을 이용하여 ...","reason":"product rule"}
+  ❌ {"description":"case 1: a<0 인 경우 ...","reason":"case 2 calculation"}
+  ❌ {"description":"final result를 도출한다","reason":"conclusion"}
+
+Output valid JSON only — JSON 은 오직 `solution_steps` 키 하나만 포함. 다른 키 금지. No prose, no markdown fences."""
 
 
 # ── 내부 유틸 ─────────────────────────────────────────────────────────────────
@@ -244,6 +302,143 @@ def _to_plain(s: str) -> str:
   s = _re.sub(r'[_^]\{([^{}]*)\}', r'\1', s)
   s = _re.sub(r'[_^]', '', s)
   return s
+
+
+# ── Step 후처리: formula delimiter 자동 감싸기 / description sanitize ────────
+
+_PLACEHOLDER_RE = __import__('re').compile(
+  r'^\s*(description[_\s:]\w*|options?_error|formula\s*[:：]|final[_\s]result|implying|case\s*\d+[:：]?)\b',
+  __import__('re').I,
+)
+_DESC_PREFIX_RE = __import__('re').compile(r'^\s*description\s*[:：]\s*', __import__('re').I)
+_RAW_MATH_RE = __import__('re').compile(
+  r'(?<![\\\w])(?:[a-zA-Z]_\{[^}]+\}|[a-zA-Z]_\d+|\\alpha|\\beta|\\theta|\\int|\\sum|\\frac|\\sqrt|\\times|\\Rightarrow)'
+)
+# reason 이 영어·언더바·하이픈만 있고 한글이 전혀 없으면 버린다 (DB 박제 방지)
+_REASON_EN_ONLY_RE = __import__('re').compile(r'^[\sA-Za-z0-9_\-\.\;:,]+$')
+
+# 모델이 반복해서 뱉는 영어 단어/구절을 한국어로 치환 (30문제 실측 기반)
+_EN_TO_KO: dict[str, str] = {
+  'factorization': '인수분해',
+  'combinatorics': '조합론',
+  'equation solving': '방정식 풀이',
+  'zero point': '영점',
+  'product rule': '곱의 미분법',
+  'triangle_area_formula': '삼각형 넓이 공식',
+  'triangle area formula': '삼각형 넓이 공식',
+  'fractional_value': '분수값',
+  'fractional value': '분수값',
+  'trigonometric identity': '삼각함수 항등식',
+  'final result': '최종 결과',
+  'conclusion': '결론',
+  'case 1': '경우 1',
+  'case 2': '경우 2',
+  'case 3': '경우 3',
+  'case 4': '경우 4',
+  'case 5': '경우 5',
+  'case 1 calculation': '경우 1 계산',
+  'case 2 calculation': '경우 2 계산',
+  'case 3 calculation': '경우 3 계산',
+  'case 4 calculation': '경우 4 계산',
+  'first part of the solution': '풀이 첫 부분',
+  'true part of the solution': '풀이 참 부분',
+  'accuracy-based logic': '정확도 기반 논리',
+  'problem condition': '문제 조건',
+  'is a natural number': '은 자연수이다',
+  'summation': '합',
+  'de_calculation': '계산',
+}
+
+
+def _translate_en(text: str) -> str:
+  """_EN_TO_KO 에 정의된 영어 표현을 한국어로 치환 (case-insensitive, 긴 것 우선)."""
+  if not text:
+    return text
+  for en in sorted(_EN_TO_KO.keys(), key=len, reverse=True):
+    # 대소문자 무시, 단어 경계 (영어) 또는 한국어 인접 모두 허용
+    pattern = __import__('re').compile(__import__('re').escape(en), __import__('re').I)
+    text = pattern.sub(_EN_TO_KO[en], text)
+  return text
+
+
+def _wrap_formula(f: Optional[str]) -> Optional[str]:
+  """formula 에 `\\(...\\)` delimiter 누락 / 짝 깨짐 자동 보정.
+
+  이미 온전한 경우 그대로, 그 외엔 안쪽 delimiter 모두 벗기고 바깥만 감싼다.
+  """
+  if f is None:
+    return None
+  s = str(f).strip()
+  if not s:
+    return None
+  if (s.startswith('\\(') and s.endswith('\\)')) or (s.startswith('\\[') and s.endswith('\\]')):
+    if s.count('\\(') == s.count('\\)') and s.count('\\[') == s.count('\\]'):
+      return s
+  stripped = s.replace('\\(', '').replace('\\)', '').replace('\\[', '').replace('\\]', '').strip()
+  if not stripped:
+    return None
+  return f'\\({stripped}\\)'
+
+
+def _trim_looped(text: str) -> str:
+  """같은 6~30자 구절이 3회 이상 반복되면 1회 + `…` 로 절삭.
+
+  29번 "이차 방정식으로 × 13회", "전개개 × 40회" 같은 Call B repetition 버그 대응.
+  """
+  if not text or len(text) < 40:
+    return text
+  import re as _re
+  # 6~30자 구절이 연속 3회 이상 (즉 총 4회+)
+  m = _re.search(r'(.{6,30}?)\1{3,}', text)
+  if m:
+    phrase = m.group(1)
+    return _re.sub(_re.escape(phrase) + r'(?:' + _re.escape(phrase) + r')+', phrase + '…', text)
+  return text
+
+
+def _sanitize_step(step: dict) -> dict:
+  """한 step 의 description / formula / reason 후처리.
+
+  - description: placeholder / `description:` prefix / 선행 쉼표·공백 제거 / 영어 치환 / 반복 절삭, 빈 결과면 대체 문구
+  - formula: `_wrap_formula` 로 delimiter 보정 + 반복 절삭
+  - reason: 문자열 'null' / 'none' / 공백 → None, 영어-only → None, 영어 단어 한국어 치환
+  """
+  desc = step.get('description')
+  if not isinstance(desc, str):
+    desc = '' if desc is None else str(desc)
+  desc = desc.strip()
+  desc = _DESC_PREFIX_RE.sub('', desc)
+  desc = __import__('re').sub(r'^[,\s;:]+', '', desc).strip()
+  desc = _translate_en(desc)
+  if _PLACEHOLDER_RE.match(desc):
+    desc = ''
+  desc = _trim_looped(desc)
+  if desc and _RAW_MATH_RE.search(desc) and not step.get('formula'):
+    logger.warning(
+      f"[sanitize] step {step.get('step')} description 에 raw 수식 감지, formula 비어있음 — 수동 확인 필요"
+    )
+  step['description'] = desc if desc else '(설명 누락)'
+
+  f = _wrap_formula(step.get('formula'))
+  if f:
+    f = _trim_looped(f)
+  step['formula'] = f
+
+  r = step.get('reason')
+  if isinstance(r, str):
+    rs = r.strip()
+    if rs.lower() in {'null', 'none', ''}:
+      step['reason'] = None
+    elif _REASON_EN_ONLY_RE.match(rs):
+      # 영어·기호만으로 이루어진 reason 은 치환 시도, 치환 후에도 여전히 영어만이면 None
+      translated = _translate_en(rs).strip()
+      if translated == rs or _REASON_EN_ONLY_RE.match(translated):
+        step['reason'] = None
+      else:
+        step['reason'] = translated
+    else:
+      step['reason'] = _translate_en(rs).strip()
+  return step
 
 
 def _load_taxonomy() -> dict:
@@ -492,22 +687,80 @@ def extract_tags_from_image(
   }
 
   try:
-    result = _call_vl(vl_image_arg, prompt)
+    # ── Call A: 메타 (difficulty/tags/summary/pitfall/common_mistakes) ──
+    meta: TagResultMeta = call_vl(vl_image_arg, prompt, TagResultMeta, None)
 
-    # gemma4 가 개념/스킬을 비우는 경향이 있어 빈 리스트면 1회 재시도
-    if not result.concept_tags or not result.skill_tags:
+    if not meta.concept_tags or not meta.skill_tags:
       logger.warning(
-        f"concept/skill 비어 있음 → 재시도 [{image_path}] "
-        f"(concept={len(result.concept_tags)}, skill={len(result.skill_tags)})"
+        f"[Call A] concept/skill 비어 있음 → 재시도 [{image_path}] "
+        f"(concept={len(meta.concept_tags)}, skill={len(meta.skill_tags)})"
       )
       retry_prompt = prompt + (
-        "\n\nIMPORTANT: concept_tags 와 skill_tags 는 반드시 1개 이상 포함해야 한다. "
-        "빈 리스트는 허용되지 않는다."
+        "\n\nIMPORTANT: concept_tags 와 skill_tags 는 반드시 1개 이상 포함해야 한다. 빈 리스트 금지."
       )
       try:
-        result = _call_vl(vl_image_arg, retry_prompt)
+        meta = call_vl(vl_image_arg, retry_prompt, TagResultMeta, None)
       except Exception as re_e:
-        logger.warning(f"재시도 실패 (원본 결과 유지): {re_e}")
+        logger.warning(f"[Call A] 재시도 실패 (원본 결과 유지): {re_e}")
+
+    _d = max(1, min(10, int(meta.difficulty_score)))
+
+    def _dedup_steps(steps: list[SolutionStep]) -> list[SolutionStep]:
+      """step_no 중복만 제거. 개수 제한 없음 — 모델이 자연스럽게 결정."""
+      seen: set = set()
+      cleaned: list[SolutionStep] = []
+      for s in steps:
+        no = s.step if isinstance(s, SolutionStep) else (s.get('step') if isinstance(s, dict) else None)
+        if no in seen:
+          logger.warning(f"[Call B] step_no 중복 제거: step={no}")
+          continue
+        seen.add(no)
+        cleaned.append(s)
+      return cleaned
+
+    # ── Call B: solution_steps 전용 (문제+해설 있을 때만) ──
+    # 어려운 문제 (difficulty >= CALL_B_HARD_THRESHOLD) 는 OpenAI 로 분기 — gemma4 한계 회피.
+    _CALL_B_ATTEMPTS = [(0.05, 3072), (0.15, 4096), (0.3, 5120)]
+    steps_list: list[SolutionStep] = []
+    if has_solution:
+      call_b_provider = _route_call_b_provider(_d)
+      logger.info(f"[Call B] difficulty={_d} provider={call_b_provider} image={image_path}")
+
+      def _call_b(prompt: str) -> SolutionStepsOnly:
+        if call_b_provider == "openai":
+          # OpenAI 는 자체 JSON 안정 (responses.parse + Pydantic) → attempts_scope 없이 1회 호출
+          return call_vl(vl_image_arg, prompt, SolutionStepsOnly, None, provider="openai")
+        with attempts_scope(_CALL_B_ATTEMPTS):
+          return call_vl(vl_image_arg, prompt, SolutionStepsOnly, None)
+
+      try:
+        steps_res: SolutionStepsOnly = _call_b(_STEPS_ONLY_PROMPT)
+        steps_list = _dedup_steps(steps_res.solution_steps)
+        if not steps_list:
+          logger.warning(f"[Call B] steps 비어 있음 → 재시도 [{image_path}]")
+          retry_steps_prompt = _STEPS_ONLY_PROMPT + (
+            "\n\nIMPORTANT: solution_steps 는 절대 비워 두지 마라. 풀이의 각 논리 단계를 반드시 포함해라."
+          )
+          try:
+            steps_res = _call_b(retry_steps_prompt)
+            steps_list = _dedup_steps(steps_res.solution_steps)
+          except Exception as se:
+            logger.warning(f"[Call B] 재시도 실패 (빈 steps 로 진행): {se}")
+      except Exception as be:
+        logger.warning(f"[Call B] steps 호출 실패 → steps 빈 상태로 Call A 결과만 유지: {be}")
+
+    # 병합 — 기존 흐름 호환용 TagResult-shape dict 조립
+    class _MergedResult:
+      def __init__(self, m: TagResultMeta, s: list[SolutionStep]):
+        self.difficulty_score = m.difficulty_score
+        self.concept_tags = list(m.concept_tags)
+        self.skill_tags = list(m.skill_tags)
+        self.answer_type = m.answer_type
+        self.solution_summary = m.solution_summary
+        self.pitfall = m.pitfall
+        self.solution_steps = s
+        self.common_mistakes = list(m.common_mistakes)
+    result = _MergedResult(meta, steps_list)
 
     concept_tags = normalize_tags(result.concept_tags, "concept", concept_embeddings, threshold=0.65)
     skill_tags = normalize_tags(result.skill_tags, "skill", skill_embeddings, threshold=0.65)
@@ -588,12 +841,12 @@ def extract_tags_from_image(
     solution_summary = _nm(solution_summary)
     pitfall = _nm(pitfall)
     solution_steps = [
-      {
+      _sanitize_step({
         "step": s["step"],
         "description": _nm(s.get("description", "")),
         "formula": _nm(s.get("formula")) if s.get("formula") else None,
         "reason": _nm(s.get("reason")) if s.get("reason") else None,
-      }
+      })
       for s in solution_steps
     ] if solution_steps else solution_steps
     common_mistakes = [{"bug_id": m.get("bug_id", ""), "text": _nm(m.get("text", ""))} for m in common_mistakes] if common_mistakes else common_mistakes

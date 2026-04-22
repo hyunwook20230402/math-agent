@@ -19,6 +19,8 @@ import base64
 import logging
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TypeVar
 
@@ -28,6 +30,24 @@ from pydantic import BaseModel
 from . import provider_selector
 
 logger = logging.getLogger(__name__)
+
+# Call B (steps-only) 처럼 출력 폭을 좁혀야 할 때 호출자가 attempts 를 override.
+# list[tuple[float, int]] — (temperature, num_predict) 페어.
+_attempts_override: ContextVar[list | None] = ContextVar('_attempts_override', default=None)
+
+
+@contextmanager
+def attempts_scope(attempts: list | None):
+  """호출 주변에서만 attempts 스케줄 override. Call B 전용.
+
+    with attempts_scope([(0.05, 3072), (0.15, 4096), (0.3, 5120)]):
+      call_vl(...)
+  """
+  token = _attempts_override.set(attempts)
+  try:
+    yield
+  finally:
+    _attempts_override.reset(token)
 
 # gemma4 가 JSON 안에서 LaTeX 백슬래시를 단일로 뱉어 \t(tab) / \f(FF) / \r / \n / \b / \u 등
 # JSON escape sequence 로 오해석되는 증상 보정. `\text{`, `\to`, `\times`, `\frac` 등
@@ -125,16 +145,24 @@ def _mime_for(path: str) -> str:
   return "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
 
 
-def call_vl(image_path: ImagePaths, prompt: str, schema: type[T], timeout: int | None = None) -> T:
+def call_vl(
+  image_path: ImagePaths,
+  prompt: str,
+  schema: type[T],
+  timeout: int | None = None,
+  *,
+  provider: str | None = None,
+) -> T:
   """provider 에 관계없이 동일한 인터페이스로 VL 모델 호출.
 
   반환값은 항상 schema 인스턴스 (Pydantic 검증 완료).
   image_path 에 리스트를 넘기면 멀티 이미지 모드로 호출된다.
+  provider 인자로 호출별 강제 override 가능 (기본은 provider_selector).
   """
-  provider = provider_selector.select_vl_provider()
-  if provider == "gemini":
+  effective = (provider or provider_selector.select_vl_provider()).lower()
+  if effective == "gemini":
     return _call_gemini_with_fallback(image_path, prompt, schema, timeout)
-  if provider == "openai":
+  if effective == "openai":
     return _call_openai(image_path, prompt, schema, timeout)
   return _call_ollama_with_fallback(image_path, prompt, schema, timeout)
 
@@ -227,6 +255,7 @@ def _ollama_post(
       "temperature": temperature,
       "num_ctx": 16384,
       "num_predict": num_predict,
+      "repeat_penalty": 1.15,
     },
   }
   resp = requests.post(
@@ -249,11 +278,17 @@ def _call_ollama(image_path: ImagePaths, prompt: str, schema: type[T], timeout: 
   eff_timeout = timeout or VL_TIMEOUT
 
   # 재시도 스케줄: (temperature, num_predict). 1차 실패 시 다른 샘플링으로 루프 탈출 유도.
-  attempts = [
-    (0.1, 4096),
-    (0.1, 6144),
-    (0.5, 6144),
-  ]
+  # 3단 스키마(description/formula/reason) + 9-10 구간 8~12 steps 대응으로 상향 (2026-04-22).
+  # Call B (steps-only) 는 attempts_scope() 로 좁은 스케줄 override (2026-04-22 3차).
+  override = _attempts_override.get()
+  if override:
+    attempts = override
+  else:
+    attempts = [
+      (0.1, 4096),
+      (0.2, 6144),
+      (0.4, 8192),
+    ]
 
   last_err: Exception | None = None
   for attempt_idx, (temp, npred) in enumerate(attempts):

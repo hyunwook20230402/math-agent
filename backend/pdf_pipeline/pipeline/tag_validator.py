@@ -71,15 +71,6 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
   steps = tag_result.get("solution_steps") or []
   if not steps:
     issues.append(ValidationIssue(field="solution_steps", reason="solution_steps 비어 있음", severity="medium"))
-  else:
-    difficulty_score = tag_result.get("difficulty_score")
-    if difficulty_score is not None:
-      d = int(difficulty_score)
-      step_count = len(steps)
-      if d <= 6 and step_count < 3:
-        issues.append(ValidationIssue(field="solution_steps", reason=f"difficulty {d}(쉬움)인데 steps {step_count}개 — 최소 3개 필요", severity="medium"))
-      elif d >= 7 and step_count < 5:
-        issues.append(ValidationIssue(field="solution_steps", reason=f"difficulty {d}(어려움)인데 steps {step_count}개 — 최소 5개 필요", severity="medium"))
 
   if not tag_result.get("common_mistakes"):
     issues.append(ValidationIssue(field="common_mistakes", reason="common_mistakes 비어 있음", severity="low"))
@@ -118,6 +109,75 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
     desc = step.get("description", "")
     if _has_english(desc):
       issues.append(ValidationIssue(field="solution_steps", reason=f"step {step.get('step')} description 영어 혼입", severity="high"))
+      break
+  # description 에 LaTeX 수식이 섞이면 formula 필드와 역할 혼동 — formula 쪽으로 이전 필요
+  for step in steps:
+    desc = step.get("description", "") or ""
+    if r"\(" in desc or r"\[" in desc or "$" in desc:
+      issues.append(ValidationIssue(
+        field="solution_steps",
+        reason=f"step {step.get('step')} description 에 수식 혼입 — formula 필드로 분리 필요",
+        severity="medium",
+      ))
+      break
+
+  # formula delimiter 누락 / placeholder 잔존 / reason "null" 문자열 — 후처리가 잡지 못한 잔여 검증
+  for step in steps:
+    f = step.get("formula")
+    if isinstance(f, str) and f.strip():
+      fs = f.strip()
+      if not (fs.startswith("\\(") or fs.startswith("\\[")):
+        issues.append(ValidationIssue(
+          field="solution_steps",
+          reason=f"step {step.get('step')} formula delimiter 누락: {fs[:40]}",
+          severity="high",
+        ))
+        break
+  for step in steps:
+    d = step.get("description") or ""
+    if re.match(r"^\s*(description[_:]\s*error?|final_result|implying)\b", d, re.I):
+      issues.append(ValidationIssue(
+        field="solution_steps",
+        reason=f"step {step.get('step')} description placeholder 잔존: {d[:40]}",
+        severity="high",
+      ))
+      break
+  for step in steps:
+    r = step.get("reason")
+    if isinstance(r, str) and r.strip().lower() in {"null", "none"}:
+      issues.append(ValidationIssue(
+        field="solution_steps",
+        reason=f"step {step.get('step')} reason 문자열 'null' 박제",
+        severity="medium",
+      ))
+      break
+
+  # step_no 중복 (Call B 가 JSON 중간에 자기복제하는 케이스 — solution_tagger 가 dedup 하지만 안전망)
+  st_nos = [s.get("step") for s in steps if s.get("step") is not None]
+  dup_nos = sorted({n for n in st_nos if st_nos.count(n) > 1})
+  if dup_nos:
+    issues.append(ValidationIssue(
+      field="solution_steps",
+      reason=f"step_no 중복: {dup_nos}",
+      severity="high",
+    ))
+
+  # description 한국어 비율 (< 50% 이면 영어 혼입 심각 — 30문제 실측에서 #15, #29 케이스)
+  for s in steps:
+    d = s.get("description") or ""
+    if len(d) < 5:
+      continue
+    han = sum(1 for c in d if '\uac00' <= c <= '\ud7a3')
+    alpha = sum(1 for c in d if c.isalpha() or '\uac00' <= c <= '\ud7a3')
+    if alpha == 0:
+      continue
+    ratio = han / alpha
+    if ratio < 0.5:
+      issues.append(ValidationIssue(
+        field="solution_steps",
+        reason=f"step {s.get('step')} description 한국어 비율 {ratio:.0%} — 영어 혼입 과다",
+        severity="high",
+      ))
       break
 
   for tag in tag_result.get("concept_tags", []) + tag_result.get("skill_tags", []):
@@ -183,9 +243,17 @@ _VALIDATION_PROMPT_TEMPLATE = """\
    - 이미지에 등장하는 핵심 계산/변환 단계가 steps에 빠져 있으면 "solution_steps step 누락" 이슈 (severity=high)
    - steps 순서가 실제 풀이 순서와 다르면 "solution_steps 순서 불일치" 이슈 (severity=high)
    - steps 내용이 이미지와 무관한 엉뚱한 풀이면 "solution_steps 내용 불일치" 이슈 (severity=high, reject)
-   - difficulty_score 1~6인데 steps 3개 미만, 또는 difficulty_score 7~10인데 steps 5개 미만이면 "solution_steps 개수 부족" 이슈 (severity=medium)
+   - 난이도별 권장 steps 개수 구간 — 1-2: 2~3 / 3-4: 3~4 / 5-6: 4~6 / 7-8: 6~8 / 9-10: 8~12.
+     * 하한 미달이면 "solution_steps 개수 부족" (severity=medium)
+     * 상한 초과 정도가 크면(상한의 2배 이상) "difficulty_score 저평가 의심" (severity=high) — 예: difficulty_score=5 인데 steps 19개 → 실제 9-10 킬러급일 가능성, suggested_fixes.difficulty_score 로 승격 제안
    - steps 개수가 1개뿐이거나 지나치게 뭉뚱그려진 경우 "solution_steps 세분화 부족" 이슈 (severity=medium)
-4. difficulty_score (1~10 정수) 가 문제 난이도와 맞는가? (1-2=아주 쉬움, 3-4=쉬움, 5-6=보통, 7-8=어려움, 9-10=최상위 킬러)
+4. difficulty_score (1~10 정수) 가 문제 난이도와 맞는가? 시대 무관 구조 신호 기반:
+   - 1-2 (very_easy): 공식 1개 직접 대입
+   - 3-4 (easy): 2~3단 계산, 개념 1개 안
+   - 5-6 (medium): 조건 2~3개 조합, 개념 1~2개
+   - 7-8 (hard): 아이디어 1개 — 경우분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개
+   - 9-10 (killer): 경우분리 3+ / 합성·역·절댓값 중첩 2+ / 미지수 2+ 동시결정 / 스텝 7+ / 그래프+경우분리+대수 모두 / 개념 3+ 복합 중 2개 이상 해당
+   문제 번호는 참고만 — 시대별로 킬러 번호 다름.
 
 태깅 결과:
 {tag_json}
@@ -255,9 +323,10 @@ def _build_canonical_section() -> str:
 
 
 def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[ValidationIssue], SuggestedFixes | None]:
-  """Gemini (또는 현재 VL_PROVIDER) 로 태깅 결과를 재검증.
+  """LLM 으로 태깅 결과를 재검증.
 
   image_path 는 단일 경로 또는 리스트([문제경로, 해설경로]). 리스트면 멀티 이미지로 전달.
+  어려운 문제 (difficulty_score >= CALL_B_HARD_THRESHOLD) 는 OpenAI 로 분기 — Call B 와 동일 임계값.
   """
   try:
     from .vl_providers import call_vl
@@ -274,7 +343,12 @@ def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[Val
       canonical_section=_build_canonical_section(),
     )
 
-    llm_result = call_vl(image_path, prompt, _LLMValidation)
+    d = int(tag_result.get("difficulty_score") or 5)
+    threshold = int(os.environ.get("CALL_B_HARD_THRESHOLD", "7"))
+    provider = "openai" if d >= threshold else None
+    logger.info(f"[validator L2] difficulty={d} provider={provider or 'default'}")
+
+    llm_result = call_vl(image_path, prompt, _LLMValidation, provider=provider)
     return llm_result.issues, llm_result.suggested_fixes
 
   except Exception as e:

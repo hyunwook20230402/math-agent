@@ -884,6 +884,16 @@ export default function SolutionReview() {
               >
                 남은 문제 이어서 태깅
               </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (!confirm('전체 재태깅: 기존 태그 전부 덮어쓰기됩니다. 계속?')) return;
+                  handleStartTagging('full');
+                }}
+                title="기존 tag_results 전체 덮어쓰기"
+              >
+                전체 재태깅
+              </Button>
               <Button onClick={handleApply} disabled={applying}>
                 {applying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
                 문제에 적용 → 상세 입력

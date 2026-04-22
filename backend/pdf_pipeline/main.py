@@ -1091,7 +1091,12 @@ async def _run_solution_upload_and_tag(
         def _strip_raw(d: dict) -> dict:
             return {k: v for k, v in d.items() if k != "raw_response"}
 
-        slim_new = {num: _strip_raw(r) for num, r in new_tag_results.items() if isinstance(r, dict)}
+        def _mark_retagged(r: dict) -> dict:
+            d = _strip_raw(r)
+            d["_retagged"] = True
+            return d
+
+        slim_new = {num: _mark_retagged(r) for num, r in new_tag_results.items() if isinstance(r, dict)}
         merged_tag_results = dict(existing_tag_results)
         merged_tag_results.update(slim_new)
         solution_jobs[solution_job_id]["tag_results"] = merged_tag_results
