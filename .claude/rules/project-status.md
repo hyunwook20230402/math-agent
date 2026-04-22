@@ -16,7 +16,9 @@
 - 문제별 개념/스킬 태그 (`problem_tags` 테이블, VL 모델 + bge-m3 정규화)
 - 해설 태깅 샘플/이어서 모드 (4개 먼저 → 나머지)
 - 단원 계통도 (공통수학1/2, 대수, 미적분I, 확률과 통계 — concepts 375 / skills 359 / units 15)
-- unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty/pitfall/solution_steps/common_mistakes AI 추출
+- unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty_score/pitfall/solution_steps/common_mistakes AI 추출
+- **난이도 (difficulty_score) 구조 신호 기반 판정** (2026-04-22) — "수능 21/29/30번류" 번호 고정 제거. 경우분리 개수·중첩 깊이·개념 복합도로 1~10 스코어링. 시대 무관.
+- **solution_steps 3단 구조** (2026-04-22) — `description` (무엇을) + `formula` (핵심 식 \\( ... \\)) + `reason` (왜, 개념명) Optional 필드. 난이도별 점진 증가 (1-2: 2~3 / 9-10: 8~12 steps).
 - 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크)
 - Provider 시간대 자동 선택 (`provider_selector.py` — 평일 09-19 KST Ollama, 그 외 OpenAI)
 - YOLO11n 기본 가중치 (`promote_model` 의존 제거 — 커밋 `56ecdd0`)

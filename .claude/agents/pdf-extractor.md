@@ -8,7 +8,7 @@
 
 1. **쎈 교재 파이프라인** — 스캔 PDF → EasyOCR/Surya 로 문제 번호 경계 검출 → 개별 문제 크롭 → `problem_staging` 저장.
 2. **모의고사 파이프라인** — YOLO 로 문제 박스 검출 → 크롭 → `problem_staging` 저장.
-3. **해설지 파이프라인** — 해설 PDF → 페이지 걸침 병합 → Storage 업로드 → VL 모델 태깅 → `problem_staging` 에 `solution_summary / pitfall / unit / difficulty / solution_steps / common_mistakes` 채움. → `problem_tags` 에 concept/skill canonical 저장.
+3. **해설지 파이프라인** — 해설 PDF → 페이지 걸침 병합 → Storage 업로드 → VL 모델 태깅 → `problem_staging` 에 `solution_summary / pitfall / unit / difficulty_score / solution_steps(description + formula + reason) / common_mistakes` 채움. → `problem_tags` 에 concept/skill canonical 저장.
 
 ## 환경
 

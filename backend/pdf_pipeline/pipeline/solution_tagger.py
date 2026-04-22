@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 
 class SolutionStep(BaseModel):
   step: int
-  description: str  # 한국어, 수식 포함 가능
+  description: str                     # 이 단계에서 무엇을 하는지 (한국어 한 문장, 수식 포함 가능)
+  formula: Optional[str] = None        # 핵심 식 \( ... \) — 식이 없는 단계면 null
+  reason: Optional[str] = None         # 왜 이 단계가 필요한지 — 개념/정리 이름 (한국어, 선택)
 
 class CommonMistake(BaseModel):
   text: str         # 한국어, 학생 UI 노출
@@ -68,19 +70,37 @@ GOOD: "좌극한과 우극한을 혼동"
 
 BAD:  "함수 \\\\toe f(x)의 미분계수"   (invented \\toe fused with next letter)
 GOOD: "함수 \\\\(f(x)\\\\) 의 미분계수"
+
+LANGUAGE (absolute — Korean only for prose):
+- Every description, summary, pitfall, mistake text MUST be Korean sentences.
+- NEVER write English words like "final result", "therefore", "step", "description_error", "error" in any prose field.
+- If you are uncertain of the Korean word, use 한국어 synonyms (예: "최종 결과" 대신 "따라서", "정리하면" 사용).
+- NEVER repeat a phrase more than twice in one field. If you find yourself repeating "description_error:" or similar, STOP and rewrite.
+
+추가 규칙(한국어): 모든 description/summary/pitfall/mistakes 는 반드시 한국어 문장으로만 작성한다. 영어 단어 금지. 같은 어구 반복 금지. "description_error" 같은 placeholder 문자열 절대 출력 금지.
 """
 
 
 _TAGGING_PROMPT_WITH_SOLUTION = """You are analyzing a Korean high school math solution image.
 
 Rules:
-- difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
+- difficulty_score: integer 1-10. 문제 번호는 참고만 할 것. 구조적 특징으로 판단한다.
+    1-2 (very_easy): 공식 1개 직접 대입으로 즉시 답. (예: 로그 성질 1번 적용, 이차함수 꼭짓점)
+    3-4 (easy): 2~3단 계산. 개념 1개 안에서 해결. (예: 인수분해 후 해, 미분 1회 후 극값)
+    5-6 (medium): 조건 2~3개 조합, 개념 1~2개. 중간 식 세움 필요.
+    7-8 (hard): 아이디어 1개 필요. 다음 중 1개 해당 → 경우 분리 2개 / 그래프 해석+대수 조작 동시 / 합성함수·역함수·절댓값 중 1개 / 개념 2~3개 복합.
+    9-10 (killer): 다음 중 2개 이상 해당 → 경우 분리 3개 이상 / 합성·역·절댓값 중첩 2개 이상 / 미지수 2개 이상을 여러 조건으로 동시 결정 / solution_steps 7단계 이상 / 그래프 해석+경우분리+대수 조작 모두 / 개념 3개 이상 복합.
+    시대 무관 (2012 수능 30번, 2021 수능 30번, 최근 평가원 22/30 급 모두 9-10).
 - answer_type: "multiple_choice" if the problem has numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Use Korean high-school math unit-level terms (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
 - skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Techniques actually used in the solution (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
 - solution_summary: max 20 words IN KOREAN, MUST NOT be empty or null
 - pitfall: max 20 words IN KOREAN
-- solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN. MUST NOT be empty.
+- solution_steps: 난이도별 점진 증가 — 1-2: 2~3 steps / 3-4: 3~4 / 5-6: 4~6 / 7-8: 6~8 / 9-10: 8~12 (경우 분리 각각을 step 으로 쪼갠다). MUST NOT be empty.
+    각 step 은 세 필드:
+      description: 이 단계에서 *무엇을* 하는지 (한국어 한 문장, 수식 섞어도 됨)
+      formula: 이 단계의 *핵심 식 하나* 를 \\( ... \\) 로. 식이 없는 단계 (예: "조건 정리") 는 null.
+      reason: 이 단계가 *왜* 필요한지 — 개념/정리 이름으로 1~3단어 (예: "극값 정의", "미적분 기본정리"). 생략 가능 (null).
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
 All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
@@ -94,7 +114,10 @@ Reference output (well-formed):
   "answer_type": "short_answer",
   "solution_summary": "\\\\(\\\\sum_{k=1}^{5}(a_k+1)=9\\\\) 에서 \\\\(\\\\sum a_k\\\\) 를 구한 뒤 \\\\(a_6\\\\) 을 더한다.",
   "pitfall": "\\\\(\\\\sum_{k=1}^{5} 1\\\\) 을 1로 착각",
-  "solution_steps": [{"step":1,"description":"\\\\(\\\\sum (a_k+1)\\\\) 을 분리하여 \\\\(\\\\sum a_k + 5 = 9\\\\) 로 정리"}],
+  "solution_steps": [
+    {"step":1,"description":"시그마를 두 항으로 분리한다","formula":"\\\\(\\\\sum (a_k+1) = \\\\sum a_k + \\\\sum 1\\\\)","reason":"시그마 분배"},
+    {"step":2,"description":"상수항 시그마를 계산하여 \\\\(\\\\sum a_k\\\\) 를 구한다","formula":"\\\\(\\\\sum a_k + 5 = 9 \\\\Rightarrow \\\\sum a_k = 4\\\\)","reason":"상수합 공식"}
+  ],
   "common_mistakes": [{"text":"\\\\(\\\\sum 1\\\\) 을 1로 계산"}]
 }
 
@@ -109,13 +132,23 @@ You are given TWO images in order:
 Use BOTH images together: the problem tells you what is being asked and which given conditions matter; the solution tells you which techniques were actually used. Tags must reflect both the problem's intent and the solution's method.
 
 Rules:
-- difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
+- difficulty_score: integer 1-10. 문제 번호는 참고만 할 것. 구조적 특징으로 판단한다.
+    1-2 (very_easy): 공식 1개 직접 대입으로 즉시 답. (예: 로그 성질 1번 적용, 이차함수 꼭짓점)
+    3-4 (easy): 2~3단 계산. 개념 1개 안에서 해결. (예: 인수분해 후 해, 미분 1회 후 극값)
+    5-6 (medium): 조건 2~3개 조합, 개념 1~2개. 중간 식 세움 필요.
+    7-8 (hard): 아이디어 1개 필요. 다음 중 1개 해당 → 경우 분리 2개 / 그래프 해석+대수 조작 동시 / 합성함수·역함수·절댓값 중 1개 / 개념 2~3개 복합.
+    9-10 (killer): 다음 중 2개 이상 해당 → 경우 분리 3개 이상 / 합성·역·절댓값 중첩 2개 이상 / 미지수 2개 이상을 여러 조건으로 동시 결정 / solution_steps 7단계 이상 / 그래프 해석+경우분리+대수 조작 모두 / 개념 3개 이상 복합.
+    시대 무관 (2012 수능 30번, 2021 수능 30번, 최근 평가원 22/30 급 모두 9-10).
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Cross-check problem and solution (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
 - skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Techniques actually used (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
 - solution_summary: max 20 words IN KOREAN, MUST NOT be empty or null — describe the core approach
 - pitfall: max 20 words IN KOREAN — the most likely mistake given the problem's trap
-- solution_steps: 3~5 steps for difficulty 1-6, 5~8 steps for difficulty 7-10. Each description max 15 words IN KOREAN. MUST NOT be empty.
+- solution_steps: 난이도별 점진 증가 — 1-2: 2~3 steps / 3-4: 3~4 / 5-6: 4~6 / 7-8: 6~8 / 9-10: 8~12 (경우 분리 각각을 step 으로 쪼갠다). MUST NOT be empty.
+    각 step 은 세 필드:
+      description: 이 단계에서 *무엇을* 하는지 (한국어 한 문장, 수식 섞어도 됨)
+      formula: 이 단계의 *핵심 식 하나* 를 \\( ... \\) 로. 식이 없는 단계 (예: "조건 정리") 는 null.
+      reason: 이 단계가 *왜* 필요한지 — 개념/정리 이름으로 1~3단어 (예: "극값 정의", "미적분 기본정리"). 생략 가능 (null).
 - common_mistakes: 2-3 items, each text max 10 words IN KOREAN
 
 All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
@@ -129,7 +162,10 @@ Reference output (well-formed):
   "answer_type": "short_answer",
   "solution_summary": "\\\\(\\\\sum (a_k+1)=9\\\\) 에서 \\\\(\\\\sum a_k\\\\) 를 구한 뒤 \\\\(a_6\\\\) 을 더한다.",
   "pitfall": "\\\\(\\\\sum 1\\\\) 을 1로 착각",
-  "solution_steps": [{"step":1,"description":"\\\\(\\\\sum (a_k+1)\\\\) 을 분리하여 \\\\(\\\\sum a_k + 5 = 9\\\\) 로 정리"}],
+  "solution_steps": [
+    {"step":1,"description":"시그마를 두 항으로 분리한다","formula":"\\\\(\\\\sum (a_k+1) = \\\\sum a_k + \\\\sum 1\\\\)","reason":"시그마 분배"},
+    {"step":2,"description":"상수항 시그마를 계산하여 \\\\(\\\\sum a_k\\\\) 를 구한다","formula":"\\\\(\\\\sum a_k + 5 = 9 \\\\Rightarrow \\\\sum a_k = 4\\\\)","reason":"상수합 공식"}
+  ],
   "common_mistakes": [{"text":"\\\\(\\\\sum 1\\\\) 을 1로 계산"}]
 }
 Output valid JSON only. No prose, no markdown fences."""
@@ -137,7 +173,12 @@ Output valid JSON only. No prose, no markdown fences."""
 _TAGGING_PROMPT_NO_SOLUTION = """You are analyzing a Korean high school math problem image (no solution shown).
 
 Rules:
-- difficulty_score: integer 1 to 10 where 1-2=아주 쉬움(공식 직접 대입), 3-4=쉬움(쎈 B초반/모의 3점 쉬움), 5-6=보통(쎈 B/모의 3점 표준), 7-8=어려움(쎈 C/모의 4점 준킬러), 9-10=최상위 킬러(수능 21/29/30번류)
+- difficulty_score: integer 1-10. 문제 번호는 참고만 할 것. 구조적 특징으로 판단한다.
+    1-2 (very_easy): 공식 1개 직접 대입으로 즉시 답.
+    3-4 (easy): 2~3단 계산. 개념 1개 안에서 해결.
+    5-6 (medium): 조건 2~3개 조합, 개념 1~2개.
+    7-8 (hard): 아이디어 1개 필요 (경우 분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개).
+    9-10 (killer): 경우 분리 3+ / 합성·역·절댓값 중첩 2+ / 미지수 2+ 동시 결정 / 그래프+경우분리+대수 모두 / 개념 3+ 복합 중 2개 이상 해당. 시대 무관.
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
 - skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
@@ -415,7 +456,7 @@ def extract_tags_from_image(
       "skill_tags": [str, ...],
       "solution_summary": str | None,
       "pitfall": str | None,
-      "solution_steps": [{"step": int, "description": str}, ...],
+      "solution_steps": [{"step": int, "description": str, "formula": str|None, "reason": str|None}, ...],
       "common_mistakes": [{"text": str, "bug_id": str | None}, ...],
     }
   """
@@ -476,7 +517,15 @@ def extract_tags_from_image(
     pitfall = result.pitfall.strip() if isinstance(result.pitfall, str) else None
     solution_summary = result.solution_summary
 
-    solution_steps = [{"step": s.step, "description": s.description} for s in result.solution_steps]
+    solution_steps = [
+      {
+        "step": s.step,
+        "description": s.description,
+        "formula": s.formula,
+        "reason": s.reason,
+      }
+      for s in result.solution_steps
+    ]
     common_mistakes = _normalize_bug_ids(result.common_mistakes, bug_embeddings)
 
     unit = ""
@@ -538,7 +587,15 @@ def extract_tags_from_image(
 
     solution_summary = _nm(solution_summary)
     pitfall = _nm(pitfall)
-    solution_steps = [{"step": s["step"], "description": _nm(s.get("description", ""))} for s in solution_steps] if solution_steps else solution_steps
+    solution_steps = [
+      {
+        "step": s["step"],
+        "description": _nm(s.get("description", "")),
+        "formula": _nm(s.get("formula")) if s.get("formula") else None,
+        "reason": _nm(s.get("reason")) if s.get("reason") else None,
+      }
+      for s in solution_steps
+    ] if solution_steps else solution_steps
     common_mistakes = [{"bug_id": m.get("bug_id", ""), "text": _nm(m.get("text", ""))} for m in common_mistakes] if common_mistakes else common_mistakes
 
     tag_result = {
@@ -626,16 +683,28 @@ def tag_all_solutions(
 
     logger.info(f"태깅 중: {num}번 ({i+1}/{total})")
     problem_path = problem_images.get(num) if problem_images else None
-    result = extract_tags_from_image(
-      img_path,
-      has_solution=True,
-      taxonomy=taxonomy,
-      leaf_embeddings=leaf_embeddings,
-      concept_embeddings=concept_embeddings,
-      skill_embeddings=skill_embeddings,
-      bug_embeddings=bug_embeddings,
-      problem_image_path=problem_path,
-    )
+    try:
+      result = extract_tags_from_image(
+        img_path,
+        has_solution=True,
+        taxonomy=taxonomy,
+        leaf_embeddings=leaf_embeddings,
+        concept_embeddings=concept_embeddings,
+        skill_embeddings=skill_embeddings,
+        bug_embeddings=bug_embeddings,
+        problem_image_path=problem_path,
+      )
+    except Exception as e:
+      logger.error(f"[tag_all_solutions] {num}번 실패 (skip, 다음 번호로 진행): {e}")
+      results[num] = {
+        "error": str(e),
+        "concept_tags": [],
+        "skill_tags": [],
+        "solution_steps": [],
+        "common_mistakes": [],
+      }
+      flagged.append(num)
+      continue
     results[num] = result
 
     validation = result.get("_validation", {})

@@ -762,7 +762,7 @@ export default function SolutionReview() {
         const allDone = Object.values(parsed).every(s => s === 'done' || s === 'error');
         if (allDone) {
           stopRetagPoller();
-          const statusRes = await fetch(`${PIPELINE_URL}/api/solution/${sjId}/status`);
+          const statusRes = await fetch(`${PIPELINE_URL}/api/solution/status/${sjId}`);
           const jobData = await statusRes.json();
           const newTagResults = jobData?.progress?.tag_results ?? jobData?.tag_results ?? {};
           if (Object.keys(newTagResults).length > 0) setTagResults(newTagResults);
@@ -1079,11 +1079,23 @@ export default function SolutionReview() {
                         {Array.isArray(r?.solution_steps) && r.solution_steps.length > 0 && (
                           <div>
                             <strong className="text-xs text-muted-foreground">단계별 풀이:</strong>
-                            <ol className="mt-1 ml-4 list-decimal space-y-1">
+                            <ol className="mt-1 ml-4 list-decimal space-y-2">
                               {r.solution_steps.map((s: any, i: number) => (
                                 <li key={i} className="text-xs">
-                                  <span className="font-medium">Step {s.step}</span>
-                                  {s.description && <span className="text-muted-foreground"> — <MathText text={s.description} /></span>}
+                                  <div>
+                                    <span className="font-medium">Step {s.step}</span>
+                                    {s.description && <span className="text-muted-foreground"> — <MathText text={s.description} /></span>}
+                                  </div>
+                                  {s.formula && (
+                                    <div className="ml-2 mt-0.5 text-foreground">
+                                      <MathText text={s.formula} />
+                                    </div>
+                                  )}
+                                  {s.reason && (
+                                    <div className="ml-2 mt-0.5 text-[11px] text-muted-foreground italic">
+                                      ↳ {s.reason}
+                                    </div>
+                                  )}
                                 </li>
                               ))}
                             </ol>

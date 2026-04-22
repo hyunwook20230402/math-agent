@@ -111,14 +111,37 @@ VL 모델이 해설 이미지 1장에서 추출하는 필드:
 
 ```python
 class TagResult(BaseModel):
-    difficulty: str                       # "easy" | "medium" | "hard"
+    difficulty_score: int                 # 1~10 정수 (1-2=very_easy ... 9-10=very_hard, 구조 신호 기반)
     concept_tags: list[str]               # 최대 3개, 한국어 canonical
     skill_tags: list[str]                 # 최대 3개, 한국어 canonical
+    answer_type: str | None               # "multiple_choice" | "short_answer"
     solution_summary: str | None          # 풀이 요약, 20단어 이내
     pitfall: str | None                   # 오답포인트, 20단어 이내
-    solution_steps: list[SolutionStep]    # 최대 5단계 [{step, description}]
+    solution_steps: list[SolutionStep]    # 난이도별 2~12 steps, 점진 증가
     common_mistakes: list[CommonMistake]  # 2-3개 [{text, bug_id?}]
+
+class SolutionStep(BaseModel):
+    step: int
+    description: str                      # 이 단계에서 뭘 하는지 (한국어 한 문장)
+    formula: str | None                   # 핵심 식 \( ... \) — 없으면 null
+    reason: str | None                    # 왜 필요한지 — 개념/정리 이름 (선택)
 ```
+
+**난이도 (difficulty_score)** 구조 신호 기반 판정:
+- 1-2 (very_easy): 공식 1개 직접 대입
+- 3-4 (easy): 2~3단 계산, 개념 1개 내
+- 5-6 (medium): 조건 2~3개 조합, 개념 1~2개
+- 7-8 (hard): 경우분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개
+- 9-10 (killer): 위 신호 2개 이상 해당 (경우분리 3+, 중첩 2+, 미지수 2+, 스텝 7+ 등)
+
+**solution_steps 개수** — 난이도별 점진 증가:
+| 난이도 | step 수 |
+|--------|---------|
+| 1-2 | 2~3 |
+| 3-4 | 3~4 |
+| 5-6 | 4~6 |
+| 7-8 | 6~8 |
+| 9-10 | 8~12 (경우 분리 각각을 step 으로 쪼갬) |
 
 후처리:
 - `tag_normalizer` 가 concept/skill 을 `concept_taxonomy.json` canonical 로 정규화 (cosine ≥ 0.65)
@@ -137,12 +160,13 @@ class TagResult(BaseModel):
 | `id` | uuid | PK |
 | `teacher_id` | uuid | → profiles.id |
 | `unit` | text | `"과목 > 대단원 > 중단원"` |
-| `difficulty` | text | easy/medium/hard |
+| `difficulty_score` | int | 1~10 (쓰기 컬럼) |
+| `difficulty` | text | very_easy/easy/medium/hard/very_hard (GENERATED from difficulty_score) |
 | `answer_type` | text | multiple_choice/short_answer |
 | `correct_answer` | text | 정답 |
 | `solution_summary` | text | AI 추출 풀이 요약 |
 | `pitfall` | text | AI 추출 오답포인트 |
-| `solution_steps` | jsonb | `[{step, description}, ...]` — 단계별 힌트용 |
+| `solution_steps` | jsonb | `[{step, description, formula, reason}, ...]` — 단계별 힌트용 (formula/reason 은 optional) |
 | `common_mistakes` | jsonb | `[{text, bug_id}, ...]` — 오답 원인 진단용 |
 | `image_url` | text | Supabase Storage 문제 이미지 |
 
@@ -263,8 +287,10 @@ API: `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}` (`routers
 ### 단계별 힌트 (solution_steps)
 ```sql
 SELECT solution_steps FROM problems WHERE id = $problem_id;
--- [{step: 1, description: "주어진 조건 정리"}, ...]
--- 학생이 막혔을 때 step 1 → step 2 순서로 공개
+-- [{step: 1, description: "시그마를 두 항으로 분리한다",
+--   formula: "\\(\\sum (a_k+1) = \\sum a_k + \\sum 1\\)", reason: "시그마 분배"}, ...]
+-- 학생이 막혔을 때 step 1 → step 2 순서로 공개.
+-- description (무엇을) → formula (식) → reason (왜) 3단 구조.
 ```
 
 ### 오답 원인 진단 (common_mistakes + bug_id)
