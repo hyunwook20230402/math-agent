@@ -967,9 +967,21 @@ async def _run_solution_upload_and_tag(
 
         # 1-1. 타겟 번호 결정 (mode + sample_count)
         existing_tag_results = dict(job.get("tag_results") or {})
+
+        def _is_valid_tag_entry(v) -> bool:
+            # error 필드가 있거나 concept_tags 가 비면 실패 엔트리 — 재태깅 대상
+            if not isinstance(v, dict):
+                return False
+            if v.get("error"):
+                return False
+            if not (v.get("concept_tags") or []):
+                return False
+            return True
+
         existing_tag_numbers = {
-            int(k) for k in existing_tag_results.keys()
-            if isinstance(k, int) or (isinstance(k, str) and k.isdigit())
+            int(k) for k, v in existing_tag_results.items()
+            if (isinstance(k, int) or (isinstance(k, str) and k.isdigit()))
+            and _is_valid_tag_entry(v)
         }
         all_numbers_sorted = sorted(int(n) for n in merged_images.keys())
 
@@ -1213,8 +1225,16 @@ async def _run_retag(solution_job_id: str, numbers: list[int]):
         solution_jobs[solution_job_id]["progress"] = base
         update_solution_job(solution_job_id, status="done", progress=base)
 
+        # 개별 번호별로 done/error 구분 — tag_all_solutions 내부에서 실패한 번호는 error
+        flagged_set = set(new_tag_results.get("flagged_numbers", []) or [])
         for n in numbers:
-            retag_status[solution_job_id][n] = "done"
+            r = new_tag_results.get(n)
+            if isinstance(r, dict) and r.get("error"):
+                retag_status[solution_job_id][n] = "error"
+            elif n in flagged_set:
+                retag_status[solution_job_id][n] = "error"
+            else:
+                retag_status[solution_job_id][n] = "done"
 
     except Exception as e:
         for n in numbers:

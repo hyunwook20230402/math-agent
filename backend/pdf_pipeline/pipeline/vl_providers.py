@@ -181,6 +181,11 @@ def _call_ollama_with_fallback(image_path, prompt, schema, timeout):
   try:
     return _call_ollama(image_path, prompt, schema, timeout)
   except Exception as e:
+    # VL_PROVIDER=ollama 가 명시돼 있으면 OpenAI fallback 차단 (비용 제약)
+    vl_provider = os.environ.get("VL_PROVIDER", "").strip().lower()
+    if vl_provider == "ollama":
+      logger.warning(f"[vl] ollama 전용 모드 — OpenAI fallback 차단, 원인 그대로 raise: {e}")
+      raise
     if _is_ollama_unavailable(e) and _openai_fallback_available():
       logger.warning(f"Ollama 접속 실패 → OpenAI fallback: {e}")
       return _call_openai(image_path, prompt, schema, timeout)
@@ -299,16 +304,17 @@ def _call_ollama(image_path: ImagePaths, prompt: str, schema: type[T], timeout: 
       )
       continue
 
-    # 파싱 성공했지만 핵심 필드가 모두 비어있으면 재시도 (빈 응답 / refusal 감지)
-    if _is_empty_payload(parsed):
+    # 파싱 성공했지만 품질이 나쁘면 재시도 (empty / 영어 혼입 / placeholder 반복)
+    bad_reason = _bad_payload_reason(parsed)
+    if bad_reason:
       if attempt_idx < len(attempts) - 1:
         logger.warning(
-          f"[ollama VL] attempt={attempt_idx+1} 파싱은 성공했으나 핵심 필드 empty → 재시도"
+          f"[ollama VL] attempt={attempt_idx+1} 품질 저하 ({bad_reason}) → 재시도"
         )
-        last_err = RuntimeError(f"gemma4 empty payload (attempt={attempt_idx+1})")
+        last_err = RuntimeError(f"gemma4 {bad_reason} (attempt={attempt_idx+1})")
         continue
       logger.warning(
-        f"[ollama VL] 모든 attempt 에서 empty payload — 마지막 결과 그대로 반환"
+        f"[ollama VL] 모든 attempt 에서 품질 저하 ({bad_reason}) — 마지막 결과 그대로 반환"
       )
     return parsed
 
@@ -318,20 +324,59 @@ def _call_ollama(image_path: ImagePaths, prompt: str, schema: type[T], timeout: 
   raise last_err if last_err else RuntimeError("ollama VL 재시도 모두 실패")
 
 
-def _is_empty_payload(parsed: BaseModel) -> bool:
-  """TagResult 의 핵심 필드 (solution_summary + solution_steps) 가 모두 비었으면 True.
-  해설 없는 경로 (solution_summary 가 None 허용) 는 concept_tags 까지 함께 봐서 판단."""
-  if not hasattr(parsed, "solution_summary"):
+_EN_WORD_RE = re.compile(r"[a-zA-Z]{4,}")
+_PLACEHOLDER_RE = re.compile(r"(description_error|placeholder|TODO|FIXME)", re.IGNORECASE)
+
+
+def _has_english_prose(text: str, ratio_threshold: float = 0.3) -> bool:
+  """영단어(4자+) 비율이 threshold 초과하면 True. \\( ... \\) 안의 LaTeX 은 영문 제외."""
+  if not text:
     return False
+  # \( ... \) 로 감싸진 수식은 제거 후 판단
+  stripped = re.sub(r"\\\(.*?\\\)", " ", text)
+  stripped = re.sub(r"\\[a-zA-Z]+", " ", stripped)
+  words = stripped.split()
+  if not words:
+    return False
+  en_count = sum(1 for w in words if _EN_WORD_RE.search(w))
+  return (en_count / len(words)) > ratio_threshold
+
+
+def _bad_payload_reason(parsed: BaseModel) -> str | None:
+  """payload 품질 저하 사유 반환 (재시도 트리거). 정상이면 None."""
+  if not hasattr(parsed, "solution_summary"):
+    return None
   summary = getattr(parsed, "solution_summary", None) or ""
   steps = getattr(parsed, "solution_steps", None) or []
   concepts = getattr(parsed, "concept_tags", None) or []
-  # 요약 비었고 단계 비었으면 empty. concept_tags 까지 비었으면 확실히 empty.
+  # 1) empty
   if not summary.strip() and not steps:
-    return True
+    return "empty payload"
   if not concepts:
-    return True
-  return False
+    return "empty concept_tags"
+  # 2) placeholder 문자열 (description_error 등) 혼입
+  for s in steps:
+    desc = getattr(s, "description", "") or ""
+    if _PLACEHOLDER_RE.search(desc):
+      return "placeholder in step"
+  if _PLACEHOLDER_RE.search(summary):
+    return "placeholder in summary"
+  # 3) 영어 혼입
+  if _has_english_prose(summary):
+    return "english in summary"
+  pitfall = getattr(parsed, "pitfall", None) or ""
+  if _has_english_prose(pitfall):
+    return "english in pitfall"
+  for s in steps:
+    desc = getattr(s, "description", "") or ""
+    if _has_english_prose(desc):
+      return "english in step"
+  mistakes = getattr(parsed, "common_mistakes", None) or []
+  for m in mistakes:
+    t = getattr(m, "text", "") or ""
+    if _has_english_prose(t):
+      return "english in mistake"
+  return None
 
 
 # ── Gemini ────────────────────────────────────────────────────────────────────
