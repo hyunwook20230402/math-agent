@@ -10,7 +10,7 @@
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Radix UI, TanStack Query v5, React Router v6
 - **Backend (DB/Auth)**: Supabase (PostgreSQL, Auth, Storage)
-- **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, EasyOCR + Surya, YOLO11n (ultralytics), VL 모델 (서버 근무시간 Ollama Gemma3 27B / 오프시간 OpenAI — `provider_selector` 자동 전환)
+- **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, EasyOCR + YOLO11 (ultralytics), VL 모델 (서버 근무시간 Ollama **Gemma4 26B** / 오프시간 OpenAI — `provider_selector` 자동 전환). **어려운 문제 (`difficulty_score >= CALL_B_HARD_THRESHOLD`) Call B + 검증은 OpenAI gpt-5.4-mini 강제 분기** (`backend/pdf_pipeline/docs/CALL_B_ROUTING.md`)
 - **Backend (AI 튜터)**: Python 3.11, FastAPI, LangGraph 기반 다중턴 대화 (`backend/deeptutor/`)
 - **개발 환경**: Windows 11, 로컬 RTX 4070 8GB / 서버 RTX 4090 24GB
 
@@ -54,7 +54,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8001
 
 # 4. Ollama 모델 (해설 태깅용, 서버 전용)
-ollama pull gemma3:27b
+ollama pull gemma4:26b
 ```
 
 ---
@@ -70,7 +70,10 @@ ollama pull gemma3:27b
 ### 해설지 태깅
 1. CMS `/solution-review` 에서 해설 PDF 업로드.
 2. 해설 크롭 + 정답 파싱.
-3. "샘플 (앞 4개)" → "이어서" → 전체를 VL 태깅 (unit, difficulty, concept/skill, summary, pitfall, solution_steps, common_mistakes).
+3. "샘플 (앞 4개)" → "이어서" → "전체 재태깅" 으로 VL 태깅 (unit, difficulty, concept/skill, summary, pitfall, solution_steps, common_mistakes).
+   - 메타 (Call A) 는 항상 Gemma4 26B
+   - solution_steps (Call B) 는 어려운 문제만 OpenAI gpt-5.4-mini, 나머지는 Gemma4
+   - 3-layer 검증 (`tag_validator`) 도 같은 임계값으로 OpenAI 분기
 4. "문제에 적용" → `problem_staging` 에 병합.
 
 ### AI 튜터 (DeepTutor)
@@ -97,5 +100,5 @@ ollama pull gemma3:27b
 | Teacher | 8082 |
 | Student | 8083 |
 | PDF 파이프라인 API | 8001 |
-| DeepTutor API | 8001 ⚠️ (`backend/deeptutor/main.py` 주석상 8001. pdf_pipeline 과 충돌 — 동시 구동 시 한쪽 포트 변경 필요) |
+| DeepTutor API | (별도 포트 — `backend/deeptutor/main.py` 참조. pdf_pipeline 과 동시 구동 시 포트 충돌 주의) |
 | Ollama | 11434 |

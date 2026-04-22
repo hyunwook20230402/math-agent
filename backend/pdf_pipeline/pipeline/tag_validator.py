@@ -1,12 +1,16 @@
 """온톨로지 태깅 검증 에이전트 (3-layer)
 
-Layer 1 — Rule 기반 (비용 0): 필드 누락, 영어 혼입, unit_score 경고
-Layer 2 — LLM 재검증 (Gemini 1호출): 이미지 + 태깅 결과 cross-check
+Layer 1 — Rule 기반 (비용 0): 필드 누락, 영어 혼입, formula delimiter, placeholder, step_no 중복 등
+Layer 2 — LLM 재검증 (call_vl 1호출): 이미지 + 태깅 결과 cross-check
+                                       어려운 문제(difficulty >= CALL_B_HARD_THRESHOLD)는 OpenAI 강제 분기
 Layer 3 — 임베딩 자가 체크 (비용 0): solution_steps ↔ concept_tags cosine 일치도
 
 환경변수:
   TAG_VALIDATOR_ENABLED  — "true" (기본) | "false"
   TAG_VALIDATOR_LAYERS   — "123" (기본) | "1" | "13" 등 조합 가능
+  CALL_B_HARD_THRESHOLD  — Layer 2 OpenAI 분기 임계값 (Call B 와 공유, 기본 7)
+
+상세 문서: backend/pdf_pipeline/docs/TAG_VALIDATOR.md
 """
 import json
 import logging
@@ -243,10 +247,9 @@ _VALIDATION_PROMPT_TEMPLATE = """\
    - 이미지에 등장하는 핵심 계산/변환 단계가 steps에 빠져 있으면 "solution_steps step 누락" 이슈 (severity=high)
    - steps 순서가 실제 풀이 순서와 다르면 "solution_steps 순서 불일치" 이슈 (severity=high)
    - steps 내용이 이미지와 무관한 엉뚱한 풀이면 "solution_steps 내용 불일치" 이슈 (severity=high, reject)
-   - 난이도별 권장 steps 개수 구간 — 1-2: 2~3 / 3-4: 3~4 / 5-6: 4~6 / 7-8: 6~8 / 9-10: 8~12.
-     * 하한 미달이면 "solution_steps 개수 부족" (severity=medium)
-     * 상한 초과 정도가 크면(상한의 2배 이상) "difficulty_score 저평가 의심" (severity=high) — 예: difficulty_score=5 인데 steps 19개 → 실제 9-10 킬러급일 가능성, suggested_fixes.difficulty_score 로 승격 제안
+   - steps 개수가 풀이 복잡도 대비 비현실적이면 (예: difficulty_score=2 인데 12 steps, 또는 difficulty_score=10 인데 1 step) "difficulty_score 부적절" 이슈로 suggested_fixes.difficulty_score 재조정 제안 (severity=medium)
    - steps 개수가 1개뿐이거나 지나치게 뭉뚱그려진 경우 "solution_steps 세분화 부족" 이슈 (severity=medium)
+   - 단순한 step 개수 구간 검증은 하지 않는다 — 모델이 풀이 복잡도에 맞춰 자유 결정 (4차 정책)
 4. difficulty_score (1~10 정수) 가 문제 난이도와 맞는가? 시대 무관 구조 신호 기반:
    - 1-2 (very_easy): 공식 1개 직접 대입
    - 3-4 (easy): 2~3단 계산, 개념 1개 안

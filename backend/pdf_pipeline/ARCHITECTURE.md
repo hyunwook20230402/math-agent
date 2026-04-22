@@ -40,15 +40,19 @@
 │    │                                                              │
 │    ▼                                                              │
 │  VL 태깅 (solution_tagger.extract_tags_from_image)               │
-│    - vl_providers.call_vl() → Pydantic structured output         │
+│    - Call A (메타): vl_providers.call_vl() → 항상 ollama gemma4   │
+│    - Call B (steps): 어려움(≥THRESHOLD) → OpenAI gpt-5.4-mini     │
+│                       그 외 → ollama gemma4                       │
 │    - tag_normalizer 로 concept/skill canonical 매칭               │
 │    - unit_matcher 로 bge-m3 cosine → units leaf 매핑             │
 │    │                                                              │
 │    ▼                                                              │
 │  tag_validator (3-layer 검증)                                     │
 │    - Layer 1: Rule 기반 (필드 누락, 영어 혼입, unit_score < 0.5)  │
-│    - Layer 2: LLM 재검증 (이미지 + 태깅 결과 cross-check)        │
+│    - Layer 2: LLM 재검증 (이미지 + 태깅 결과 cross-check)         │
+│                어려움(≥THRESHOLD) → OpenAI, 그 외 → ollama        │
 │    - Layer 3: 임베딩 자가체크 (solution_steps ↔ concept_tags)    │
+│    → 상세: docs/TAG_VALIDATOR.md, docs/CALL_B_ROUTING.md          │
 │    │                                                              │
 │    ▼                                                              │
 │  problem_staging 저장                                             │
@@ -68,19 +72,37 @@
 
 ## 2. Provider 운영 전략
 
-| 시간대 | 위치 | VL Provider | Embed Provider |
-|--------|------|-------------|----------------|
+### 2.1 시간대 기반 (provider_selector)
+
+| 시간대 | 위치 | VL Provider 기본 | Embed Provider |
+|--------|------|------------------|----------------|
 | 평일 09:00~19:00 KST | 서버 (회사) | **Ollama Gemma4 26B** | **bge-m3** (Ollama) |
 | 그 외 | 집 | **OpenAI gpt-4o** (오프시간 기본) | **OpenAI** (text-embedding-3-small) |
 
 - `pipeline/provider_selector.py` 가 시간대 감지 → `VL_PROVIDER` / `EMBED_PROVIDER` 결정
-- 환경변수로 강제 override 가능: `VL_PROVIDER=openai`, `EMBED_PROVIDER=openai`
-- Ollama 접속 실패 시 OpenAI 자동 fallback (집에서 서버 OFF 대응)
-- 근무시간 범위 조정 이력: 09~18 → **09~19 KST** (커밋 `dd436d6`)
+- 환경변수로 강제 override 가능: `VL_PROVIDER=ollama` (서버 Ollama 고정 운영 시)
+- `VL_PROVIDER=ollama` 시 OpenAI fallback 차단 (`vl_providers._call_ollama_with_fallback`)
 
-**모든 LLM 호출은 Pydantic structured output 강제** — free-form JSON 파싱 없음.
+### 2.2 호출별 강제 분기 (4차 도입, 2026-04-22)
 
-서버 Ollama 모델 현황: `gemma4:26b` (19GB, vision, RTX 4090 24GB). 이전 `gemma3:27b` 는 2026-04-21 gemma4 로 교체.
+`call_vl(image_path, prompt, schema, *, provider="openai")` 로 시간대와 무관하게 호출별 provider 강제 가능. 운영 정책:
+
+| 호출 | difficulty | Provider | 모델 |
+|------|------------|----------|------|
+| Call A (메타) | 무관 | 시간대 기본 (보통 ollama) | gemma4:26b |
+| Call B (steps) | < `CALL_B_HARD_THRESHOLD` | ollama | gemma4:26b |
+| **Call B (steps)** | ≥ `CALL_B_HARD_THRESHOLD` | **OpenAI 강제** | **gpt-5.4-mini** |
+| 검증 Layer 2 | < `CALL_B_HARD_THRESHOLD` | 시간대 기본 | gemma4:26b |
+| **검증 Layer 2** | ≥ `CALL_B_HARD_THRESHOLD` | **OpenAI 강제** | **gpt-5.4-mini** |
+
+기본 `CALL_B_HARD_THRESHOLD=7`. Call B 와 검증이 같은 임계값을 공유 — 어려운 문제 일관성. 상세: `docs/CALL_B_ROUTING.md`.
+
+### 2.3 공통
+
+- Ollama 접속 실패 시 OpenAI 자동 fallback (`VL_PROVIDER=ollama` 명시 시 차단됨 — 비용 제어)
+- **모든 LLM 호출은 Pydantic structured output 강제** — free-form JSON 파싱 없음
+- 서버 Ollama 모델: `gemma4:26b` (19GB, vision, RTX 4090 24GB). 이전 `gemma3:27b` 는 2026-04-21 교체
+- Gemini 분기는 `vl_providers.py` 에 코드 잔존하지만 **운영 스택에선 빠짐** (free tier 한도로 실용성 부족)
 
 ---
 
@@ -134,19 +156,12 @@ class SolutionStep(BaseModel):
 - 7-8 (hard): 경우분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개
 - 9-10 (killer): 위 신호 2개 이상 해당 (경우분리 3+, 중첩 2+, 미지수 2+, 스텝 7+ 등)
 
-**solution_steps 개수** — 난이도별 점진 증가:
-| 난이도 | step 수 |
-|--------|---------|
-| 1-2 | 2~3 |
-| 3-4 | 3~4 |
-| 5-6 | 4~6 |
-| 7-8 | 6~8 |
-| 9-10 | 8~12 (경우 분리 각각을 step 으로 쪼갬) |
+**solution_steps 개수**: 모델 자율 결정 (4차에서 난이도별 강제 폐지). 빈 리스트만 금지. `_dedup_steps` 가 `step_no` 중복만 제거. 자세한 step 품질 검증은 `docs/TAG_VALIDATOR.md` Layer 1 참조.
 
 후처리:
 - `tag_normalizer` 가 concept/skill 을 `concept_taxonomy.json` canonical 로 정규화 (cosine ≥ 0.65)
 - `unit_matcher` 가 태그 조합으로 단원 경로 결정 (예: `"대수 > 삼각함수"`)
-- `tag_validator` 3-layer 검증 → `validation_status` (ok/warning/reject) + `validation_score`
+- `tag_validator` 3-layer 검증 → `validation_status` (ok/warning/reject) + `validation_score` — `docs/TAG_VALIDATOR.md`
 - `suggested_fixes` 가 있으면 canonical 매칭 성공 시 자동 반영 (`applied: true` 플래그)
 
 ---

@@ -46,11 +46,15 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 - 실행 시 반드시 `cd backend/pdf_pipeline/yolo_training` — yaml 내 `../uploads/...` 가 CWD 기준으로 해석됨
 - 학습 후 `models/problem_detector.pt` / `solution_detector.pt` **자동 덮어쓰기 금지** — metric 확인 후 수동 `cp`
 
-## VL 모델 고정 방침 (2026-04-21 확정)
+## VL 모델 정책 (2026-04-22 갱신, 4차 반영)
 
-- **VL 모델은 gemma4:26b 로 고정**. qwen2.5-vl (7B/32B/72B 전부) 은 실측에서 gemma4 대비 품질 낮아 검토 대상 아님
-- 대안 검토 시 OpenAI/Gemini/Anthropic 등 유료 API 도 금지 (비용 이유)
-- 품질 개선은 VL 교체 대신 프롬프트 튜닝, 후처리 강화, 구조화 스키마 (segments) 로 접근
+- **기본 VL 모델은 gemma4:26b 로 고정**. qwen2.5-vl (7B/32B/72B 전부) 은 실측에서 gemma4 대비 품질 낮아 검토 대상 아님
+- **OpenAI gpt-5.4-mini 는 어려운 문제 (Call B / 검증 Layer 2) 한정 허용** (4차 도입). 비용 (1문제 ₩25, 모의고사 1회분 ₩152) 부담 작아 가성비 통과
+  - 정책: `difficulty_score >= CALL_B_HARD_THRESHOLD` (기본 7) 만 OpenAI, 나머지는 ollama gemma4:26b
+  - 같은 임계값을 Call B 와 검증이 공유 → 어려운 문제 일관성
+  - 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`, `docs/TAG_VALIDATOR.md`
+- 그 외 유료 API (Gemini / Anthropic / 다른 OpenAI 모델 전체) 도입은 금지 (비용 이유)
+- 품질 개선은 VL 교체 대신 프롬프트 튜닝, 후처리 강화, 구조화 스키마 (Pydantic structured output) 로 접근
 
 ## 모델 파일 동기화
 
@@ -153,41 +157,17 @@ npm run dev                  # http://localhost:8081
 - 대규모 탐색 완료 후 구현 시작 전 `/compact` 실행
 - `--no-verify` 사용 금지 (hook으로 차단됨)
 
-## 해설지 파이프라인 버그 이력 (2026-04-19 해결)
+## 해설지 파이프라인 — 재발 방지 체크리스트
 
-### 증상
-저장 버튼을 눌러도 초록 ✓ 미표시, PUT 요청이 안 가거나 500 에러 반복.
+(2026-04-19 다회 발생한 버그들 → 해결 완료. 자세한 원인/해결은 git log + 커밋 메시지)
 
-### 원인 및 해결책
+- **uvicorn 재시작 전 좀비 확인**: `netstat -ano | findstr :8001` → `Stop-Process -Id <PID> -Force`
+- **dict 키 타입 불일치**: page_bboxes 같은 key 일치 필수. `dict.get(int) or dict.get(str(int))` 패턴
+- **PIL ↔ numpy 변환**: `_trim_whitespace` 같은 cv2/numpy 기대 함수에 PIL Image 직접 전달 금지
+- **React useCallback stale closure**: state 의존하는 콜백은 `useRef` 동기화 패턴
+- **stage 복구 분기**: 빈 결과여도 stage 업데이트는 early return 전에 호출
 
-**1. Windows 포트 충돌 — uvicorn 좀비 프로세스**
-- 증상: PUT 요청이 서버 터미널에 안 찍힘
-- 원인: 이전 uvicorn(127.0.0.1:8000)이 좀비로 살아있고, 새 uvicorn(0.0.0.0:8001)과 공존. 브라우저가 구버전 프로세스로 연결
-- 해결: `powershell -Command "Stop-Process -Id <PID> -Force"` 또는 포트 변경(`8001`)
-- **향후**: uvicorn 재시작 전 `netstat -ano | findstr :8000`으로 좀비 확인
-
-**2. page_bboxes 키 타입 불일치 (str vs int)**
-- 원인: DB hydrate 시 `page_bboxes` 키가 문자열(`"1"`)인데 `body.page_number`는 정수(`1`) → dict lookup 실패 → 404
-- 해결: `page_bboxes.get(body.page_number) or page_bboxes.get(str(body.page_number))`
-- 위치: `main.py` `solution_update_bboxes` 함수
-
-**3. PIL Image를 numpy array 기대 함수에 직접 전달**
-- 원인: `img.crop()` → PIL Image → `_trim_whitespace()`(cv2/numpy 기대) 직접 전달 → cv2.error
-- 해결: PIL→numpy(`cv2.cvtColor(np.array(pil), COLOR_RGB2BGR)`) → trim → numpy→PIL(`PILImage.fromarray(cv2.cvtColor(..., COLOR_BGR2RGB))`)
-- 위치: `main.py` `solution_update_bboxes` L1367~
-
-**4. React useCallback 클로저 stale 문제 (solutionJobId)**
-- 원인: `saveBboxForPage`가 `useCallback([solutionJobId])`로 정의돼 있어 state 업데이트 직후 클로저가 null을 참조
-- 해결: `solutionJobIdRef = useRef(null)` 추가, `setCleanSolutionJobId`에서 ref도 동기화, `saveBboxForPage`에서 ref 참조
-- **향후**: 저장/fetch 함수에서 state 직접 참조 대신 ref 패턴 사용
-
-**5. status 복구 시 pageNums=0이면 stage가 'idle' 고착**
-- 원인: `if (pageNums.length === 0) return` 에서 `setStage('reviewing')` 전에 return → 저장 버튼 렌더 안 됨
-- 해결: `setStage(newStage)`를 `pageNums` 체크 전에 호출
-
-## 백엔드 포트 현황
-- 로컬 개발: **8001** (SolutionReview, PdfReview, PdfUploadDialog, ProblemDetail 모두 8001로 변경됨)
-- CORS allowlist: main.py에 8001 추가 필요 여부 확인
+(백엔드 포트 8001 / CORS 정책은 루트 README + ARCHITECTURE 참조 — 한 곳에서만 관리)
 
 ## 메모리 규칙
 

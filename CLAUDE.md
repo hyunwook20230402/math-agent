@@ -22,7 +22,7 @@ math/
 
 **백엔드 (Supabase)**: PostgreSQL, Auth (이메일), Storage (`problem-images` 버킷)
 
-**백엔드 (pdf_pipeline)**: Python 3.11, FastAPI (포트 8001), EasyOCR + YOLO11n, VL 모델 (Ollama Gemma3 27B 서버 근무시간 / OpenAI 오프시간 — provider_selector 자동 전환), bge-m3 임베딩
+**백엔드 (pdf_pipeline)**: Python 3.11, FastAPI (포트 8001), EasyOCR + YOLO11 (기본 11n / 재학습은 11m — `dev-rules` 참조), VL 모델 (Ollama **Gemma4 26B** 서버 근무시간 / OpenAI 오프시간 — `provider_selector` 자동 전환), bge-m3 임베딩. **Call B + 검증은 어려운 문제 (`difficulty_score >= CALL_B_HARD_THRESHOLD`) 일 때 OpenAI gpt-5.4-mini 강제 분기** — 상세 `backend/pdf_pipeline/docs/CALL_B_ROUTING.md` / `docs/TAG_VALIDATOR.md`
 
 **백엔드 (deeptutor)**: LangGraph + LLM, FastAPI, `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}` (대화 상태: `student_conversations` 테이블)
 
@@ -51,6 +51,14 @@ import type { Database } from '@shared/types/database';
 | `.claude/rules/db-conventions.md` | DB ID 규칙 (teacher_id → profiles.id), RLS 상태 |
 | `.claude/rules/problem-registration.md` | unit/category/difficulty/choices 형식 |
 | `.claude/rules/code-style.md` | 들여쓰기, import 경로, 컴포넌트 패턴 |
+
+## pdf_pipeline 상세 문서
+
+| 파일 | 내용 |
+|------|------|
+| `backend/pdf_pipeline/ARCHITECTURE.md` | 전체 데이터 흐름, provider 전략, TagResult 스키마, DB |
+| `backend/pdf_pipeline/docs/TAG_VALIDATOR.md` | 3-layer 검증 에이전트 동작, OpenAI 분기, suggested_fixes 자동 적용 |
+| `backend/pdf_pipeline/docs/CALL_B_ROUTING.md` | Call B 어려운 문제 OpenAI gpt-5.4-mini 분기 정책 + 비용 |
 
 ## 슬래시 커맨드
 

@@ -18,10 +18,11 @@
 - 단원 계통도 (공통수학1/2, 대수, 미적분I, 확률과 통계 — concepts 375 / skills 359 / units 15)
 - unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty_score/pitfall/solution_steps/common_mistakes AI 추출
 - **난이도 (difficulty_score) 구조 신호 기반 판정** (2026-04-22) — "수능 21/29/30번류" 번호 고정 제거. 경우분리 개수·중첩 깊이·개념 복합도로 1~10 스코어링. 시대 무관.
-- **solution_steps 3단 구조** (2026-04-22) — `description` (무엇을) + `formula` (핵심 식 \\( ... \\)) + `reason` (왜, 개념명) Optional 필드. 난이도별 점진 증가 (1-2: 2~3 / 9-10: 8~12 steps).
-- 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크)
+- **solution_steps 3단 구조** (2026-04-22) — `description` (무엇을) + `formula` (핵심 식 \\( ... \\)) + `reason` (왜, 개념명) Optional 필드. **개수 강제 폐지** (4차) — 모델이 풀이 복잡도에 맞춰 자유 결정, `step_no` 중복만 제거.
+- **Call B / 검증 OpenAI 분기** (2026-04-22, 4차) — `difficulty_score >= CALL_B_HARD_THRESHOLD` (기본 7) 면 `gpt-5.4-mini` 강제. 검증도 같은 임계값 공유. `_retagged` 마커 + CMS "전체 재태깅" 버튼 추가. 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`
+- 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크). Layer 2 도 OpenAI 분기. 상세: `backend/pdf_pipeline/docs/TAG_VALIDATOR.md`
 - Provider 시간대 자동 선택 (`provider_selector.py` — 평일 09-19 KST Ollama, 그 외 OpenAI)
-- YOLO11n 기본 가중치 (`promote_model` 의존 제거 — 커밋 `56ecdd0`)
+- YOLO11n 기본 가중치 (`promote_model` 의존 제거 — 커밋 `56ecdd0`). 재학습은 11m + Optuna (`dev-rules.md` 참조)
 
 ### DeepTutor (`backend/deeptutor/`) ✅ 운영
 - LangGraph 상태기계: `graph/builder.py` + `graph/nodes.py` (~800 LOC)
@@ -47,32 +48,29 @@
 
 ## 파이프라인 운영 정보
 
-### VL Provider 전략
+### Provider 전략
 
-| 시간대 | VL Provider | Embed Provider |
-|--------|-------------|----------------|
-| 평일 09-19 KST (서버) | Ollama Gemma4 26B | bge-m3 (Ollama) |
-| 그 외 (집) | OpenAI gpt-4o | OpenAI text-embedding-3-small |
+| 호출 | 조건 | Provider | 모델 |
+|------|------|----------|------|
+| 시간대 기본 (서버) | 평일 09-19 KST | Ollama | gemma4:26b |
+| 시간대 기본 (집) | 그 외 | OpenAI | gpt-4o (provider_selector 기본) |
+| Call A (메타) | 항상 | 시간대 기본 | gemma4:26b 우선 |
+| Call B (steps) | difficulty < 7 | ollama | gemma4:26b |
+| **Call B (steps)** | **difficulty >= 7** | **OpenAI 강제** | **gpt-5.4-mini** |
+| 검증 Layer 2 | difficulty < 7 | 시간대 기본 | gemma4:26b |
+| **검증 Layer 2** | **difficulty >= 7** | **OpenAI 강제** | **gpt-5.4-mini** |
+| Embed | 시간대 기본 | bge-m3 / text-embedding-3-small | |
 
-- 환경변수 `VL_PROVIDER` / `EMBED_PROVIDER` 로 강제 override 가능
-- 서버 Ollama 모델: `gemma4:26b` (19GB, RTX 4090 24GB) — 이전 `gemma3:27b` 는 2026-04-21 교체
-- 오프시간 OpenAI 전환은 커밋 `57aff12` 에서 도입. Gemini 는 현재 스택에서 빠짐(README 참고)
-- 근무시간은 09~18 → **09~19 KST** 로 확장됨 (커밋 `dd436d6`)
+- `VL_PROVIDER` / `EMBED_PROVIDER` env 로 시간대 무시 강제 override 가능
+- `CALL_B_HARD_THRESHOLD` env 로 OpenAI 분기 임계값 조정 (기본 7)
+- 서버 Ollama 모델: `gemma4:26b` (19GB, RTX 4090 24GB) — 이전 `gemma3:27b` 는 2026-04-21 교체 → gemma4 운영 중
+- Gemini 는 코드에 분기 잔존하지만 운영에서 빠짐 (free tier 한도)
+- 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`
 
 ### UPLOAD_DIR
 
 `.env` 의 `UPLOAD_DIR` 가 실제 경로. `config.py` 기본값(`/tmp/pdf_pipeline`) 보지 말 것.
 실제: `C:/Users/user/workspaces/math/backend/pdf_pipeline/uploads`
-
-### 서버 세팅 계획 (2026-04-20 기준, 미진행)
-
-- 로컬 push 완료: 커밋 `3326b45`
-- 서버에서 실행 예정:
-  1. `git pull`
-  2. `ollama pull gemma3:27b` (17GB, 10~20분)
-  3. Vision ping 검증 후 서버 `.env` 설정 (`VL_MODEL=gemma3:27b`)
-  4. `scripts/smoke_test_gemini.py` 로 스모크 테스트
-- 완료 시 이 섹션은 삭제 예정
 
 ### 데이터 파이프라인 상세
 
