@@ -78,7 +78,7 @@ interface StagingProblem {
   solution_image_url: string | null;
   solution_summary: string | null;
   pitfall: string | null;
-  solution_steps: { step: number; description: string }[] | null;
+  solution_steps: { step: number; hint: string; formula?: string | null; concept?: string | null }[] | null;
   common_mistakes: { bug_id: string; text: string }[] | null;
   match_confidence: number | null;
   validation_status: 'ok' | 'warning' | 'reject' | null;
@@ -597,7 +597,13 @@ const ProblemDetail = () => {
                     {selectedProblem.solution_steps.map(s => (
                       <li key={s.step} className="text-sm bg-muted/40 rounded-md px-3 py-1.5">
                         <span className="font-medium text-xs text-muted-foreground mr-2">Step {s.step}</span>
-                        <MathText text={s.description} />
+                        <MathText text={s.hint} />
+                        {s.formula && (
+                          <div className="ml-2 mt-0.5"><MathText text={s.formula} /></div>
+                        )}
+                        {s.concept && (
+                          <div className="ml-2 mt-0.5 text-xs text-muted-foreground italic">↳ {s.concept}</div>
+                        )}
                       </li>
                     ))}
                   </ol>

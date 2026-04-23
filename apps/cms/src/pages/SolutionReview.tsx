@@ -307,7 +307,7 @@ export default function SolutionReview() {
   const [tagResults, setTagResults] = useState<Record<string, any>>({});
   const [expandedTagNumber, setExpandedTagNumber] = useState<number | null>(null);
   const [taggingMode, setTaggingMode] = useState<'sample' | 'continue' | 'full' | null>(null);
-  const [retagStatus, setRetagStatus] = useState<Record<number, 'pending'|'tagging'|'done'|'error'>>({});
+  const [retagStatus, setRetagStatus] = useState<Record<number, 'pending'|'tagging'|'done'|'warning'|'error'>>({});
   const retagPollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const activePageRef = useRef<number>(0);
@@ -759,7 +759,7 @@ export default function SolutionReview() {
         Object.entries(status).forEach(([k, v]) => { parsed[Number(k)] = v as any; });
         setRetagStatus(prev => ({ ...prev, ...parsed }));
 
-        const allDone = Object.values(parsed).every(s => s === 'done' || s === 'error');
+        const allDone = Object.values(parsed).every(s => s === 'done' || s === 'warning' || s === 'error');
         if (allDone) {
           stopRetagPoller();
           const statusRes = await fetch(`${PIPELINE_URL}/api/solution/status/${sjId}`);
@@ -1048,6 +1048,7 @@ export default function SolutionReview() {
                         {retagStatus[num] === 'pending' && <span className="text-xs text-yellow-600">대기 중…</span>}
                         {retagStatus[num] === 'tagging' && <span className="text-xs text-blue-600 animate-pulse">재태깅 중…</span>}
                         {retagStatus[num] === 'done' && <span className="text-xs text-green-600">✓ 재태깅 완료</span>}
+                        {retagStatus[num] === 'warning' && <span className="text-xs text-yellow-600">⚠ 검증 경고</span>}
                         {retagStatus[num] === 'error' && <span className="text-xs text-red-600">재태깅 오류</span>}
                       </button>
                       <div className="flex items-center gap-2">
@@ -1094,16 +1095,16 @@ export default function SolutionReview() {
                                 <li key={i} className="text-xs">
                                   <div>
                                     <span className="font-medium">Step {s.step}</span>
-                                    {s.description && <span className="text-muted-foreground"> — <MathText text={s.description} /></span>}
+                                    {s.hint && <span className="text-muted-foreground"> — <MathText text={s.hint} /></span>}
                                   </div>
                                   {s.formula && (
                                     <div className="ml-2 mt-0.5 text-foreground">
                                       <MathText text={s.formula} />
                                     </div>
                                   )}
-                                  {s.reason && (
+                                  {s.concept && (
                                     <div className="ml-2 mt-0.5 text-[11px] text-muted-foreground italic">
-                                      ↳ {s.reason}
+                                      ↳ {s.concept}
                                     </div>
                                   )}
                                 </li>

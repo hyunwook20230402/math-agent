@@ -110,22 +110,12 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
 
   steps: list[dict] = tag_result.get("solution_steps", [])
   for step in steps:
-    desc = step.get("description", "")
-    if _has_english(desc):
-      issues.append(ValidationIssue(field="solution_steps", reason=f"step {step.get('step')} description 영어 혼입", severity="high"))
-      break
-  # description 에 LaTeX 수식이 섞이면 formula 필드와 역할 혼동 — formula 쪽으로 이전 필요
-  for step in steps:
-    desc = step.get("description", "") or ""
-    if r"\(" in desc or r"\[" in desc or "$" in desc:
-      issues.append(ValidationIssue(
-        field="solution_steps",
-        reason=f"step {step.get('step')} description 에 수식 혼입 — formula 필드로 분리 필요",
-        severity="medium",
-      ))
+    hint = step.get("hint", "")
+    if _has_english(hint):
+      issues.append(ValidationIssue(field="solution_steps", reason=f"step {step.get('step')} hint 영어 혼입", severity="high"))
       break
 
-  # formula delimiter 누락 / placeholder 잔존 / reason "null" 문자열 — 후처리가 잡지 못한 잔여 검증
+  # formula delimiter 누락 / placeholder 잔존 / concept "null" 문자열 — 후처리가 잡지 못한 잔여 검증
   for step in steps:
     f = step.get("formula")
     if isinstance(f, str) and f.strip():
@@ -138,20 +128,20 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
         ))
         break
   for step in steps:
-    d = step.get("description") or ""
-    if re.match(r"^\s*(description[_:]\s*error?|final_result|implying)\b", d, re.I):
+    h = step.get("hint") or ""
+    if re.match(r"^\s*(description[_:]\s*error?|final_result|implying)\b", h, re.I):
       issues.append(ValidationIssue(
         field="solution_steps",
-        reason=f"step {step.get('step')} description placeholder 잔존: {d[:40]}",
+        reason=f"step {step.get('step')} hint placeholder 잔존: {h[:40]}",
         severity="high",
       ))
       break
   for step in steps:
-    r = step.get("reason")
-    if isinstance(r, str) and r.strip().lower() in {"null", "none"}:
+    c = step.get("concept")
+    if isinstance(c, str) and c.strip().lower() in {"null", "none"}:
       issues.append(ValidationIssue(
         field="solution_steps",
-        reason=f"step {step.get('step')} reason 문자열 'null' 박제",
+        reason=f"step {step.get('step')} concept 문자열 'null' 박제",
         severity="medium",
       ))
       break
@@ -166,9 +156,9 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
       severity="high",
     ))
 
-  # description 한국어 비율 (< 50% 이면 영어 혼입 심각 — 30문제 실측에서 #15, #29 케이스)
+  # hint 한국어 비율 (< 50% 이면 영어 혼입 심각)
   for s in steps:
-    d = s.get("description") or ""
+    d = s.get("hint") or ""
     if len(d) < 5:
       continue
     han = sum(1 for c in d if '\uac00' <= c <= '\ud7a3')
@@ -179,7 +169,7 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
     if ratio < 0.5:
       issues.append(ValidationIssue(
         field="solution_steps",
-        reason=f"step {s.get('step')} description 한국어 비율 {ratio:.0%} — 영어 혼입 과다",
+        reason=f"step {s.get('step')} hint 한국어 비율 {ratio:.0%} — 영어 혼입 과다",
         severity="high",
       ))
       break
@@ -213,7 +203,7 @@ def _layer3_embedding(tag_result: dict) -> list[ValidationIssue]:
   try:
     from . import embedder
 
-    steps_text = " ".join(s.get("description", "") for s in steps)
+    steps_text = " ".join(s.get("hint", "") for s in steps)
     tags_text = " ".join(concept_tags)
 
     steps_vec = np.array(embedder.generate_embedding(steps_text), dtype=np.float32)
@@ -329,7 +319,8 @@ def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[Val
   """LLM 으로 태깅 결과를 재검증.
 
   image_path 는 단일 경로 또는 리스트([문제경로, 해설경로]). 리스트면 멀티 이미지로 전달.
-  어려운 문제 (difficulty_score >= CALL_B_HARD_THRESHOLD) 는 OpenAI 로 분기 — Call B 와 동일 임계값.
+  어려운 문제 (difficulty_score >= CALL_B_HARD_THRESHOLD) 는 CALL_B_HARD_PROVIDER 로 분기 — Call B 와 동일 임계값·env.
+  CALL_B_HARD_PROVIDER=ollama 면 OpenAI 분기 비활성화 (모든 난이도 기본 VL_PROVIDER 사용).
   """
   try:
     from .vl_providers import call_vl
@@ -348,7 +339,11 @@ def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[Val
 
     d = int(tag_result.get("difficulty_score") or 5)
     threshold = int(os.environ.get("CALL_B_HARD_THRESHOLD", "7"))
-    provider = "openai" if d >= threshold else None
+    if d >= threshold:
+      hard_provider = os.environ.get("CALL_B_HARD_PROVIDER", "openai").strip().lower()
+      provider = hard_provider if hard_provider and hard_provider != "ollama" else None
+    else:
+      provider = None
     logger.info(f"[validator L2] difficulty={d} provider={provider or 'default'}")
 
     llm_result = call_vl(image_path, prompt, _LLMValidation, provider=provider)

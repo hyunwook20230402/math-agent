@@ -391,7 +391,7 @@ def _bad_payload_reason(parsed: BaseModel) -> str | None:
     return "empty concept_tags"
   # 2) placeholder 문자열 (description_error 등) 혼입
   for s in steps:
-    desc = getattr(s, "description", "") or ""
+    desc = getattr(s, "hint", "") or ""
     if _PLACEHOLDER_RE.search(desc):
       return "placeholder in step"
   if _PLACEHOLDER_RE.search(summary):
@@ -403,7 +403,7 @@ def _bad_payload_reason(parsed: BaseModel) -> str | None:
   if _has_english_prose(pitfall):
     return "english in pitfall"
   for s in steps:
-    desc = getattr(s, "description", "") or ""
+    desc = getattr(s, "hint", "") or ""
     if _has_english_prose(desc):
       return "english in step"
   mistakes = getattr(parsed, "common_mistakes", None) or []

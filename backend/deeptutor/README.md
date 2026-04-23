@@ -61,7 +61,7 @@ LangGraph + 노드 기반 ~800 LOC 규모.
 
 ## 데이터 활용 패턴
 
-- **단계별 힌트** — `problems.solution_steps` 에서 `step → description → formula → reason` 순서로 점진 공개
+- **단계별 힌트** — `problems.solution_steps` 에서 `step → hint → formula → concept` 순서로 점진 공개
 - **오답 진단** — `common_mistakes.text` + `bug_id` 로 taxonomy bugs 카테고리 매칭
 - **유사 문제 추천** — `problem_tags.canonical` (concepts/skills) + `unit` + `difficulty` 조합으로 같은 결의 문제 검색. bge-m3 임베딩으로 cosine 보강 (`handlers/similar_problems.py`)
 

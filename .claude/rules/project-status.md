@@ -18,7 +18,8 @@
 - 단원 계통도 (공통수학1/2, 대수, 미적분I, 확률과 통계 — concepts 375 / skills 359 / units 15)
 - unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty_score/pitfall/solution_steps/common_mistakes AI 추출
 - **난이도 (difficulty_score) 구조 신호 기반 판정** (2026-04-22) — "수능 21/29/30번류" 번호 고정 제거. 경우분리 개수·중첩 깊이·개념 복합도로 1~10 스코어링. 시대 무관.
-- **solution_steps 3단 구조** (2026-04-22) — `description` (무엇을) + `formula` (핵심 식 \\( ... \\)) + `reason` (왜, 개념명) Optional 필드. **개수 강제 폐지** (4차) — 모델이 풀이 복잡도에 맞춰 자유 결정, `step_no` 중복만 제거.
+- **solution_steps 3단 구조** (2026-04-23 필드명 통일) — `hint` (학생에게 보여주는 힌트 문장) + `formula` (핵심 식 \\( ... \\)) + `concept` (이 힌트가 짚는 개념명) 3필드 모두 필수 (null 금지). **개수 강제 폐지** (4차) — 모델이 풀이 복잡도에 맞춰 자유 결정, `CALL_B_MAX_STEPS` (기본 15) 만 상한 안전장치. 이전 이름 `description/formula/reason` 은 코드·문서·UI 5축에서 모두 `hint/formula/concept` 로 통일됨.
+- **Call B per-step loop** (2026-04-23 5차) — gemma4 repetition 폭주 근본 대응. 한방 호출 대신 "step 하나씩 N회 호출, 매번 이미지+누적 steps 재전송" 구조로 전환. 출력 토큰 짧아져 폭주 확률 급감. `{"done": true}` 신호로 루프 종료. 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`
 - **Call B / 검증 OpenAI 분기** (2026-04-22, 4차) — `difficulty_score >= CALL_B_HARD_THRESHOLD` (기본 7) 면 `gpt-5.4-mini` 강제. 검증도 같은 임계값 공유. `_retagged` 마커 + CMS "전체 재태깅" 버튼 추가. 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`
 - 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크). Layer 2 도 OpenAI 분기. 상세: `backend/pdf_pipeline/docs/TAG_VALIDATOR.md`
 - Provider 시간대 자동 선택 (`provider_selector.py` — 평일 09-19 KST Ollama, 그 외 OpenAI)

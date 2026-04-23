@@ -88,7 +88,7 @@ const AddProblemNew = () => {
   const [solutionImageUrl, setSolutionImageUrl] = useState('');
   const [solutionSummary, setSolutionSummary] = useState('');
   const [pitfall, setPitfall] = useState('');
-  const [solutionSteps, setSolutionSteps] = useState<{ step: number; description: string }[]>([]);
+  const [solutionSteps, setSolutionSteps] = useState<{ step: number; hint: string; formula?: string | null; concept?: string | null }[]>([]);
   const [commonMistakes, setCommonMistakes] = useState<{ bug_id: string; text: string }[]>([]);
 
   // 해설 이미지 라이트박스
@@ -1142,7 +1142,7 @@ const AddProblemNew = () => {
                     size="sm"
                     variant="outline"
                     className="h-6 text-xs px-2"
-                    onClick={() => setSolutionSteps(prev => [...prev, { step: prev.length + 1, description: '' }])}
+                    onClick={() => setSolutionSteps(prev => [...prev, { step: prev.length + 1, hint: '', formula: '', concept: '' }])}
                   >
                     + 단계 추가
                   </Button>
@@ -1151,15 +1151,35 @@ const AddProblemNew = () => {
                   {solutionSteps.map((s, i) => (
                     <div key={i} className="flex gap-2 items-start">
                       <span className="text-xs text-muted-foreground mt-2 w-12 shrink-0">Step {s.step}</span>
-                      <div className="flex-1">
+                      <div className="flex-1 space-y-1">
                         <EditableMath
-                          value={s.description}
+                          value={s.hint || ''}
                           onChange={(v) => {
                             const next = [...solutionSteps];
-                            next[i] = { ...next[i], description: v };
+                            next[i] = { ...next[i], hint: v };
                             setSolutionSteps(next);
                           }}
-                          placeholder="단계 설명"
+                          placeholder="힌트 문장"
+                        />
+                        <EditableMath
+                          value={s.formula || ''}
+                          onChange={(v) => {
+                            const next = [...solutionSteps];
+                            next[i] = { ...next[i], formula: v };
+                            setSolutionSteps(next);
+                          }}
+                          placeholder="핵심 식 \\( ... \\)"
+                        />
+                        <input
+                          type="text"
+                          className="w-full text-xs border rounded px-2 py-1"
+                          value={s.concept || ''}
+                          onChange={(e) => {
+                            const next = [...solutionSteps];
+                            next[i] = { ...next[i], concept: e.target.value };
+                            setSolutionSteps(next);
+                          }}
+                          placeholder="개념/정리 이름"
                         />
                       </div>
                       <Button

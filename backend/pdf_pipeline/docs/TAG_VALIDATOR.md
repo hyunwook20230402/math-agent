@@ -52,13 +52,13 @@ Pydantic 검증을 통과한 `tag_result` 에 대해 **순수 파이썬 규칙**
 | `unit_score < 0.5` | medium | bge-m3 단원 매칭 신뢰도 낮음 |
 | `common_mistakes.bug_id` null 비율 ≥ 70% | medium | bugs taxonomy 동의어 부족 신호 |
 | `solution_summary` / `pitfall` 영어 혼입 | **high** | `_has_english` (4자+ 영단어 비율 > 30%) |
-| step `description` 영어 혼입 | **high** | |
-| step `description` 안에 수식 (`\(`, `\[`, `$`) | medium | formula 필드 분리 위반 |
+| step `hint` 영어 혼입 | **high** | |
+| step `hint` 안에 수식 (`\(`, `\[`, `$`) | medium | formula 필드 분리 위반 |
 | step `formula` delimiter 없음 (`\(`/`\[` 시작 안 함) | **high** | |
-| step `description` placeholder 잔존 (`description_error`, `final_result`, `implying`) | **high** | gemma4 폭주 잔존 |
-| step `reason` 이 `"null"`/`"none"` 문자열 | medium | |
+| step `hint` placeholder 잔존 (`description_error`, `final_result`, `implying`) | **high** | gemma4 폭주 잔존 |
+| step `concept` 이 `"null"`/`"none"` 문자열 | medium | |
 | `step_no` 중복 | **high** | gemma4 자기복제 사고 (`solution_tagger._dedup_steps` 가 1차 차단, 잔존 시 발급) |
-| step `description` 한국어 비율 < 50% | **high** | |
+| step `hint` 한국어 비율 < 50% | **high** | |
 | `concept_tags` / `skill_tags` 태그가 영어 (≥80%) | **high** | |
 | `common_mistakes.text` 영어 혼입 | **high** | 학생 UI 노출 |
 
@@ -66,7 +66,7 @@ Pydantic 검증을 통과한 `tag_result` 에 대해 **순수 파이썬 규칙**
 
 ### Layer 3 — Embedding 자가체크 (`_layer3_embedding`)
 
-`solution_steps` 의 description 들을 한 문자열로 합친 임베딩 ↔ `concept_tags` 합친 문자열 임베딩의 cosine 유사도 검사.
+`solution_steps` 의 hint 들을 한 문자열로 합친 임베딩 ↔ `concept_tags` 합친 문자열 임베딩의 cosine 유사도 검사.
 
 - 사용 임베더: `pipeline.embedder.generate_embedding` (`EMBED_PROVIDER` 따라감 — bge-m3 / OpenAI 3-small)
 - 임계값: `cosine < 0.4` 면 medium issue 발급 (`solution_steps 와 concept_tags 임베딩 유사도 낮음`)
@@ -80,8 +80,9 @@ Pydantic 검증을 통과한 `tag_result` 에 대해 **순수 파이썬 규칙**
 
 - **Provider 분기**:
   - `difficulty_score < CALL_B_HARD_THRESHOLD` → `call_vl()` 기본 = `VL_PROVIDER` (보통 ollama gemma4:26b)
-  - `difficulty_score >= CALL_B_HARD_THRESHOLD` → `call_vl(..., provider="openai")` 강제 (gpt-5.4-mini)
-  - 같은 임계값 (`CALL_B_HARD_THRESHOLD`) 을 Call B 와 공유 — 어려운 문제 일관성
+  - `difficulty_score >= CALL_B_HARD_THRESHOLD` → `call_vl(..., provider=CALL_B_HARD_PROVIDER)` (기본 openai gpt-5.4-mini)
+  - `CALL_B_HARD_PROVIDER=ollama` 로 세팅하면 OpenAI 분기 비활성화 → 모든 난이도 ollama gemma4:26b 고정
+  - 같은 임계값·env (`CALL_B_HARD_THRESHOLD`, `CALL_B_HARD_PROVIDER`) 를 Call B 와 공유 — 어려운 문제 일관성
 - **입력 토큰**: 이미지 2장 (~1,530) + tag_json (~500) + canonical 목록 (concepts 375 + skills 359 + units leaf 모두 ≈ 6,000) + 프롬프트 (~1,000) ≈ **9,000 input tok**
 - **출력**: `_LLMValidation { status, issues, suggested_fixes }` ≈ **500 tok**
 - **검증 항목** (프롬프트 명시):

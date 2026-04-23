@@ -47,9 +47,9 @@ def _route_call_b_provider(difficulty_score: int) -> str:
 
 class SolutionStep(BaseModel):
   step: int
-  description: str                     # 이 단계에서 무엇을 하는지 (한국어 한 문장, 수식 포함 가능)
-  formula: Optional[str] = None        # 핵심 식 \( ... \) — 식이 없는 단계면 null
-  reason: Optional[str] = None         # 왜 이 단계가 필요한지 — 개념/정리 이름 (한국어, 선택)
+  hint: str                            # 학생에게 공개하는 힌트 텍스트 (한국어, 수식 인라인 허용)
+  formula: str                         # 이 힌트의 핵심 식 \( ... \) — 필수, null 금지
+  concept: str                         # 이 힌트가 짚는 개념/정리 이름 (한국어 1~3단어, 필수)
 
 class CommonMistake(BaseModel):
   text: str         # 한국어, 학생 UI 노출
@@ -81,8 +81,25 @@ class TagResultMeta(BaseModel):
 
 
 class SolutionStepsOnly(BaseModel):
-  """Call B 전용 — solution_steps 만 뽑는 좁은 스키마."""
+  """Call B 전용 — solution_steps 만 뽑는 좁은 스키마 (레거시 한방 호출용, 현재 미사용)."""
   solution_steps: list[SolutionStep] = Field(default_factory=list)
+
+
+class _SingleStepPayload(BaseModel):
+  """per-step loop 한 호출의 출력 — step 하나 (필드명 _ 접두사로 단일용 구분)."""
+  hint: str
+  formula: str
+  concept: str
+
+
+class SingleStepResult(BaseModel):
+  """per-step loop 한 호출의 응답.
+
+  done=true 면 더 이상 step 없음 → 루프 종료.
+  done=false 면 step 필드에 다음 단계 하나가 채워져 있어야 함.
+  """
+  done: bool
+  step: Optional[_SingleStepPayload] = None
 
 
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
@@ -116,6 +133,13 @@ LANGUAGE (absolute — Korean only for prose):
 - NEVER repeat a phrase more than twice in one field. If you find yourself repeating "description_error:" or similar, STOP and rewrite.
 
 추가 규칙(한국어): 모든 description/summary/pitfall/mistakes 는 반드시 한국어 문장으로만 작성한다. 영어 단어 금지. 같은 어구 반복 금지. "description_error" 같은 placeholder 문자열 절대 출력 금지. formula 는 반드시 \\\\( ... \\\\) 로 감싼다. reason 은 "null" 문자열 대신 null 값 또는 한국어 1~3단어.
+
+PIECEWISE FUNCTIONS (구간별 함수):
+- 구간별 정의 함수는 반드시 \\\\begin{cases}...\\\\end{cases} 로 표기한다.
+- 각 구간은 & 로 식과 조건을 구분하고 \\\\\\\\ 로 줄바꿈한다.
+- 예시: \\\\( f(x) = \\\\begin{cases} 2x-k & (x < k) \\\\\\\\ f(x) & (x > k) \\\\end{cases} \\\\)
+- "for", "when", "if" 같은 영어 단어를 조건 구분자로 쓰지 마라. 반드시 & 사용.
+- 공백으로만 구간을 나열하는 것은 절대 금지: \\\\(t(t-1) \\\\; t<0 \\\\; t(t+2) \\\\; t>0\\\\) → 이런 표기 금지.
 """
 
 
@@ -221,34 +245,131 @@ All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
 Output valid JSON only. No prose, no markdown fences."""
 
 
-_STEPS_ONLY_PROMPT = """You are analyzing a Korean high school math problem and its solution.
+_STEPS_ONLY_PROMPT = """You are a math tutor assistant analyzing a Korean high school math problem and its solution.
 
-You are given the problem image and the solution image. Your ONLY task now is to extract `solution_steps` — nothing else.
+Your ONLY task: generate `solution_steps` — a sequence of HINTS that guide a student to solve the problem on their own, step by step.
 
-- solution_steps: 풀이의 논리 단계만큼 step 을 만들어라. 개수 제한 없음. 한 step 에 여러 동작을 우겨넣지 말고, 한 step 에 한 가지 의미 있는 단계만 담아라. 단, 같은 step 을 의미 없이 반복하거나 같은 식을 두 번 쓰는 건 금지. MUST NOT be empty.
-  (경우 분리는 한 step 안에서 i)/ii)/iii) 로 묶어 표기 — 단순한 case 나누기로 step 을 인위적으로 쪼개지 마라.)
+PURPOSE (critical): These hints will be shown to students one by one. The student reads hint 1, tries to proceed, if stuck reads hint 2, and so on. Do NOT just transcribe the solution — generate hints that LEAD the student toward the answer progressively.
 
-- 각 step 의 세 필드 — 역할 엄격 분리 (STRICT):
-    description: *무엇을* 하는지 한국어 서술만. 수식 금지 (변수 \\(x\\) 하나도 금지). 영어 단어 단독 금지 (factorization → 인수분해). 영어 문장 금지. "case 1:" / "description:" / "final result" 같은 메타 라벨로 시작 금지.
-    formula: *핵심 식 하나* 를 \\( ... \\) 로 감싼다. 식 없으면 null.
-    reason: *왜* 필요한지 — 한국어 명사구 1~3단어 ("대수 계산", "인수분해", "대입"). 영어·코드 식별자 금지 (triangle_area_formula, product_rule, case 2 calculation 모두 금지). null 허용하나 가급적 채워라. "null" 문자열 금지.
-- description 안에 \\( ... \\) 가 등장하면 JSON 전체가 무효로 간주된다. 수식은 formula 로만.
+PROGRESSIVE DIFFICULTY (STRICT):
+- step 1: Most abstract — "어떤 개념/조건에 주목해야 할까?" 수준. 답이나 식을 직접 주지 않는다.
+- step 2~N-1: 점점 구체적. 방향을 제시하거나 핵심 관계식 하나를 보여준다.
+- step N (마지막): 가장 구체적 — 핵심 계산식 또는 최종 결론을 직접 제시한다.
+- 앞 step 보다 뒤 step 이 반드시 더 구체적이어야 한다. 순서를 거꾸로 배치 금지.
+
+CRITICAL — ORDER: solution_steps 의 순서는 반드시 해설 이미지에 등장하는 순서 그대로 따라야 한다. 위에서 아래로, 이미지에 나타난 식과 설명의 흐름을 그대로 옮긴다. 논리적으로 더 자연스러워 보여도 순서를 재배열하거나 앞당기거나 뒤로 미루지 마라.
+
+STEP COUNT: 해설 이미지에 등장하는 논리 단위를 빠짐없이 각각 step 으로 만들어라. 개수 제한 없음.
+- 해설에서 새로운 식이 등장하거나, 새로운 조건을 적용하거나, 결론이 바뀌는 순간마다 별도 step 으로 분리한다.
+- 여러 논리 단계를 하나의 step 으로 뭉치지 마라. 학생이 막힐 수 있는 지점마다 step 을 만들어라.
+- 같은 내용을 의미 없이 반복하거나 trivial 한 대입만 있는 step 은 금지.
+- MUST NOT be empty.
+
+세 필드 — 모두 반드시 채워야 한다 (null 절대 금지):
+  hint: 학생에게 직접 보여주는 힌트 문장. 한국어 서술. 수식은 \\( ... \\) 인라인으로 포함 가능.
+        영어 단어 단독 금지. "case 1:" / "step:" / "final result" 같은 메타 라벨 시작 금지.
+        step 1 은 추상적 질문/방향, 마지막 step 은 핵심 식이나 결론을 직접 담아라.
+  formula: 이 힌트 단계의 핵심 식. 반드시 \\( 로 시작하고 \\) 로 끝나야 한다. null 절대 금지.
+           ✅ 올바름: "\\\\(f(k) = k\\\\)"  ❌ 금지: "f(k) = k" (래퍼 없음)
+           핵심 식이 여러 개면 모두 포함 가능. 수식이 없는 step 이라도 핵심 조건·결론을 식으로 반드시 채운다.
+           구간별 함수(piecewise)는 반드시 \\\\begin{cases}...\\\\end{cases} 로 표기한다.
+  concept: 이 힌트가 짚는 개념/정리 이름. 한국어 명사구 1~3단어 ("함수의 연속", "인수분해", "적분 부호 조건").
+           영어 금지. null 절대 금지. "null" 문자열 금지.
 
 """ + _MATH_RULES_BLOCK + """
-Reference output (well-formed):
+Reference output (well-formed — 점층 힌트 예시):
 {
   "solution_steps": [
-    {"step":1,"description":"시그마를 두 항으로 분리한다","formula":"\\\\(\\\\sum (a_k+1) = \\\\sum a_k + \\\\sum 1\\\\)","reason":"시그마 분배"},
-    {"step":2,"description":"상수항 시그마를 계산하여 합을 구한다","formula":"\\\\(\\\\sum a_k + 5 = 9 \\\\Rightarrow \\\\sum a_k = 4\\\\)","reason":"상수합 공식"}
+    {"step":1,"hint":"\\\\(g(x)\\\\) 가 실수 전체에서 미분가능하려면 \\\\(x = k\\\\) 에서 어떤 조건이 필요할까?","formula":"\\\\(\\\\lim_{x \\\\to k^-} g(x) = \\\\lim_{x \\\\to k^+} g(x) = g(k)\\\\)","concept":"함수의 연속과 미분가능"},
+    {"step":2,"hint":"연속 조건과 미분계수 조건을 각각 식으로 세워 \\\\(f(k)\\\\) 와 \\\\(f'(k)\\\\) 값을 구해봐.","formula":"\\\\(f(k) = k, \\\\; f'(k) = 2\\\\)","concept":"연속·미분가능 조건 연립"},
+    {"step":3,"hint":"\\\\(f(x)\\\\) 를 \\\\((x-k)\\\\) 에 관한 삼차식으로 쓰면 \\\\(f(k)\\\\), \\\\(f'(k)\\\\) 조건을 바로 반영할 수 있어.","formula":"\\\\(f(x) = (x-k)^3 + a(x-k)^2 + 2(x-k) + k\\\\)","concept":"삼차함수 일반형"}
   ]
 }
 
+구간별 함수(piecewise) 표기 — CRITICAL:
+  ✅ 올바름: {"formula":"\\\\(h(t) = \\\\begin{cases} t(t-1) & (t < 0) \\\\\\\\ t(t+2) & (0 \\\\le t \\\\le 1) \\\\end{cases}\\\\)"}
+  ❌ 금지: 공백/세미콜론 나열, "for"/"when"/"if" 영어 조건 구분자 사용
+
 부정 예시 (절대 금지):
-  ❌ {"description":"factorization을 이용하여 ...","reason":"product rule"}
-  ❌ {"description":"case 1: a<0 인 경우 ...","reason":"case 2 calculation"}
-  ❌ {"description":"final result를 도출한다","reason":"conclusion"}
+  ❌ {"hint":"factorization을 이용하여 ...","concept":"product rule"}
+  ❌ {"hint":"case 1: a<0 인 경우 ...","concept":"case 2 calculation"}
+  ❌ {"hint":"final result를 도출한다","concept":"conclusion"}
 
 Output valid JSON only — JSON 은 오직 `solution_steps` 키 하나만 포함. 다른 키 금지. No prose, no markdown fences."""
+
+
+# ── per-step loop 프롬프트 (옵션 C, 2026-04-23) ─────────────────────────────
+#
+# 루프 구조:
+#   매 호출마다 이미지(문제+해설) + 공통 지시문 + 지금까지 생성된 steps 요약 전달.
+#   모델은 "다음 step 하나" 만 생성하거나, 더 이상 없으면 done=true.
+#
+# 폭주 억제 원리:
+#   한 호출당 출력 ~100 토큰 (필드 3개짜리 오브젝트 1개) → num_predict 소진 전 stop 도달.
+#   긴 한국어 × structured JSON × 긴 생성 조합이 깨져서 repetition 루프 확률 급감.
+
+_STEPS_LOOP_PROMPT_TEMPLATE = """You are a math tutor assistant analyzing a Korean high school math problem and its solution image.
+
+Your task: generate EXACTLY ONE next step of the solution hints, OR signal that no more steps are needed.
+
+PROGRESSIVE DIFFICULTY (STRICT):
+- 초반 step: 추상적 질문/방향 — "어떤 개념/조건에 주목해야 할까?"
+- 중반 step: 핵심 관계식 하나 제시, 방향 구체화
+- 마지막 step: 핵심 계산식 또는 최종 결론을 직접 제시
+- 이번 step 은 이미 만든 이전 step 들보다 더 구체적이어야 한다.
+
+CRITICAL — ORDER: 이번 step 은 해설 이미지에서 이전 step 들 다음에 오는 논리 단위여야 한다. 앞 step 이 이미 짚은 내용을 중복하거나, 이미지에 없는 내용을 임의로 추가하지 마라.
+
+STOP CONDITION (done=true 반환):
+- 해설의 모든 논리 단계가 이미 steps 로 생성되어 더 이상 추가할 step 이 없을 때
+- 마지막 step 이 최종 결론 (답·결과·마무리) 을 이미 담고 있을 때
+done=true 이면 step 필드는 null 또는 생략.
+
+세 필드 (done=false 일 때 모두 필수, null 금지):
+  hint: 학생에게 직접 보여주는 힌트 문장. 한국어 서술. 수식은 \\( ... \\) 인라인 허용.
+        영어 단어 단독 금지. "case 1:" / "step:" / "final result" 같은 메타 라벨 시작 금지.
+  formula: 이 step 의 핵심 식. 반드시 \\( 로 시작 \\) 로 종료. null 금지.
+           ✅ 올바름: "\\\\(f(k) = k\\\\)"  ❌ 금지: "f(k) = k" (래퍼 없음)
+           수식이 없는 step 이라도 핵심 조건·결론을 식으로 채운다.
+  concept: 이 step 이 짚는 개념/정리 이름. 한국어 명사구 1~3단어 ("함수의 연속", "인수분해", "적분 부호 조건").
+           영어 금지. null 금지. "null" 문자열 금지.
+
+""" + _MATH_RULES_BLOCK + """
+
+이전 step 들 (지금까지 누적):
+__PREV_STEPS_BLOCK__
+
+Reference — 이번이 첫 step 인 경우 well-formed 예시:
+{"done": false, "step": {"hint": "\\\\(g(x)\\\\) 가 실수 전체에서 미분가능하려면 \\\\(x = k\\\\) 에서 어떤 조건이 필요할까?", "formula": "\\\\(\\\\lim_{x \\\\to k^-} g(x) = \\\\lim_{x \\\\to k^+} g(x) = g(k)\\\\)", "concept": "함수의 연속과 미분가능"}}
+
+Reference — 해설이 끝나서 더 이상 step 이 없는 경우:
+{"done": true}
+
+부정 예시 (절대 금지):
+  ❌ {"done": false, "step": {"hint": "factorization을 이용하여 ...", "concept": "product rule"}}
+  ❌ {"done": false, "step": {"hint": "case 1: a<0 인 경우 ...", "concept": "case 2 calculation"}}
+  ❌ 이전 step 과 동일한 hint 또는 concept 반복
+
+Output valid JSON only — 최상위 키는 오직 `done` 과 (선택) `step`. No prose, no markdown fences."""
+
+
+def _format_previous_steps_block(steps: list[dict]) -> str:
+  """누적된 step 리스트를 프롬프트에 넣을 한국어 요약 블록으로 변환.
+
+  길어지지 않게 hint 는 60자까지만, formula/concept 는 그대로.
+  """
+  if not steps:
+    return "(없음 — 이번이 첫 step 이다)"
+  lines: list[str] = []
+  for s in steps:
+    step_no = s.get("step")
+    hint = (s.get("hint") or "").strip()
+    formula = (s.get("formula") or "").strip()
+    concept = (s.get("concept") or "").strip()
+    if len(hint) > 60:
+      hint = hint[:60] + "…"
+    lines.append(f"  step {step_no}: hint={hint!r}, formula={formula!r}, concept={concept!r}")
+  return "\n".join(lines)
 
 
 # ── 내부 유틸 ─────────────────────────────────────────────────────────────────
@@ -397,47 +518,42 @@ def _trim_looped(text: str) -> str:
 
 
 def _sanitize_step(step: dict) -> dict:
-  """한 step 의 description / formula / reason 후처리.
+  """한 step 의 hint / formula / concept 후처리.
 
-  - description: placeholder / `description:` prefix / 선행 쉼표·공백 제거 / 영어 치환 / 반복 절삭, 빈 결과면 대체 문구
+  - hint: placeholder / prefix / 선행 쉼표·공백 제거 / 영어 치환 / 반복 절삭, 빈 결과면 대체 문구
   - formula: `_wrap_formula` 로 delimiter 보정 + 반복 절삭
-  - reason: 문자열 'null' / 'none' / 공백 → None, 영어-only → None, 영어 단어 한국어 치환
+  - concept: 문자열 'null' / 'none' / 공백 → None, 영어-only → None, 영어 단어 한국어 치환
   """
-  desc = step.get('description')
-  if not isinstance(desc, str):
-    desc = '' if desc is None else str(desc)
-  desc = desc.strip()
-  desc = _DESC_PREFIX_RE.sub('', desc)
-  desc = __import__('re').sub(r'^[,\s;:]+', '', desc).strip()
-  desc = _translate_en(desc)
-  if _PLACEHOLDER_RE.match(desc):
-    desc = ''
-  desc = _trim_looped(desc)
-  if desc and _RAW_MATH_RE.search(desc) and not step.get('formula'):
-    logger.warning(
-      f"[sanitize] step {step.get('step')} description 에 raw 수식 감지, formula 비어있음 — 수동 확인 필요"
-    )
-  step['description'] = desc if desc else '(설명 누락)'
+  hint = step.get('hint')
+  if not isinstance(hint, str):
+    hint = '' if hint is None else str(hint)
+  hint = hint.strip()
+  hint = _DESC_PREFIX_RE.sub('', hint)
+  hint = __import__('re').sub(r'^[,\s;:]+', '', hint).strip()
+  hint = _translate_en(hint)
+  if _PLACEHOLDER_RE.match(hint):
+    hint = ''
+  hint = _trim_looped(hint)
+  step['hint'] = hint if hint else '(힌트 누락)'
 
   f = _wrap_formula(step.get('formula'))
   if f:
     f = _trim_looped(f)
   step['formula'] = f
 
-  r = step.get('reason')
-  if isinstance(r, str):
-    rs = r.strip()
-    if rs.lower() in {'null', 'none', ''}:
-      step['reason'] = None
-    elif _REASON_EN_ONLY_RE.match(rs):
-      # 영어·기호만으로 이루어진 reason 은 치환 시도, 치환 후에도 여전히 영어만이면 None
-      translated = _translate_en(rs).strip()
-      if translated == rs or _REASON_EN_ONLY_RE.match(translated):
-        step['reason'] = None
+  c = step.get('concept')
+  if isinstance(c, str):
+    cs = c.strip()
+    if cs.lower() in {'null', 'none', ''}:
+      step['concept'] = None
+    elif _REASON_EN_ONLY_RE.match(cs):
+      translated = _translate_en(cs).strip()
+      if translated == cs or _REASON_EN_ONLY_RE.match(translated):
+        step['concept'] = None
       else:
-        step['reason'] = translated
+        step['concept'] = translated
     else:
-      step['reason'] = _translate_en(rs).strip()
+      step['concept'] = _translate_en(cs).strip()
   return step
 
 
@@ -651,7 +767,7 @@ def extract_tags_from_image(
       "skill_tags": [str, ...],
       "solution_summary": str | None,
       "pitfall": str | None,
-      "solution_steps": [{"step": int, "description": str, "formula": str|None, "reason": str|None}, ...],
+      "solution_steps": [{"step": int, "hint": str, "formula": str, "concept": str}, ...],
       "common_mistakes": [{"text": str, "bug_id": str | None}, ...],
     }
   """
@@ -705,49 +821,68 @@ def extract_tags_from_image(
 
     _d = max(1, min(10, int(meta.difficulty_score)))
 
-    def _dedup_steps(steps: list[SolutionStep]) -> list[SolutionStep]:
-      """step_no 중복만 제거. 개수 제한 없음 — 모델이 자연스럽게 결정."""
-      seen: set = set()
-      cleaned: list[SolutionStep] = []
-      for s in steps:
-        no = s.step if isinstance(s, SolutionStep) else (s.get('step') if isinstance(s, dict) else None)
-        if no in seen:
-          logger.warning(f"[Call B] step_no 중복 제거: step={no}")
-          continue
-        seen.add(no)
-        cleaned.append(s)
-      return cleaned
-
-    # ── Call B: solution_steps 전용 (문제+해설 있을 때만) ──
-    # 어려운 문제 (difficulty >= CALL_B_HARD_THRESHOLD) 는 OpenAI 로 분기 — gemma4 한계 회피.
-    _CALL_B_ATTEMPTS = [(0.05, 3072), (0.15, 4096), (0.3, 5120)]
+    # ── Call B: per-step loop (옵션 C, 2026-04-23) ──
+    # 매 호출마다 이미지 + 누적 steps 요약을 넣고 "다음 step 하나" 만 생성.
+    # 호출 출력이 짧아서 gemma4 repetition 폭주가 거의 사라짐.
+    # MAX_STEPS 안전장치로 무한 루프 방지 (해설에 steps 20개 넘는 경우 거의 없음).
+    MAX_STEPS = int(os.environ.get("CALL_B_MAX_STEPS", "15"))
+    _PER_STEP_ATTEMPTS = [(0.1, 512), (0.25, 768)]  # 짧은 출력이라 2회면 충분
     steps_list: list[SolutionStep] = []
     if has_solution:
       call_b_provider = _route_call_b_provider(_d)
-      logger.info(f"[Call B] difficulty={_d} provider={call_b_provider} image={image_path}")
+      logger.info(f"[Call B] difficulty={_d} provider={call_b_provider} mode=per_step image={image_path}")
 
-      def _call_b(prompt: str) -> SolutionStepsOnly:
+      accumulated: list[dict] = []
+
+      def _call_single_step(prev_block: str) -> SingleStepResult:
+        # .format() 은 _MATH_RULES_BLOCK 안의 single-brace (\lim_{x \to 0} 등) 와 충돌 → replace 로 치환.
+        prompt = _STEPS_LOOP_PROMPT_TEMPLATE.replace("__PREV_STEPS_BLOCK__", prev_block)
         if call_b_provider == "openai":
-          # OpenAI 는 자체 JSON 안정 (responses.parse + Pydantic) → attempts_scope 없이 1회 호출
-          return call_vl(vl_image_arg, prompt, SolutionStepsOnly, None, provider="openai")
-        with attempts_scope(_CALL_B_ATTEMPTS):
-          return call_vl(vl_image_arg, prompt, SolutionStepsOnly, None)
+          return call_vl(vl_image_arg, prompt, SingleStepResult, None, provider="openai")
+        with attempts_scope(_PER_STEP_ATTEMPTS):
+          return call_vl(vl_image_arg, prompt, SingleStepResult, None)
 
-      try:
-        steps_res: SolutionStepsOnly = _call_b(_STEPS_ONLY_PROMPT)
-        steps_list = _dedup_steps(steps_res.solution_steps)
-        if not steps_list:
-          logger.warning(f"[Call B] steps 비어 있음 → 재시도 [{image_path}]")
-          retry_steps_prompt = _STEPS_ONLY_PROMPT + (
-            "\n\nIMPORTANT: solution_steps 는 절대 비워 두지 마라. 풀이의 각 논리 단계를 반드시 포함해라."
-          )
-          try:
-            steps_res = _call_b(retry_steps_prompt)
-            steps_list = _dedup_steps(steps_res.solution_steps)
-          except Exception as se:
-            logger.warning(f"[Call B] 재시도 실패 (빈 steps 로 진행): {se}")
-      except Exception as be:
-        logger.warning(f"[Call B] steps 호출 실패 → steps 빈 상태로 Call A 결과만 유지: {be}")
+      seen_hints: set[str] = set()
+      for step_idx in range(1, MAX_STEPS + 1):
+        prev_block = _format_previous_steps_block(accumulated)
+        try:
+          res: SingleStepResult = _call_single_step(prev_block)
+        except Exception as se:
+          logger.warning(f"[Call B] step {step_idx} 호출 실패 → 루프 종료: {se}")
+          break
+
+        if res.done:
+          logger.info(f"[Call B] done=true 수신 (생성된 steps={len(accumulated)})")
+          break
+
+        payload = res.step
+        if payload is None:
+          logger.warning(f"[Call B] step {step_idx} done=false 인데 step 누락 → 루프 종료")
+          break
+
+        # 이전 step 과 hint 완전 동일하면 중복 생성 신호 → 종료
+        hint_key = (payload.hint or "").strip()
+        if hint_key and hint_key in seen_hints:
+          logger.warning(f"[Call B] step {step_idx} hint 중복 감지 → 루프 종료")
+          break
+        seen_hints.add(hint_key)
+
+        accumulated.append({
+          "step": step_idx,
+          "hint": payload.hint,
+          "formula": payload.formula,
+          "concept": payload.concept,
+        })
+      else:
+        logger.warning(f"[Call B] MAX_STEPS={MAX_STEPS} 도달 — 루프 강제 종료")
+
+      # accumulated(dict) → SolutionStep(Pydantic) 으로 변환. 기존 아래 로직 호환.
+      steps_list = [
+        SolutionStep(step=a["step"], hint=a["hint"], formula=a["formula"], concept=a["concept"])
+        for a in accumulated
+      ]
+      if not steps_list:
+        logger.warning(f"[Call B] 생성된 step 0개 [{image_path}] — 빈 상태로 Call A 결과만 유지")
 
     # 병합 — 기존 흐름 호환용 TagResult-shape dict 조립
     class _MergedResult:
@@ -773,9 +908,9 @@ def extract_tags_from_image(
     solution_steps = [
       {
         "step": s.step,
-        "description": s.description,
+        "hint": s.hint,
         "formula": s.formula,
-        "reason": s.reason,
+        "concept": s.concept,
       }
       for s in result.solution_steps
     ]
@@ -843,9 +978,9 @@ def extract_tags_from_image(
     solution_steps = [
       _sanitize_step({
         "step": s["step"],
-        "description": _nm(s.get("description", "")),
+        "hint": _nm(s.get("hint", "")),
         "formula": _nm(s.get("formula")) if s.get("formula") else None,
-        "reason": _nm(s.get("reason")) if s.get("reason") else None,
+        "concept": _nm(s.get("concept")) if s.get("concept") else None,
       })
       for s in solution_steps
     ] if solution_steps else solution_steps

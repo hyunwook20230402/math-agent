@@ -1230,14 +1230,16 @@ async def _run_retag(solution_job_id: str, numbers: list[int]):
         solution_jobs[solution_job_id]["progress"] = base
         update_solution_job(solution_job_id, status="done", progress=base)
 
-        # 개별 번호별로 done/error 구분 — tag_all_solutions 내부에서 실패한 번호는 error
+        # 개별 번호별로 done/warning/error 구분
+        # flagged = 검증 reject → warning (태깅 결과는 정상 저장)
+        # error 키 존재 = 태깅 자체 실패 → error
         flagged_set = set(new_tag_results.get("flagged_numbers", []) or [])
         for n in numbers:
             r = new_tag_results.get(n)
             if isinstance(r, dict) and r.get("error"):
                 retag_status[solution_job_id][n] = "error"
             elif n in flagged_set:
-                retag_status[solution_job_id][n] = "error"
+                retag_status[solution_job_id][n] = "warning"
             else:
                 retag_status[solution_job_id][n] = "done"
 

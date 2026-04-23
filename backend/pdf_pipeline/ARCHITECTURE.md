@@ -144,9 +144,9 @@ class TagResult(BaseModel):
 
 class SolutionStep(BaseModel):
     step: int
-    description: str                      # 이 단계에서 뭘 하는지 (한국어 한 문장)
-    formula: str | None                   # 핵심 식 \( ... \) — 없으면 null
-    reason: str | None                    # 왜 필요한지 — 개념/정리 이름 (선택)
+    hint: str                             # 학생에게 공개하는 힌트 문장 (한국어, 수식 인라인 허용)
+    formula: str                          # 이 힌트의 핵심 식 \( ... \) — 필수, null 금지
+    concept: str                          # 이 힌트가 짚는 개념/정리 이름 (한국어 1~3단어, 필수)
 ```
 
 **난이도 (difficulty_score)** 구조 신호 기반 판정:
@@ -156,7 +156,11 @@ class SolutionStep(BaseModel):
 - 7-8 (hard): 경우분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개
 - 9-10 (killer): 위 신호 2개 이상 해당 (경우분리 3+, 중첩 2+, 미지수 2+, 스텝 7+ 등)
 
-**solution_steps 개수**: 모델 자율 결정 (4차에서 난이도별 강제 폐지). 빈 리스트만 금지. `_dedup_steps` 가 `step_no` 중복만 제거. 자세한 step 품질 검증은 `docs/TAG_VALIDATOR.md` Layer 1 참조.
+**solution_steps 개수**: 모델 자율 결정 (4차에서 난이도별 강제 폐지). 빈 리스트만 금지. `CALL_B_MAX_STEPS` (기본 15) 가 상한 안전장치로만 작동. 자세한 step 품질 검증은 `docs/TAG_VALIDATOR.md` Layer 1 참조.
+
+**Call B 구조 (5차, 2026-04-23)**: 한 번에 전체 steps 리스트를 뽑는 한방 호출에서 **per-step loop** 로 전환. 매 호출마다 이미지(문제+해설) + 누적된 이전 steps 요약을 프롬프트에 넣고 "다음 step 하나만" 생성. 모델이 `{"done": true}` 반환하면 루프 종료. 출력 토큰이 짧아 gemma4 repetition 폭주 확률 급감. 상세: `docs/CALL_B_ROUTING.md`.
+
+**필드명 이력 (2026-04-23)**: `description / formula / reason` → `hint / formula / concept` 로 통일 (4차 리팩터 연장). 학생에게 공개되는 힌트 의미를 필드명에 직접 반영 + 3필드 모두 필수로 강화.
 
 후처리:
 - `tag_normalizer` 가 concept/skill 을 `concept_taxonomy.json` canonical 로 정규화 (cosine ≥ 0.65)
@@ -181,7 +185,7 @@ class SolutionStep(BaseModel):
 | `correct_answer` | text | 정답 |
 | `solution_summary` | text | AI 추출 풀이 요약 |
 | `pitfall` | text | AI 추출 오답포인트 |
-| `solution_steps` | jsonb | `[{step, description, formula, reason}, ...]` — 단계별 힌트용 (formula/reason 은 optional) |
+| `solution_steps` | jsonb | `[{step, hint, formula, concept}, ...]` — 단계별 힌트용 (3필드 모두 필수, null 금지) |
 | `common_mistakes` | jsonb | `[{text, bug_id}, ...]` — 오답 원인 진단용 |
 | `image_url` | text | Supabase Storage 문제 이미지 |
 
@@ -302,10 +306,10 @@ API: `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}` (`routers
 ### 단계별 힌트 (solution_steps)
 ```sql
 SELECT solution_steps FROM problems WHERE id = $problem_id;
--- [{step: 1, description: "시그마를 두 항으로 분리한다",
---   formula: "\\(\\sum (a_k+1) = \\sum a_k + \\sum 1\\)", reason: "시그마 분배"}, ...]
+-- [{step: 1, hint: "시그마를 두 항으로 분리해볼까?",
+--   formula: "\\(\\sum (a_k+1) = \\sum a_k + \\sum 1\\)", concept: "시그마 분배"}, ...]
 -- 학생이 막혔을 때 step 1 → step 2 순서로 공개.
--- description (무엇을) → formula (식) → reason (왜) 3단 구조.
+-- hint (학생에게 보여주는 힌트) → formula (식) → concept (개념명) 3단 구조.
 ```
 
 ### 오답 원인 진단 (common_mistakes + bug_id)
