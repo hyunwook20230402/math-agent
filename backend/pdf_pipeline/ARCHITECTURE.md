@@ -294,14 +294,29 @@ AI 튜터 온톨로지의 기반. 이 파일을 기준으로 모든 태깅이 �
 
 ---
 
-## 8. AI 튜터 활용 포인트 (DeepTutor)
+## 8. AI 튜터 활용 포인트 (막힌 지점 도우미 — 풀이 그래프 위치추적 RAG)
 
-`backend/deeptutor/` 는 **운영 중** (LangGraph 다중턴 대화, ~800 LOC).
-API: `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}` (`routers/tutor.py`)
-대화 상태 저장: `student_conversations` 테이블 (마이그레이션 007)
-유사 문제 검색: `handlers/similar_problems.py`
+> 구 deeptutor(LangGraph 다중턴 대화)는 **폐기됨 (2026-06-18)**. 막힌 지점 도우미만 이 파이프라인으로 이전·개선.
 
-아래 쿼리는 DeepTutor 가 실제로 참조하는 데이터 패턴.
+API: `POST /api/tutor/hint` (`routers/tutor.py`, `main.py include_router(prefix=/api/tutor)`)
+흐름: localize → retrieve → generate (`handlers/stuck_helper.py`). 서버 무상태.
+노드 코퍼스: `solution_nodes` 테이블 (마이그레이션 `add_solution_nodes`) + RPC `search_solution_nodes_for_hint`
+노드 추출: `pipeline/rag_node_extractor.py` (해설 이미지 2-pass VL 분해 → `backfill_solution_nodes.py` 로 적재)
+
+### 풀이 노드 검색 (solution_nodes — 위치추적 RAG 핵심)
+```sql
+-- 학생 막힌 서술 임베딩(bge-m3 1024)으로 다음 노드 + 유사 기출 노드 검색
+SELECT * FROM search_solution_nodes_for_hint(
+  query_embedding := $emb,        -- embedder.generate_embedding(막힌 서술 + 다음 개념)
+  current_problem_id := $pid,
+  current_node_index := $idx,     -- 위치추적된 현재 인덱스
+  match_limit := 5
+);
+-- 현재 문제의 다음 노드 우선 + 같은 개념 타 기출 노드 보조. is_same_problem 플래그로 구분.
+-- node: {role, key_concept, output_formula(LaTeX), figure_description, figure_image_crop_url}
+```
+
+아래 쿼리는 튜터가 보조로 참조하는 데이터 패턴.
 
 ### 단계별 힌트 (solution_steps)
 ```sql
@@ -333,10 +348,10 @@ WHERE pt.canonical = $concept_canonical
 LIMIT 5;
 ```
 
-### 임베딩 기반 유사 문제
+### 임베딩 기반 유사 문제 (후속 — 현재 미구현)
 - `problem_tags.canonical` 벡터 + unit_matcher 임베딩 캐시 활용
 - `embedder.generate_embedding(concept_text)` 로 실시간 cosine 검색
-- 구현: `backend/deeptutor/handlers/similar_problems.py`
+- 구 `deeptutor/handlers/similar_problems.py` 는 폐기됨. 필요 시 `solution_nodes` 검색(위 RPC)으로 유사 기출 노드가 이미 제공되므로 별도 문제-단위 추천은 후속 판단.
 
 ---
 
@@ -370,9 +385,10 @@ Supabase Storage (`problem-images` 버킷) 에는 CMS 검수 완료 후 승인�
 | 004 | `004_add_bbox_columns.sql` | bbox JSONB 컬럼 |
 | 005 | `005_add_solution_and_tags.sql` | solution_jobs, problem_tags 테이블 |
 | 006 | `006_problem_staging_pitfall.sql` | pitfall, match_confidence 컬럼 |
-| 007 | `007_deeptutor_conversation.sql` | DeepTutor `student_conversations` 테이블 |
+| 007 | `007_deeptutor_conversation.sql` | ~~DeepTutor student_conversations~~ — **폐기(원격 미적용)**. 로컬 파일 deprecated |
 | 008 | `008_add_ontology_columns.sql` | solution_steps, common_mistakes JSONB |
 | 009 | `add_validation_columns` (원격 DB 전용) | validation_status/score/issues 컬럼 |
-| **010** | `add_difficulty_score` (원격 DB 전용) | **difficulty_score INT 1~10 + 5단계 GENERATED 라벨** ← 현재 |
+| 010 | `add_difficulty_score` (원격 DB 전용) | difficulty_score INT 1~10 + 5단계 GENERATED 라벨 |
+| **011** | `011_add_solution_nodes.sql` | **solution_nodes 테이블 + RPC search_solution_nodes_for_hint (튜터 RAG)** ← 현재 |
 
-⚠️ 009·010 은 로컬 `supabase/migrations/` 폴더엔 파일 없음. 원격 DB 에만 적용된 상태(Supabase MCP `list_migrations` 확인). 로컬 SQL 파일 역추출 필요.
+⚠️ 009·010 은 로컬 `supabase/migrations/` 폴더엔 파일 없음(원격 전용). 011 은 로컬 파일 존재(원격 `add_solution_nodes` 로 적용됨). Supabase MCP `list_migrations` 로 확인.

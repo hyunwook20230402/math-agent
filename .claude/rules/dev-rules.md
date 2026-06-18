@@ -55,6 +55,8 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
   - 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`, `docs/TAG_VALIDATOR.md`
 - 그 외 유료 API (Gemini / Anthropic / 다른 OpenAI 모델 전체) 도입은 금지 (비용 이유)
 - 품질 개선은 VL 교체 대신 프롬프트 튜닝, 후처리 강화, 구조화 스키마 (Pydantic structured output) 로 접근
+- **비용 모델 선호**: gemma4:26b 로컬/서버 ollama 는 호출 수 부담 없음. OpenAI API 는 호출당 과금되므로 부담. 따라서 **"호출 수 줄이기 위해 OpenAI 쓰기" 보다 "호출 수 늘어도 gemma4 여러 번 돌리기" 가 선호되는 방향**. 설계 시 2-Pass / 다단계 loop / per-step 쪼개기처럼 gemma4 호출이 늘어나는 구조는 비용 관점에서 문제 없음 (2026-04-23 확정)
+- **2026-04-24 Call B step role 라벨링**: Pass 1 (skeleton) 에 `role` 필드 (5종: condition_analysis / equation_setup / case_split / computation / conclusion) 추가. Pass 2 는 target step 의 role 에 맞춰 hint·formula·whys 톤을 조정 (role-conditional 프롬프트). `_dedupe_skeleton()` 은 "연속 produces/uses 동일 병합" 에 "동일 role 3+ 연속 + produces=[] 조건" 추가. validator 는 **일반론 맞는 것만 유지** — hint 완전일치/LaTeX cases 짝/한국어 비율 0.5 + role 연속·conclusion 분포 warning. 이전에 특정 4문제 맞춤으로 추가했던 "formula 3회+ 반복"·"한국어 비율 0.6" 은 일반론에 안 맞아 제거/복귀. reject 시 재시도 없음 (CMS 수동 재태깅)
 
 ## 모델 파일 동기화
 
@@ -168,6 +170,28 @@ npm run dev                  # http://localhost:8081
 - **stage 복구 분기**: 빈 결과여도 stage 업데이트는 early return 전에 호출
 
 (백엔드 포트 8001 / CORS 정책은 루트 README + ARCHITECTURE 참조 — 한 곳에서만 관리)
+
+## 막힌 지점 도우미 — 풀이 그래프 위치추적 RAG 튜터 (2026-06-18 재설계)
+
+**deeptutor 폐기.** LangGraph 다중턴 대화튜터(`backend/deeptutor/`)는 전부 삭제. 그 코드/프롬프트는 참고하지 않는다. 막힌 지점 도우미 기능은 `pdf_pipeline` 으로 이전·개선됨.
+
+- **목적**: 학생이 풀다 막힌 "그 지점"을 풀이 노드 그래프 위에 위치추적하고 다음 한 노드만 끌어준다. 막힌 원인 4분류(독해/인출/전이/실행)를 한 흐름으로 흡수. 등록 대상은 수능/모의고사 2점·3점·쉬운 4점.
+- **위치**: `backend/pdf_pipeline` FastAPI(포트 8001)에 통합. 별도 서버 없음.
+  - 라우터 `routers/tutor.py` → `POST /api/tutor/hint` (`main.py` 에 `include_router(prefix="/api/tutor")`)
+  - 핸들러 `handlers/stuck_helper.py` — localize → retrieve → generate 3단
+  - 노드 추출 `pipeline/rag_node_extractor.py` — 해설 이미지 2-pass(skeleton + per-node) VL 분해
+  - 인증 `auth.py` — `get_student_id`(Bearer JWT → profiles.id, student role 강제). `SUPABASE_ANON_KEY` 필요
+  - 모델 `models.py` — `HintRequest`/`HintResponse`/`NodeReference`
+- **DB**: `solution_nodes` 테이블(마이그레이션 `add_solution_nodes`) + RPC `search_solution_nodes_for_hint`. 임베딩 **bge-m3 1024차원**(problems.embedding 과 동일 — OpenAI 1536 혼입 금지).
+- **VL**: `call_vl(provider="openai")` 통일(localize/generate/노드추출 멀티모달). 한국어/도형 품질 위해 기본 OpenAI. `TUTOR_VL_PROVIDER` env 로 ollama 전환 가능.
+- **백필**: `cd backend/pdf_pipeline && venv\Scripts\activate && python -m scripts.backfill_solution_nodes --limit 5` (`OLLAMA_URL` 이 서버 터널 21434 면 임베딩 위해 로컬 11434 로 override 필요. `OPENAI_API_KEY` 필수).
+- **도형/그래프 (2026-06-18 결정)**: 해설 도형 자동 crop 안 함. `rag_node_extractor` 는 `figure_image_crop_url=None` 으로 두고(해설 통째 폴백은 정답 노출 위험), `figure_description`(VL 언어화)만 검색·근거로 사용. 정확한 도형 영역은 **CMS 수동 bbox 로 채운다(후속)**. 1차는 도형 이미지 없이 텍스트 힌트만(graceful). stuck_helper 는 같은 문제(`is_same_problem`) crop 은 학생에게 안 보여줌(정답 노출 방어).
+- **프론트**: `apps/student` `SolveProblem.tsx` → `components/tutor/StuckHelperModal.tsx` → `shared/lib/api.ts:ragHintApi.getHint`. base URL env `VITE_TUTOR_API_URL`(구 `VITE_DEEPTUTOR_URL` 하위호환 fallback), 기본 `http://localhost:8001`.
+- **하네스**:
+  - `/solution-nodes-status` — 백필 커버리지·노드 품질·정답노출 위험 조회 + 이어서 백필 명령 (`.claude/commands/solution-nodes-status.md`)
+  - `/tutor-smoke` — 샘플 문제로 `generate_hint` end-to-end 1발 검증(실전 핸들러 import) (`.claude/commands/tutor-smoke.md`)
+  - PostToolUse hook `.claude/tutor_import_hook.py` — 튜터 스택 파일(stuck_helper/tutor/auth/models/rag_node_extractor) Edit·Write 시 import 스모크 자동 실행, 깨지면 즉시 경고. settings.json `PostToolUse[Edit|Write]` 등록.
+  - `vl_raw_dumps/` 는 `.gitignore` 등록됨(`VL_DUMP_RAW=1` 디버그 덤프 — 커밋 금지).
 
 ## 메모리 규칙
 

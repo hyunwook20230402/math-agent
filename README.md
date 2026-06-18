@@ -11,7 +11,7 @@
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Radix UI, TanStack Query v5, React Router v6
 - **Backend (DB/Auth)**: Supabase (PostgreSQL, Auth, Storage)
 - **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, EasyOCR + YOLO11 (ultralytics), VL 모델 (서버 근무시간 Ollama **Gemma4 26B** / 오프시간 OpenAI — `provider_selector` 자동 전환). **어려운 문제 (`difficulty_score >= CALL_B_HARD_THRESHOLD`) Call B + 검증은 OpenAI gpt-5.4-mini 강제 분기** (`backend/pdf_pipeline/docs/CALL_B_ROUTING.md`)
-- **Backend (AI 튜터)**: Python 3.11, FastAPI, LangGraph 기반 다중턴 대화 (`backend/deeptutor/`)
+- **막힌 지점 도우미 (AI 튜터)**: 풀이 그래프 위치추적 RAG. `pdf_pipeline` 내 `POST /api/tutor/hint` (localize→retrieve→generate). 데이터: `solution_nodes` + RPC. _구 deeptutor(LangGraph 대화) 폐기 — 2026-06-18._
 - **개발 환경**: Windows 11, 로컬 RTX 4070 8GB / 서버 RTX 4090 24GB
 
 ---
@@ -26,8 +26,7 @@ math/
 │   └── student/      # 학생용 (8083)
 ├── shared/           # ui, supabase, hooks, types, lib
 ├── backend/
-│   ├── pdf_pipeline/ # PDF 문제·해설 자동 추출 (운영 중)
-│   └── deeptutor/    # AI 튜터링 (LangGraph 다중턴 대화, 운영 중)
+│   └── pdf_pipeline/ # PDF 문제·해설 추출 + 막힌 지점 도우미 RAG 튜터 (운영 중)
 └── supabase/migrations/
 ```
 
@@ -76,10 +75,10 @@ ollama pull gemma4:26b
    - 3-layer 검증 (`tag_validator`) 도 같은 임계값으로 OpenAI 분기
 4. "문제에 적용" → `problem_staging` 에 병합.
 
-### AI 튜터 (DeepTutor)
-1. 학생이 문제를 풀고 오답 → `POST /api/tutor/start` (problem_id, student_answer) → 정오답 판정 + 첫 힌트.
-2. 후속 질문 → `POST /api/tutor/chat/{conversation_id}` → LangGraph 노드가 `solution_steps` / `common_mistakes` / `problem_tags` 를 참조해 단계별 응답.
-3. 대화 상태는 `student_conversations` 테이블에 저장.
+### 막힌 지점 도우미 (풀이 그래프 위치추적 RAG)
+1. 학생이 문제 풀다 막힘 → SolveProblem "막혔어요" → `POST /api/tutor/hint` (problem_id, 막힌 서술, revealed_node_index).
+2. **localize**: 학생 서술 + 문제 이미지 + 노드 목록으로 "이해한 마지막 노드" 추정 → **retrieve**: 다음 노드 + 유사 기출 노드를 `solution_nodes` pgvector 검색(RPC `search_solution_nodes_for_hint`) → **generate**: 답을 가린 채 다음 한 스텝만 힌트.
+3. 서버 무상태 — 클라이언트가 `revealed_node_index` 를 들고 멀티턴("다음 힌트"). `solution_nodes` 는 `backfill_solution_nodes.py` 로 적재.
 
 ---
 
@@ -88,7 +87,7 @@ ollama pull gemma4:26b
 - **개발 규칙 / 컨벤션** — `CLAUDE.md`, `.claude/rules/`
 - **슬래시 커맨드** — `.claude/commands/` (`/pdf-import`, `/solution-tagging-status`, `/migration-safety`, `/bbox-verify`, `/cms-dev-check`)
 - **에이전트** — `.claude/agents/pdf-extractor.md`
-- **Supabase 마이그레이션** — 원격 DB 기준 **010 까지 적용**. 로컬 `supabase/migrations/` 폴더는 **008 까지만** 파일 존재 (009·010 은 원격 DB 직접 적용 — Supabase MCP `list_migrations` 로 확인)
+- **Supabase 마이그레이션** — 원격 DB 기준 **add_solution_nodes 까지 적용**. 로컬 `supabase/migrations/` 폴더는 **008 + 011_add_solution_nodes** 파일 존재 (009·010 은 원격 직접 적용 — Supabase MCP `list_migrations` 로 확인)
 
 ---
 
@@ -99,6 +98,5 @@ ollama pull gemma4:26b
 | CMS | 8081 |
 | Teacher | 8082 |
 | Student | 8083 |
-| PDF 파이프라인 API | 8001 |
-| DeepTutor API | (별도 포트 — `backend/deeptutor/main.py` 참조. pdf_pipeline 과 동시 구동 시 포트 충돌 주의) |
+| PDF 파이프라인 API + 막힌 지점 도우미 (`/api/tutor/hint`) | 8001 |
 | Ollama | 11434 |

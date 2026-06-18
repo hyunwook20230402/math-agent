@@ -1011,3 +1011,46 @@ export const distributionAttemptApi = {
     return data || [];
   }
 };
+
+// ===== 막힌 지점 도우미 (풀이 그래프 위치추적 RAG) API =====
+// 백엔드: backend/pdf_pipeline (포트 8001). POST /api/tutor/hint
+// (구 deeptutor 폐기 — 2026-06-18. VITE_DEEPTUTOR_URL 은 하위호환 fallback)
+const TUTOR_API_BASE_URL =
+  (import.meta as any).env?.VITE_TUTOR_API_URL ||
+  (import.meta as any).env?.VITE_DEEPTUTOR_URL ||
+  'http://localhost:8001';
+
+export const ragHintApi = {
+  // 막힌 지점 힌트 1발. revealedNodeIndex 로 멀티턴("다음 힌트") 이어가기.
+  getHint: async (params: {
+    problemId: string;
+    blockedDescription: string;
+    revealedNodeIndex?: number;
+  }) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error('로그인이 필요합니다');
+
+    const resp = await fetch(`${TUTOR_API_BASE_URL}/api/tutor/hint`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        problem_id: params.problemId,
+        student_blocked_description: params.blockedDescription,
+        revealed_node_index: params.revealedNodeIndex ?? -1,
+      }),
+    });
+
+    if (!resp.ok) {
+      let detail = '힌트 생성에 실패했습니다';
+      try {
+        const body = await resp.json();
+        detail = body?.detail || detail;
+      } catch { /* ignore */ }
+      throw new Error(detail);
+    }
+    return resp.json();
+  },
+};

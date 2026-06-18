@@ -1,3 +1,8 @@
+-- ⚠️ DEPRECATED (2026-06-18) — deeptutor(LangGraph 대화튜터) 폐기.
+-- 이 마이그레이션은 원격 DB 에 적용된 적 없으며(student_conversations/student_attempts/
+-- search_similar_problems 모두 원격 부재), 막힌 지점 도우미는 풀이 그래프 위치추적 RAG
+-- (solution_nodes — 011)로 대체됨. 적용하지 말 것. 참고용으로만 보존.
+--
 -- 007: DeepTutor 대화형 튜터 — 대화 이력/오답 이력 테이블 + 유사 문제 검색 RPC
 -- 학생이 문제를 틀렸을 때 AI와 다중 턴 대화로 도움받는 기능을 위한 스키마.
 

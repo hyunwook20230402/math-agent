@@ -25,26 +25,30 @@
 - Provider 시간대 자동 선택 (`provider_selector.py` — 평일 09-19 KST Ollama, 그 외 OpenAI)
 - YOLO11n 기본 가중치 (`promote_model` 의존 제거 — 커밋 `56ecdd0`). 재학습은 11m + Optuna (`dev-rules.md` 참조)
 
-### DeepTutor (`backend/deeptutor/`) ✅ 운영
-- LangGraph 상태기계: `graph/builder.py` + `graph/nodes.py` (~800 LOC)
-- API: `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}` (`routers/tutor.py`)
-- 데이터 소스: `problems.solution_steps` / `common_mistakes` / `problem_tags`
-- 대화 DB: `student_conversations` 테이블 (마이그레이션 007)
-- 유사 문제 검색: `handlers/similar_problems.py`
-- 프롬프트: `graph/prompts.py`
+### 막힌 지점 도우미 — 풀이 그래프 위치추적 RAG (`backend/pdf_pipeline`) ✅ 구현
+- **deeptutor(LangGraph 대화튜터) 폐기 (2026-06-18)** — `backend/deeptutor/` 삭제. 막힌 지점 도우미만 pdf_pipeline 으로 이전·개선.
+- API: `POST /api/tutor/hint` (`pdf_pipeline/routers/tutor.py`, `main.py include_router(prefix=/api/tutor)`)
+- 흐름: localize(현재 위치 추정) → retrieve(다음 노드+유사 기출 pgvector) → generate(다음 한 스텝 힌트). 서버 무상태(클라이언트가 `revealed_node_index` 보유).
+- 핸들러 `handlers/stuck_helper.py`, 노드 추출 `pipeline/rag_node_extractor.py`(해설 2-pass VL 분해), 인증 `auth.py`, 모델 `models.py`
+- 데이터: `solution_nodes` 테이블(role/key_concept/output_formula/figure_description/embedding 1024) + RPC `search_solution_nodes_for_hint`
+- 백필: `python -m scripts.backfill_solution_nodes --limit N` (VL=OpenAI, 임베딩=bge-m3 ollama)
+- 도형: 자동 crop 없음 — `figure_description` 언어화만, crop URL 은 CMS 수동 bbox 로 후속. 상세 `dev-rules.md`
+- 프론트: `apps/student/SolveProblem.tsx` → `components/tutor/StuckHelperModal.tsx` → `ragHintApi`
 
 ### DB 마이그레이션
-- 원격 DB 기준 **010** 까지 적용 (Supabase MCP `list_migrations` 확인)
+- 원격 DB 기준 **add_solution_nodes** 까지 적용 (Supabase MCP `list_migrations` 확인)
   - 009 `add_validation_columns`
   - 010 `add_difficulty_score` — `difficulty_score` INT 1~10 + 5단계 GENERATED 라벨
-- ⚠️ 로컬 `supabase/migrations/` 폴더에는 **008 까지만** 파일 존재. 009/010 은 원격 DB 에만 반영된 상태(드리프트). 로컬 재생성 필요 시 Supabase MCP 로 조회
+  - `add_solution_nodes` (20260618) — `solution_nodes` 테이블 + RPC `search_solution_nodes_for_hint` (튜터 RAG)
+- ⚠️ 로컬 `supabase/migrations/` 폴더에는 **008 까지만** 파일 존재. 009/010/011 은 원격 DB 에만 반영된 상태(드리프트). 011 은 로컬에 `011_add_solution_nodes.sql` 파일은 있으나 번호 동기화는 미정. 로컬 재생성 필요 시 Supabase MCP 로 조회
+- ℹ️ `student_conversations`/`student_attempts`/`search_similar_problems`(구 deeptutor) 는 **원격에 적용된 적 없음** (로컬 007 파일만 존재 → deeptutor 폐기로 무의미)
 - `problem_sets` 3지표 avg/p75/max, `recalc_set_difficulty` RPC 포함
 
 ## 향후 작업
 
-- **DeepTutor 고도화** — LangGraph 노드 추가 (오답 진단 세분화), 프롬프트 튜닝, 대화 히스토리 요약/압축
+- **튜터 고도화** — CMS 해설 도형 수동 bbox 입력 UI(`solution_nodes.figure_image_crop_url` 채우기), 난이도 기반 VL provider 분기(비용), 대화 이력 저장 여부
 - **teacher 앱** 숙제 배포/분석 완성도 ↑ (현재 기초 구현 60~70%)
-- **student 앱** 오답노트 고도화 (DeepTutor 연계 UI 포함)
+- **student 앱** 오답노트 고도화 (막힌 지점 도우미 연계 UI 포함)
 - **로컬 migrations/ 폴더** 에 009/010 SQL 파일 역추출해 커밋 (드리프트 해소)
 
 ## 파이프라인 운영 정보

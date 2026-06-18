@@ -17,5 +17,8 @@ __pycache__/
 # unit 임베딩 캐시 (taxonomy hash 기반 자동 재생성)
 data/unit_embeddings_*.pkl
 
+# VL 디버그 덤프 (VL_DUMP_RAW=1 일 때만 생성 — 커밋 금지)
+vl_raw_dumps/
+
 # 기타
 *.log

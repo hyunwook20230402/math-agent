@@ -9,9 +9,14 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://grukqugorspbwsxqdhru.supabase.co")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")  # service_role 키 필요
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")  # 학생 JWT 검증용 (튜터 auth)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:26b")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/tmp/pdf_pipeline")
+
+# 임베딩 (튜터 RAG 쿼리 임베딩 — pipeline/embedder.py 와 동일 env 를 공유해 차원 1024 통일)
+EMBED_OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 
 _UP = Path(UPLOAD_DIR)
 

@@ -12,9 +12,10 @@ math/
 │   └── student/      # 학생용 (문제 풀기, 오답노트) — 포트 8083
 ├── shared/           # 공통 코드 (ui, supabase, hooks, types, lib)
 └── backend/
-    ├── pdf_pipeline/ # PDF 문제/해설 자동 추출 파이프라인 (운영 중)
-    └── deeptutor/    # AI 튜터링 (LangGraph 다중턴 대화, 운영 중)
+    └── pdf_pipeline/ # PDF 문제/해설 추출 + 막힌 지점 도우미 RAG 튜터 (운영 중)
 ```
+
+> deeptutor(LangGraph 다중턴 대화튜터)는 폐기됨(2026-06-18). 막힌 지점 도우미는 pdf_pipeline 으로 이전(`POST /api/tutor/hint`). 상세 `.claude/rules/dev-rules.md`.
 
 ## 기술 스택
 
@@ -24,7 +25,7 @@ math/
 
 **백엔드 (pdf_pipeline)**: Python 3.11, FastAPI (포트 8001), EasyOCR + YOLO11 (기본 11n / 재학습은 11m — `dev-rules` 참조), VL 모델 (Ollama **Gemma4 26B** 서버 근무시간 / OpenAI 오프시간 — `provider_selector` 자동 전환), bge-m3 임베딩. **Call B + 검증은 어려운 문제 (`difficulty_score >= CALL_B_HARD_THRESHOLD`) 일 때 OpenAI gpt-5.4-mini 강제 분기** — 상세 `backend/pdf_pipeline/docs/CALL_B_ROUTING.md` / `docs/TAG_VALIDATOR.md`
 
-**백엔드 (deeptutor)**: LangGraph + LLM, FastAPI, `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}` (대화 상태: `student_conversations` 테이블)
+**막힌 지점 도우미 (pdf_pipeline 내)**: 풀이 그래프 위치추적 RAG. `POST /api/tutor/hint` (localize→retrieve→generate). 데이터: `solution_nodes` 테이블 + RPC `search_solution_nodes_for_hint`. VL=OpenAI, 임베딩=bge-m3 1024. 상세 `.claude/rules/dev-rules.md`
 
 ## 앱 실행
 

@@ -1,17 +1,19 @@
-"""Supabase JWT 인증 → profiles.id 추출
+"""Supabase JWT 인증 → profiles.id 추출 (튜터 API 전용).
 
 FastAPI Depends 로 사용:
-    @app.post(...)
+    @router.post(...)
     async def endpoint(student_id: str = Depends(get_student_id)):
         ...
+
+RLS 가 비활성이라 서버단 토큰 검증이 유일한 접근 통제 — student role 강제.
 """
 import logging
 
 from fastapi import Header, HTTPException
 from supabase import Client, create_client
 
-from .config import SUPABASE_ANON_KEY, SUPABASE_URL
-from .storage.supabase_client import get_client as get_service_client
+from config import SUPABASE_ANON_KEY, SUPABASE_URL
+from storage.supabase_client import get_client as get_service_client
 
 logger = logging.getLogger(__name__)
 
