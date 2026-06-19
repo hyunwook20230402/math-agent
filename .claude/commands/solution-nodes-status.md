@@ -45,6 +45,31 @@ ORDER BY n;
 - `has_conclusion = false` → 결론 노드 누락. 위치추적이 끝까지 못 갈 수 있음.
 - `null_fields > 0` → key_concept/output_formula 누락(스키마상 NOT NULL이지만 방어 확인).
 
+### 3-1. uses/whys 논리 완결성 점검 (1회 통합 이후)
+
+```sql
+-- (a) uses 범위 오류: 자기보다 크거나 같은 인덱스를 참조(미래/자기참조 = 추출기 버그)
+SELECT problem_id, node_index, uses
+FROM solution_nodes
+WHERE EXISTS (SELECT 1 FROM unnest(uses) u WHERE u >= node_index);
+
+-- (b) case_split/condition_analysis 인데 whys 비어있음(전이 근거 누락 의심)
+SELECT problem_id, node_index, role, key_concept
+FROM solution_nodes
+WHERE role IN ('case_split','condition_analysis')
+  AND (whys IS NULL OR jsonb_array_length(whys) = 0);
+
+-- (c) LaTeX 조합기호 백슬래시 오류 잔존(\_ 앞에 백슬래시)
+SELECT problem_id, node_index, output_formula
+FROM solution_nodes
+WHERE output_formula ~ '\\_[0-9a-zA-Z]' AND output_formula !~ '\\\\_';
+```
+
+판단:
+- (a) 행이 있으면 → `_clean_uses` 가 못 거른 케이스. 해당 문제 재백필.
+- (b) 행은 **경고**(CMS 수동 검수 플래그). 단 "도형/직관만 설명하는 얕은 노드"는 whys=[] 허용 — 일률 강제 아님.
+- (c) 행이 있으면 → 재백필 또는 `UPDATE ... SET output_formula = regexp_replace(output_formula, '\\_', '_', 'g')`.
+
 ### 4. 정답 노출 위험 점검 (1차 정책)
 
 ```sql

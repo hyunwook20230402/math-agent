@@ -301,7 +301,7 @@ AI 튜터 온톨로지의 기반. 이 파일을 기준으로 모든 태깅이 �
 API: `POST /api/tutor/hint` (`routers/tutor.py`, `main.py include_router(prefix=/api/tutor)`)
 흐름: localize → retrieve → generate (`handlers/stuck_helper.py`). 서버 무상태.
 노드 코퍼스: `solution_nodes` 테이블 (마이그레이션 `add_solution_nodes`) + RPC `search_solution_nodes_for_hint`
-노드 추출: `pipeline/rag_node_extractor.py` (해설 이미지 2-pass VL 분해 → `backfill_solution_nodes.py` 로 적재)
+노드 추출: `pipeline/rag_node_extractor.py` (해설 이미지 **1회 통합** VL 분해 — 전체 노드 배열 1회 structured output, 각 노드에 uses(전이 DAG)+whys(논리 근거) 포함 → `backfill_solution_nodes.py` 로 적재). 2-pass(1+N회)는 gemma4 폭주 방어 잔재라 폐기.
 
 ### 풀이 노드 검색 (solution_nodes — 위치추적 RAG 핵심)
 ```sql

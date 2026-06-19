@@ -48,7 +48,7 @@ problem_set_items     — 문제↔세트
 folders               — 교재 폴더 계층
 distributions         — 학생 배포
 distribution_students — 배포↔학생
-solution_nodes        — 막힌 지점 도우미 RAG 코퍼스 (problem_id → problems.id, 풀이 step 단위 추론 노드 + bge-m3 1024 embedding)
+solution_nodes        — 막힌 지점 도우미 RAG 코퍼스 (problem_id → problems.id, 풀이 step 단위 추론 노드 + bge-m3 1024 embedding + uses INT[]/whys JSONB = 전이 DAG·논리 근거. 마이그레이션 012)
 ```
 
 > ℹ️ `student_conversations`/`student_attempts`(구 deeptutor 대화튜터)는 원격 DB 에 적용된 적 없음 — deeptutor 폐기(2026-06-18)로 무의미. 무시할 것.

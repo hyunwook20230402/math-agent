@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 from typing import Optional
 
@@ -119,24 +120,38 @@ class _Hint(BaseModel):
   next_step_concept: Optional[str] = Field(None, description="이 힌트가 짚는 개념명")
 
 
+# 힌트가 정답을 흘렸는지 경량 탐지 — 객관식 보기기호 + "정답/답은" 패턴.
+_LEAK_PATTERN = re.compile(r'[①②③④⑤]|정답\s*[은는이]?\s*|답\s*[은는이]?\s*[0-9①-⑤]')
+
+
+def _evidence_line(n: dict) -> str:
+  """근거 노드 한 줄 — whys.question(소크라테스 질문) 포함, conclusion 의 최종 수식은 제외(정답 노출 방지)."""
+  tag = "이 문제" if n.get("is_same_problem") else "유사 기출"
+  parts = [f"개념={n['key_concept']}"]
+  # conclusion(결론=최종답) 노드의 output_formula 는 정답이므로 evidence 에 안 넣음.
+  if n.get("role") != "conclusion" and n.get("output_formula"):
+    parts.append(f"산출={n['output_formula']}")
+  whys = n.get("whys") or []
+  qs = [w.get("question") for w in whys if isinstance(w, dict) and w.get("question")]
+  if qs:
+    parts.append("짚을점=" + " ".join(qs))   # question 만 — reason(이유)은 정답 흘릴 수 있어 제외
+  if n.get("figure_description"):
+    parts.append(f"도형={n['figure_description']}")
+  return f"  - [{tag}] " + " / ".join(parts)
+
+
 def _generate(problem_image_path: Optional[str], blocked_desc: str,
               nodes: list[dict], figure_paths: list[str]) -> _Hint:
   if nodes:
-    evidence = "\n".join(
-      f"  - [{'이 문제' if n.get('is_same_problem') else '유사 기출'}] "
-      f"개념={n['key_concept']} / 산출={n['output_formula']}"
-      + (f" / 도형={n['figure_description']}" if n.get("figure_description") else "")
-      for n in nodes
-    )
+    evidence = "\n".join(_evidence_line(n) for n in nodes)
     grounding = f"""다음은 이 문제(및 같은 유형 기출)의 풀이 단계 근거입니다:
 {evidence}
 
-위 근거 중 학생이 막힌 지점 **바로 다음 한 단계만** 골라, 답을 직접 말하지 말고
-스스로 다음 발을 디딜 수 있게 힌트로 안내하세요."""
+위 근거 중 학생이 막힌 지점 **바로 다음 한 단계만** 골라 안내하세요.
+"짚을점"이 있으면 그걸 학생 스스로 떠올리도록 **질문 형태**로 던지세요(소크라테스식)."""
   else:
     grounding = """이 문제는 단계별 해설 데이터가 아직 없습니다.
-문제 이미지를 직접 읽고, 학생이 막힌 지점 바로 다음 한 단계만 힌트로 안내하세요.
-답을 직접 말하지 마세요."""
+문제 이미지를 직접 읽고, 학생이 막힌 지점 바로 다음 한 단계만 힌트로 안내하세요."""
 
   prompt = f"""당신은 친절한 고등학교 수학 튜터입니다.
 
@@ -146,8 +161,9 @@ def _generate(problem_image_path: Optional[str], blocked_desc: str,
 {grounding}
 
 규칙:
-- 힌트는 1~2문장, 한국어.
-- 한 번에 다음 한 걸음만. 전체 풀이를 쏟아내지 마세요.
+- 힌트는 1~2문장, 한국어. 한 번에 다음 한 걸음만. 전체 풀이를 쏟아내지 마세요.
+- **정답(최종 수치)·객관식 보기 번호(①②③④⑤)를 절대 말하지 마세요.** 답을 직접 알려주는 게 아니라
+  학생이 스스로 다음 발을 디디게 질문·방향만 주세요.
 - 수식은 LaTeX 인라인 \\( ... \\) 로."""
 
   # call_vl 은 이미지 경로 리스트를 받음 — 문제 이미지 + 도형 이미지(최대 2개)
@@ -158,7 +174,11 @@ def _generate(problem_image_path: Optional[str], blocked_desc: str,
       hint_text="문제 이미지를 불러오지 못했어요. 어디까지 풀었는지 조금 더 자세히 알려줄래요?",
       next_step_concept=None,
     )
-  return call_vl(images if len(images) > 1 else images[0], prompt, _Hint, provider=TUTOR_VL_PROVIDER)
+  hint = call_vl(images if len(images) > 1 else images[0], prompt, _Hint, provider=TUTOR_VL_PROVIDER)
+  # answer leakage 경량 검사 — 보기기호/정답 패턴이면 경고 로깅(차단은 안 함, 운영 관찰용).
+  if _LEAK_PATTERN.search(hint.hint_text or ""):
+    logger.warning(f"[leakage?] 힌트에 정답/보기 패턴 의심: {hint.hint_text!r}")
+  return hint
 
 
 # ── 공개 진입점 ───────────────────────────────────────────────────────────────
@@ -190,7 +210,8 @@ def generate_hint(problem_id: str, blocked_description: str,
 
   nodes_all = (
     client.table("solution_nodes")
-    .select("node_index, role, key_concept, output_formula, figure_description, figure_image_crop_url")
+    .select("problem_id, node_index, role, key_concept, output_formula, uses, whys, "
+            "figure_description, figure_image_crop_url")
     .eq("problem_id", problem_id)
     .order("node_index")
     .execute()
@@ -212,6 +233,15 @@ def generate_hint(problem_id: str, blocked_description: str,
       query_text = f"{blocked_description}. {next_node['key_concept']}"
 
     retrieved = _retrieve(problem_id, current_index, query_text) if nodes_all else []
+
+    # retrieve fallback — 노드는 있는데 임베딩/RPC 실패로 빈 결과면 "데이터 없음"이 아니라
+    # 같은 문제의 다음 노드(node_index > current)를 raw 로 넘긴다(부실 힌트 방지).
+    if not retrieved and nodes_all:
+      logger.error("retrieve 빈 결과(임베딩/RPC 실패 추정) → same-problem 다음 노드 fallback")
+      retrieved = [
+        {**n, "is_same_problem": True}
+        for n in nodes_all if n["node_index"] > current_index
+      ][:3]
 
     # 힌트 생성에 쓸 도형 이미지 다운로드 (근거 노드 중 crop URL 있는 것)
     # 1차: figure_image_crop_url 이 "해설 통째 폴백" 이면 정답 노출 위험이 있으므로

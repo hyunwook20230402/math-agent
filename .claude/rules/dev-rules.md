@@ -179,7 +179,9 @@ npm run dev                  # http://localhost:8081
 - **위치**: `backend/pdf_pipeline` FastAPI(포트 8001)에 통합. 별도 서버 없음.
   - 라우터 `routers/tutor.py` → `POST /api/tutor/hint` (`main.py` 에 `include_router(prefix="/api/tutor")`)
   - 핸들러 `handlers/stuck_helper.py` — localize → retrieve → generate 3단
-  - 노드 추출 `pipeline/rag_node_extractor.py` — 해설 이미지 2-pass(skeleton + per-node) VL 분해
+  - 노드 추출 `pipeline/rag_node_extractor.py` — 해설 이미지 **1회 통합** VL 분해(전체 노드 배열 1회 structured output). 각 노드에 `uses`(이전 node_index 참조=전이 근거 DAG)+`whys`({question,reason}=논리 완결성) 포함. 2-pass(1+N회)는 gemma4 폭주 방어 잔재라 폐기 — OpenAI는 폭주 없어 1회로 충분. (※ `solution_tagger`의 Call B per-step loop는 ollama 폭주 방어로 정당, 그대로 유지)
+  - **answer leakage 방지**: `stuck_helper`가 whys.question만 소크라테스 질문으로 노출(reason은 배경 근거), conclusion 노드 최종 수식 제외, 힌트 보기기호/정답 패턴 경고. 마이그레이션 `012`(uses/whys 컬럼+RPC). LaTeX 조합기호 `{}_nC_r` 프롬프트 강화 + `_fix_latex_subscript_escapes`(저장 직전 `\_`→`_`).
+  - **RAG 배포 의존성 순서: 마이그레이션 → 코드 → 테스트.** RPC `RETURNS TABLE` 시그니처 변경은 `CREATE OR REPLACE` 불가 → `DROP FUNCTION ... CASCADE` 먼저. 코드 먼저 배포하면 RPC 시그니처 불일치로 런타임 500.
   - 인증 `auth.py` — `get_student_id`(Bearer JWT → profiles.id, student role 강제). `SUPABASE_ANON_KEY` 필요
   - 모델 `models.py` — `HintRequest`/`HintResponse`/`NodeReference`
 - **DB**: `solution_nodes` 테이블(마이그레이션 `add_solution_nodes`) + RPC `search_solution_nodes_for_hint`. 임베딩 **bge-m3 1024차원**(problems.embedding 과 동일 — OpenAI 1536 혼입 금지).

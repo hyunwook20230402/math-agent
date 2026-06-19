@@ -123,6 +123,21 @@ def _fix_gemma4_latex_escapes(raw: str) -> str:
     fixed = pat.sub(repl, fixed)
   return fixed
 
+
+# 이미 파싱된 LaTeX 문자열(예: solution_nodes.output_formula)의 아래첨자 앞 잘못된 백슬래시 보정.
+# gpt-5.2 가 조합/순열 기호에서 `\_2H_3` (정상은 `{}_2H_3` 또는 `_2H_3`) 처럼 `_` 앞에
+# 불필요한 백슬래시를 붙이는 케이스(실측 56노드 중 1건). KaTeX 가 `\_` 를 못 읽어 렌더 깨짐.
+# `(?<!\\)` 로 이미 이스케이프된 `\\_` 는 건너뛰고, `(?=[0-9a-zA-Z])` 로 아래첨자 시작(영숫자)
+# 앞의 `\_` 만 좁게 매칭. 정상 `a_1`(백슬래시 없음)은 매칭 안 됨.
+_LATEX_SUBSCRIPT_ESCAPE = re.compile(r'(?<!\\)\\_(?=[0-9a-zA-Z])')
+
+
+def _fix_latex_subscript_escapes(s: str) -> str:
+  """LaTeX 문자열의 아래첨자 앞 잘못된 백슬래시(`\\_` → `_`) 보정. raw JSON 아닌 최종 문자열용."""
+  if not s:
+    return s
+  return _LATEX_SUBSCRIPT_ESCAPE.sub('_', s)
+
 VL_OLLAMA_URL = os.environ.get("VL_OLLAMA_URL", "http://localhost:11434").rstrip("/")
 VL_MODEL = os.environ.get("VL_MODEL", "gemma4:26b")
 VL_TIMEOUT = int(os.environ.get("VL_TIMEOUT", "180"))
@@ -152,18 +167,20 @@ def call_vl(
   timeout: int | None = None,
   *,
   provider: str | None = None,
+  max_tokens: int | None = None,
 ) -> T:
   """provider 에 관계없이 동일한 인터페이스로 VL 모델 호출.
 
   반환값은 항상 schema 인스턴스 (Pydantic 검증 완료).
   image_path 에 리스트를 넘기면 멀티 이미지 모드로 호출된다.
   provider 인자로 호출별 강제 override 가능 (기본은 provider_selector).
+  max_tokens 는 OpenAI 경로에만 전달(출력 잘림 방어 — list[Node] 1회 통합 등 긴 출력용).
   """
   effective = (provider or provider_selector.select_vl_provider()).lower()
   if effective == "gemini":
     return _call_gemini_with_fallback(image_path, prompt, schema, timeout)
   if effective == "openai":
-    return _call_openai(image_path, prompt, schema, timeout)
+    return _call_openai(image_path, prompt, schema, timeout, max_tokens=max_tokens)
   return _call_ollama_with_fallback(image_path, prompt, schema, timeout)
 
 
@@ -454,7 +471,8 @@ def _call_gemini(image_path: ImagePaths, prompt: str, schema: type[T], timeout: 
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 
-def _call_openai(image_path: ImagePaths, prompt: str, schema: type[T], timeout: int | None = None) -> T:
+def _call_openai(image_path: ImagePaths, prompt: str, schema: type[T],
+                 timeout: int | None = None, max_tokens: int | None = None) -> T:
   try:
     import openai
   except ImportError as e:
@@ -478,9 +496,23 @@ def _call_openai(image_path: ImagePaths, prompt: str, schema: type[T], timeout: 
     })
   content.append({"type": "input_text", "text": prompt})
 
-  response = client.responses.parse(
-    model=model,
-    input=[{"role": "user", "content": content}],
-    text_format=schema,
-  )
-  return response.output_parsed
+  kwargs: dict = {
+    "model": model,
+    "input": [{"role": "user", "content": content}],
+    "text_format": schema,
+  }
+  # 출력 잘림 방어 — max_tokens 명시 시 전달. None 이면 모델 기본(제한 안 둠).
+  if max_tokens is not None:
+    kwargs["max_output_tokens"] = max_tokens
+
+  response = client.responses.parse(**kwargs)
+
+  # truncation 감지 — incomplete(토큰 한계) 면 조용한 JSON 손상 대신 loud fail.
+  status = getattr(response, "status", None)
+  if status == "incomplete":
+    reason = getattr(getattr(response, "incomplete_details", None), "reason", "unknown")
+    raise RuntimeError(f"OpenAI 응답 미완(잘림): status=incomplete reason={reason} — max_tokens 상향 필요")
+  parsed = response.output_parsed
+  if parsed is None:
+    raise RuntimeError("OpenAI structured output 파싱 실패(output_parsed=None) — 스키마/출력 불일치 의심")
+  return parsed
