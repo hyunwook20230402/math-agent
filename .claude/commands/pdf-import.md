@@ -23,7 +23,7 @@ CMS 는 `apps/cms/src/pages/SolutionReview.tsx` 에서 이 흐름을 UI 로 제�
 
 ## 실패 시 체크리스트
 
-- **VL provider 확인** — 서버(업무시간): `ollama list` 에 `gemma3:27b` 있어야 함. 로컬(집): `GEMINI_API_KEY` 또는 `OPENAI_API_KEY` 환경변수 필요 (`VL_PROVIDER` 로 강제 가능).
+- **VL 키 확인** — `OPENAI_API_KEY` 필요 (VL=OpenAI 단일, 2026-06-19 gemma4 폐기). 임베딩용 ollama `bge-m3` 도 확인.
 - **Supabase 키 누락** — `.env` 의 `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
 - **UPLOAD_DIR 불일치** — 업로드 파일이 안 보이면 `.env` 의 `UPLOAD_DIR` 가 실제 디렉토리 가리키는지 확인 (보통 `backend/pdf_pipeline/uploads`).
 - **VRAM OOM** — YOLO/VL 모델 동시 실행 금지. 각 단계가 독립 요청으로 쪼개진 이유.

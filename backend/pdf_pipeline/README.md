@@ -4,11 +4,9 @@
 
 ## 환경 요구사항
 - Python 3.11+
-- 서버: RTX 4090 24GB — Ollama Gemma4 26B (vision, 19GB)
-- 로컬(집): OpenAI API (provider_selector 시간대 기반 자동 fallback)
-- **어려운 문제 (`difficulty_score >= CALL_B_HARD_THRESHOLD`)**: Call B + 검증을 OpenAI **gpt-5.4-mini** 강제 분기 (`docs/CALL_B_ROUTING.md`)
-- 임베딩: 서버 bge-m3 (Ollama) / 로컬 text-embedding-3-small (OpenAI)
-- Gemini 분기는 코드에 잔존하지만 운영에선 빠짐 (free tier 한도)
+- **VL=OpenAI 단일** (2026-06-19 gemma4/gemini 폐기). `OPENAI_API_KEY` 필수, `OPENAI_MODEL`(기본 gpt-4o).
+- 임베딩=bge-m3 (Ollama, 1024차원 고정). `EMBED_PROVIDER=openai` 로만 강제 전환 가능.
+- 난이도: 해설 PDF 정답률 우선(구간매핑), 없으면 GPT 추정.
 
 ## 설정
 
@@ -66,8 +64,7 @@ pdf_pipeline/
 ├── config.py                  # 환경변수
 ├── ARCHITECTURE.md            # AI 튜터 데이터 파이프라인 전체 구조 ← 읽어볼 것
 ├── docs/
-│   ├── TAG_VALIDATOR.md       # 3-layer 검증 에이전트 상세 (Layer 1/2/3, OpenAI 분기, suggested_fixes)
-│   └── CALL_B_ROUTING.md      # Call B 어려운 문제 OpenAI gpt-5.4-mini 분기 정책 + 비용
+│   └── TAG_VALIDATOR.md       # 3-layer 검증 에이전트 상세 (Layer 1/2/3, OpenAI)
 ├── requirements.txt
 ├── data/
 │   └── concept_taxonomy.json  # concepts 375 / skills 359 / units 15 / bugs 14
@@ -78,13 +75,13 @@ pdf_pipeline/
 │   ├── yolo_detector.py         # 모의고사 문제 박스 YOLO 추론
 │   ├── yolo_solution_detector.py # 해설 박스 YOLO 추론
 │   ├── solution_parser.py       # 해설 크롭 + 정답 파싱 + 페이지 걸침 병합
-│   ├── vl_providers.py          # VL provider 분기 (Ollama/Gemini/OpenAI + fallback) + call_vl(provider=) override
-│   ├── provider_selector.py     # 시간대 기반 provider 자동 선택
-│   ├── solution_tagger.py       # Call A/B + _route_call_b_provider + _apply_suggested_fixes
+│   ├── vl_providers.py          # VL 호출 (OpenAI 단일) — call_vl(image, prompt, schema)
+│   ├── solution_tagger.py       # Call A/B + 정답률 난이도(difficulty_resolver) + _apply_suggested_fixes
+│   ├── difficulty_resolver.py   # 정답률 → 난이도 구간매핑
 │   ├── tag_normalizer.py        # 태그 → canonical 매칭 (bge-m3 cosine ≥ 0.65)
 │   ├── unit_matcher.py          # 태그 → units leaf 경로 매핑 (bge-m3)
 │   ├── tag_validator.py         # 3-layer 태깅 검증 에이전트 → docs/TAG_VALIDATOR.md
-│   ├── embedder.py              # 임베딩 (Ollama bge-m3 / OpenAI 3-small)
+│   ├── embedder.py              # 임베딩 (bge-m3, Ollama 고정)
 │   └── solution_matcher.py      # 문제 ↔ 해설 번호 매칭
 └── storage/
     └── supabase_client.py     # problem_staging / solution_jobs CRUD
@@ -95,18 +92,17 @@ pdf_pipeline/
 ```
 문제 PDF → OCR/YOLO 크롭 → problem_staging → CMS 검수 → problems 테이블
 
-해설 PDF → 페이지 이미지 → 걸침 병합 → VL 태깅
-           ├─ Call A (메타: difficulty/concept/skill/...): ollama gemma4:26b
-           ├─ Call B (steps): difficulty>=THRESHOLD → OpenAI gpt-5.4-mini, else ollama
+해설 PDF → 페이지 이미지 → 걸침 병합 → VL 태깅 (OpenAI 단일)
+           ├─ Call A (메타: 정답률/concept/skill/...) — 정답률 있으면 난이도 구간매핑
+           ├─ Call B (steps): 2-Pass(스켈레톤 + per-step)
            ├─ tag_normalizer (canonical) + unit_matcher (단원)
-           └─ tag_validator (3-layer; Layer 2 도 같은 임계값으로 OpenAI 분기)
+           └─ tag_validator (3-layer; Layer 2 OpenAI)
          → problem_staging (solution_steps/common_mistakes 포함) → problem_tags
          → CMS 검수 (재태깅 / 전체 재태깅 버튼) → problems 테이블
 ```
 
 상세는:
 - 데이터 흐름 / DB 스키마: `ARCHITECTURE.md`
-- Call B / 검증 OpenAI 분기 정책: `docs/CALL_B_ROUTING.md`
 - 검증 에이전트 동작: `docs/TAG_VALIDATOR.md`
 
 ## 연관 백엔드

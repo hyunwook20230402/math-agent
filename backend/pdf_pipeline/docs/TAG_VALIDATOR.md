@@ -21,7 +21,6 @@ result: ValidationResult = tag_validator.validate(tag_result_dict, image_path)
 |-----|------|------|
 | `TAG_VALIDATOR_ENABLED` | `true` | `false` 면 호출 측에서 검증 자체 스킵 |
 | `TAG_VALIDATOR_LAYERS` | `"123"` | 활성화할 layer 조합. `"1"` / `"13"` / `"23"` 등 가능 |
-| `CALL_B_HARD_THRESHOLD` | `7` | Layer 2 LLM 호출 provider 분기 임계값 (Call B 와 공유) |
 
 ---
 
@@ -31,9 +30,7 @@ result: ValidationResult = tag_validator.validate(tag_result_dict, image_path)
 validate(tag_result, image_path)
   ├─ Layer 1 — Rule (비용 0)
   ├─ Layer 3 — Embedding (비용 0)   ← 순서상 먼저
-  └─ Layer 2 — LLM (호출 1회, 가장 비쌈)
-       ├─ 기본: VL_PROVIDER (ollama=gemma4:26b)
-       └─ difficulty_score >= CALL_B_HARD_THRESHOLD → OpenAI gpt-5.4-mini
+  └─ Layer 2 — LLM (호출 1회, 가장 비쌈) — OpenAI 단일
 
 → ValidationResult { status, score, issues[], suggested_fixes? }
 ```
@@ -55,9 +52,9 @@ Pydantic 검증을 통과한 `tag_result` 에 대해 **순수 파이썬 규칙**
 | step `hint` 영어 혼입 | **high** | |
 | step `hint` 안에 수식 (`\(`, `\[`, `$`) | medium | formula 필드 분리 위반 |
 | step `formula` delimiter 없음 (`\(`/`\[` 시작 안 함) | **high** | |
-| step `hint` placeholder 잔존 (`description_error`, `final_result`, `implying`) | **high** | gemma4 폭주 잔존 |
+| step `hint` placeholder 잔존 (`description_error`, `final_result`, `implying`) | **high** | 미완성 출력 잔존 |
 | step `concept` 이 `"null"`/`"none"` 문자열 | medium | |
-| `step_no` 중복 | **high** | gemma4 자기복제 사고 (`solution_tagger._dedup_steps` 가 1차 차단, 잔존 시 발급) |
+| `step_no` 중복 | **high** | 자기복제 방어 (`solution_tagger._dedup_steps` 가 1차 차단, 잔존 시 발급) |
 | step `hint` 한국어 비율 < 50% | **high** | |
 | `concept_tags` / `skill_tags` 태그가 영어 (≥80%) | **high** | |
 | `common_mistakes.text` 영어 혼입 | **high** | 학생 UI 노출 |
@@ -78,11 +75,7 @@ Pydantic 검증을 통과한 `tag_result` 에 대해 **순수 파이썬 규칙**
 
 이미지 + 태깅 결과 JSON + canonical 목록을 LLM 에 보내 **사람 검수자처럼** cross-check.
 
-- **Provider 분기**:
-  - `difficulty_score < CALL_B_HARD_THRESHOLD` → `call_vl()` 기본 = `VL_PROVIDER` (보통 ollama gemma4:26b)
-  - `difficulty_score >= CALL_B_HARD_THRESHOLD` → `call_vl(..., provider=CALL_B_HARD_PROVIDER)` (기본 openai gpt-5.4-mini)
-  - `CALL_B_HARD_PROVIDER=ollama` 로 세팅하면 OpenAI 분기 비활성화 → 모든 난이도 ollama gemma4:26b 고정
-  - 같은 임계값·env (`CALL_B_HARD_THRESHOLD`, `CALL_B_HARD_PROVIDER`) 를 Call B 와 공유 — 어려운 문제 일관성
+- **Provider**: OpenAI 단일 (2026-06-19 gemma4 폐기). 난이도 무관 항상 `call_vl()` = OpenAI.
 - **입력 토큰**: 이미지 2장 (~1,530) + tag_json (~500) + canonical 목록 (concepts 375 + skills 359 + units leaf 모두 ≈ 6,000) + 프롬프트 (~1,000) ≈ **9,000 input tok**
 - **출력**: `_LLMValidation { status, issues, suggested_fixes }` ≈ **500 tok**
 - **검증 항목** (프롬프트 명시):
@@ -189,8 +182,7 @@ CMS UI 는 `validation_issues` 에서 `applied=true` 인 항목을 **자동 반�
 ## 관련 파일
 
 - 본체: `backend/pdf_pipeline/pipeline/tag_validator.py`
-- 자동 반영: `backend/pdf_pipeline/pipeline/solution_tagger.py:_apply_suggested_fixes` (L491)
-- Provider 분기 (Layer 2): `backend/pdf_pipeline/pipeline/vl_providers.py:call_vl(..., provider=)`
-- Call B 라우팅 (같은 임계값 공유): `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`
+- 자동 반영: `backend/pdf_pipeline/pipeline/solution_tagger.py:_apply_suggested_fixes`
+- Layer 2 VL: `backend/pdf_pipeline/pipeline/vl_providers.py:call_vl` (OpenAI 단일)
 - 데이터 흐름 전체: `backend/pdf_pipeline/ARCHITECTURE.md`
 - Taxonomy: `backend/pdf_pipeline/data/concept_taxonomy.json`

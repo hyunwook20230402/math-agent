@@ -483,9 +483,11 @@ export type ProblemSet = Tables<'problem_sets'>;
 export type ProblemSetItem = Tables<'problem_set_items'>;
 export type Distribution = Tables<'distributions'>;
 export type DistributionStudent = Tables<'distribution_students'>;
+/** @deprecated distribution_problems 테이블 DROP됨(마이그레이션 014). 미사용 — 프론트 정리 시 제거. */
 export type DistributionProblem = Tables<'distribution_problems'>;
 export type Tag = Tables<'tags'>;
 export type ProblemTag = Tables<'problem_tags'>;
+/** @deprecated student_achievements 테이블 DROP됨(마이그레이션 014). StudentDashboard 는 빈 배열만 사용. 프론트 정리 시 제거. */
 export type StudentAchievement = Tables<'student_achievements'>;
 
 // 새로운 교재/단원 구조 타입들

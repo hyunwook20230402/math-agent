@@ -10,7 +10,7 @@
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Radix UI, TanStack Query v5, React Router v6
 - **Backend (DB/Auth)**: Supabase (PostgreSQL, Auth, Storage)
-- **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, EasyOCR + YOLO11 (ultralytics), VL 모델 (서버 근무시간 Ollama **Gemma4 26B** / 오프시간 OpenAI — `provider_selector` 자동 전환). **어려운 문제 (`difficulty_score >= CALL_B_HARD_THRESHOLD`) Call B + 검증은 OpenAI gpt-5.4-mini 강제 분기** (`backend/pdf_pipeline/docs/CALL_B_ROUTING.md`)
+- **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, EasyOCR + YOLO11 (ultralytics), **VL=OpenAI 단일**(2026-06-19 gemma4 폐기), 임베딩=bge-m3(Ollama). 난이도는 해설 PDF 정답률 우선(없으면 GPT 추정).
 - **막힌 지점 도우미 (AI 튜터)**: 풀이 그래프 위치추적 RAG. `pdf_pipeline` 내 `POST /api/tutor/hint` (localize→retrieve→generate). 데이터: `solution_nodes` + RPC. _구 deeptutor(LangGraph 대화) 폐기 — 2026-06-18._
 - **개발 환경**: Windows 11, 로컬 RTX 4070 8GB / 서버 RTX 4090 24GB
 
@@ -52,8 +52,7 @@ cd backend/pdf_pipeline
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8001
 
-# 4. Ollama 모델 (해설 태깅용, 서버 전용)
-ollama pull gemma4:26b
+# 4. VL=OpenAI (OPENAI_API_KEY 필요), 임베딩=bge-m3 (ollama pull bge-m3)
 ```
 
 ---
