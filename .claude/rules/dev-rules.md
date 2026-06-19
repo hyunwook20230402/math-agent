@@ -46,17 +46,14 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 - 실행 시 반드시 `cd backend/pdf_pipeline/yolo_training` — yaml 내 `../uploads/...` 가 CWD 기준으로 해석됨
 - 학습 후 `models/problem_detector.pt` / `solution_detector.pt` **자동 덮어쓰기 금지** — metric 확인 후 수동 `cp`
 
-## VL 모델 정책 (2026-04-22 갱신, 4차 반영)
+## VL 모델 정책 (2026-06-19 갱신 — gemma4 폐기, OpenAI 단일화)
 
-- **기본 VL 모델은 gemma4:26b 로 고정**. qwen2.5-vl (7B/32B/72B 전부) 은 실측에서 gemma4 대비 품질 낮아 검토 대상 아님
-- **OpenAI gpt-5.4-mini 는 어려운 문제 (Call B / 검증 Layer 2) 한정 허용** (4차 도입). 비용 (1문제 ₩25, 모의고사 1회분 ₩152) 부담 작아 가성비 통과
-  - 정책: `difficulty_score >= CALL_B_HARD_THRESHOLD` (기본 7) 만 OpenAI, 나머지는 ollama gemma4:26b
-  - 같은 임계값을 Call B 와 검증이 공유 → 어려운 문제 일관성
-  - 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`, `docs/TAG_VALIDATOR.md`
-- 그 외 유료 API (Gemini / Anthropic / 다른 OpenAI 모델 전체) 도입은 금지 (비용 이유)
-- 품질 개선은 VL 교체 대신 프롬프트 튜닝, 후처리 강화, 구조화 스키마 (Pydantic structured output) 로 접근
-- **비용 모델 선호**: gemma4:26b 로컬/서버 ollama 는 호출 수 부담 없음. OpenAI API 는 호출당 과금되므로 부담. 따라서 **"호출 수 줄이기 위해 OpenAI 쓰기" 보다 "호출 수 늘어도 gemma4 여러 번 돌리기" 가 선호되는 방향**. 설계 시 2-Pass / 다단계 loop / per-step 쪼개기처럼 gemma4 호출이 늘어나는 구조는 비용 관점에서 문제 없음 (2026-04-23 확정)
-- **2026-04-24 Call B step role 라벨링**: Pass 1 (skeleton) 에 `role` 필드 (5종: condition_analysis / equation_setup / case_split / computation / conclusion) 추가. Pass 2 는 target step 의 role 에 맞춰 hint·formula·whys 톤을 조정 (role-conditional 프롬프트). `_dedupe_skeleton()` 은 "연속 produces/uses 동일 병합" 에 "동일 role 3+ 연속 + produces=[] 조건" 추가. validator 는 **일반론 맞는 것만 유지** — hint 완전일치/LaTeX cases 짝/한국어 비율 0.5 + role 연속·conclusion 분포 warning. 이전에 특정 4문제 맞춤으로 추가했던 "formula 3회+ 반복"·"한국어 비율 0.6" 은 일반론에 안 맞아 제거/복귀. reject 시 재시도 없음 (CMS 수동 재태깅)
+- **VL 은 OpenAI 단일.** gemma4(ollama)·gemini 는 폐기. 모델은 `OPENAI_MODEL` (기본 gpt-4o). Call A·Call B·검증 Layer 2·튜터(localize/generate/노드추출) 모두 OpenAI.
+  - 옛 시간대 분기(`provider_selector`)·난이도 분기(`_route_call_b_provider`, `CALL_B_HARD_THRESHOLD`)·gemma4 반복 폭주 방어 코드는 모두 제거됨.
+- **임베딩은 그대로** — bge-m3(ollama, 1024차원) 유지. OpenAI 임베딩(1536)으로 바꾸면 전체 재임베딩 필요라 안 바꿈. `EMBED_PROVIDER=openai` 로만 강제 전환 가능.
+- 그 외 유료 API (Gemini / Anthropic / 다른 모델) 도입은 금지.
+- 품질 개선은 VL 교체 대신 프롬프트 튜닝, 후처리 강화, 구조화 스키마 (Pydantic structured output) 로 접근.
+- **Call B step role 라벨링**: Pass 1 (skeleton) 에 `role` 필드 (5종: condition_analysis / equation_setup / case_split / computation / conclusion). Pass 2 는 target step 의 role 에 맞춰 hint·formula·whys 톤을 조정 (role-conditional 프롬프트). `_dedupe_skeleton()` 은 "연속 produces/uses 동일 병합" + "동일 role 3+ 연속 + produces=[] 조건". validator 는 일반론 맞는 것만 유지 — hint 완전일치/LaTeX cases 짝/한국어 비율 0.5 + role 연속·conclusion 분포 warning. reject 시 재시도 없음 (CMS 수동 재태깅).
 
 ## 모델 파일 동기화
 
@@ -79,9 +76,9 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 - 로컬에서만 코드 수정 → commit → push. 서버는 `git pull` + 런타임 명령만
 - 예외: `ollama pull`, `pip install`, `uvicorn` 기동 등 런타임 명령은 서버 셸에서 직접 가능
 
-## 로컬 → 서버 Ollama 사용 (2026-04-21 확정)
+## 로컬 → 서버 Ollama 임베딩 사용 (2026-06-19 갱신)
 
-로컬에서 파이프라인 돌리되 VL/embed 는 서버 GPU 사용하는 방식. 서버 근무시간 외에도 서버 GPU 가용할 때 OpenAI 비용 아낄 수 있음.
+VL 은 OpenAI 단일이라 더 이상 ollama 터널이 필요 없다. **임베딩(bge-m3)만** 로컬 GPU 대신 서버 GPU 를 쓰고 싶을 때 아래 터널을 건다.
 
 **준비물**
 - 서버 ollama 는 `127.0.0.1:11434` 만 바인딩 (`ollama` 유저 소유 프로세스라 건드리지 말 것)
@@ -94,20 +91,17 @@ ssh -N -L 21434:localhost:11434 wanted-server
 ```
 비번 입력 후 멈춘 듯 가만히 있으면 성공. `curl http://localhost:21434/api/tags` 로 모델 목록 뜨면 OK.
 
-**2. 서버 설치된 모델 확인** — `gemma3:27b` 없으면 `gemma4:26b` 사용 (프롬프트는 gemma3 기준 튜닝이라 샘플 4개로 품질 먼저 검증)
-
-**3. `backend/pdf_pipeline/.env` 패치**
+**2. `backend/pdf_pipeline/.env` 패치 (임베딩만)**
 ```
-OLLAMA_BASE_URL=http://localhost:21434
-VL_OLLAMA_URL=http://localhost:21434
 OLLAMA_URL=http://localhost:21434
-VL_MODEL=gemma4:26b
-OLLAMA_MODEL=gemma4:26b
-VL_PROVIDER=ollama    # off-hours 자동 OpenAI fallback 차단
-EMBED_PROVIDER=ollama
+EMBED_MODEL=bge-m3
 ```
 
-**4. uvicorn 재기동 후 CMS "샘플 태깅 (앞 4개)" 로 품질 확인 → 문제없으면 전체**
+**3. VL 은 OpenAI 키만 있으면 됨**
+```
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-4o
+```
 
 ## 알려진 이슈 및 해결책
 
@@ -179,13 +173,13 @@ npm run dev                  # http://localhost:8081
 - **위치**: `backend/pdf_pipeline` FastAPI(포트 8001)에 통합. 별도 서버 없음.
   - 라우터 `routers/tutor.py` → `POST /api/tutor/hint` (`main.py` 에 `include_router(prefix="/api/tutor")`)
   - 핸들러 `handlers/stuck_helper.py` — localize → retrieve → generate 3단
-  - 노드 추출 `pipeline/rag_node_extractor.py` — 해설 이미지 **1회 통합** VL 분해(전체 노드 배열 1회 structured output). 각 노드에 `uses`(이전 node_index 참조=전이 근거 DAG)+`whys`({question,reason}=논리 완결성) 포함. 2-pass(1+N회)는 gemma4 폭주 방어 잔재라 폐기 — OpenAI는 폭주 없어 1회로 충분. (※ `solution_tagger`의 Call B per-step loop는 ollama 폭주 방어로 정당, 그대로 유지)
+  - 노드 추출 `pipeline/rag_node_extractor.py` — 해설 이미지 **1회 통합** VL 분해(전체 노드 배열 1회 structured output). 각 노드에 `uses`(이전 node_index 참조=전이 근거 DAG)+`whys`({question,reason}=논리 완결성) 포함. VL=OpenAI 단일. (`solution_tagger`의 Call B 는 2-Pass 구조 그대로 유지 — 과거 per-step 은 gemma4 폭주 방어였으나 OpenAI 단일화로 그 명분은 사라짐.)
   - **answer leakage 방지**: `stuck_helper`가 whys.question만 소크라테스 질문으로 노출(reason은 배경 근거), conclusion 노드 최종 수식 제외, 힌트 보기기호/정답 패턴 경고. 마이그레이션 `012`(uses/whys 컬럼+RPC). LaTeX 조합기호 `{}_nC_r` 프롬프트 강화 + `_fix_latex_subscript_escapes`(저장 직전 `\_`→`_`).
   - **RAG 배포 의존성 순서: 마이그레이션 → 코드 → 테스트.** RPC `RETURNS TABLE` 시그니처 변경은 `CREATE OR REPLACE` 불가 → `DROP FUNCTION ... CASCADE` 먼저. 코드 먼저 배포하면 RPC 시그니처 불일치로 런타임 500.
   - 인증 `auth.py` — `get_student_id`(Bearer JWT → profiles.id, student role 강제). `SUPABASE_ANON_KEY` 필요
   - 모델 `models.py` — `HintRequest`/`HintResponse`/`NodeReference`
 - **DB**: `solution_nodes` 테이블(마이그레이션 `add_solution_nodes`) + RPC `search_solution_nodes_for_hint`. 임베딩 **bge-m3 1024차원**(problems.embedding 과 동일 — OpenAI 1536 혼입 금지).
-- **VL**: `call_vl(provider="openai")` 통일(localize/generate/노드추출 멀티모달). 한국어/도형 품질 위해 기본 OpenAI. `TUTOR_VL_PROVIDER` env 로 ollama 전환 가능.
+- **VL**: `call_vl()` 통일(localize/generate/노드추출 멀티모달). OpenAI 단일.
 - **백필**: `cd backend/pdf_pipeline && venv\Scripts\activate && python -m scripts.backfill_solution_nodes --limit 5` (`OLLAMA_URL` 이 서버 터널 21434 면 임베딩 위해 로컬 11434 로 override 필요. `OPENAI_API_KEY` 필수).
 - **도형/그래프 (2026-06-18 결정)**: 해설 도형 자동 crop 안 함. `rag_node_extractor` 는 `figure_image_crop_url=None` 으로 두고(해설 통째 폴백은 정답 노출 위험), `figure_description`(VL 언어화)만 검색·근거로 사용. 정확한 도형 영역은 **CMS 수동 bbox 로 채운다(후속)**. 1차는 도형 이미지 없이 텍스트 힌트만(graceful). stuck_helper 는 같은 문제(`is_same_problem`) crop 은 학생에게 안 보여줌(정답 노출 방어).
 - **프론트**: `apps/student` `SolveProblem.tsx` → `components/tutor/StuckHelperModal.tsx` → `shared/lib/api.ts:ragHintApi.getHint`. base URL env `VITE_TUTOR_API_URL`(구 `VITE_DEEPTUTOR_URL` 하위호환 fallback), 기본 `http://localhost:8001`.

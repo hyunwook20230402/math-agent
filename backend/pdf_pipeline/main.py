@@ -1073,6 +1073,9 @@ async def _run_solution_upload_and_tag(
                 logger.warning(f"문제 이미지 맵 구성 실패 (해설 단독 태깅으로 fallback): {e}")
                 problem_local_paths = {}
 
+        # 정답률은 해설 PDF 에 박혀 있어 Call A(VL)가 직접 읽는다(meta.correct_rate).
+        # 따로 번호별 correct_rate 를 주입할 필요 없음 — tag_all_solutions 의 correct_rates
+        # 인자는 외부(예: 평가원 공개표)에서 강제 주입할 때만 쓰는 선택적 override.
         def _tag_runner():
             return tag_all_solutions(
                 merged_images,
@@ -1750,6 +1753,7 @@ async def solution_apply(solution_job_id: str, body: SolutionApplyRequest):
             pitfall=data.get("pitfall"),
             unit=unit_val,
             difficulty_score=diff_score_val,
+            correct_rate=data.get("correct_rate"),
             solution_steps=data.get("solution_steps") or None,
             common_mistakes=data.get("common_mistakes") or None,
             validation_status=data.get("validation_status"),

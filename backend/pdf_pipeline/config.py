@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://grukqugorspbwsxqdhru.supabase.co")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")  # service_role 키 필요
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")  # 학생 JWT 검증용 (튜터 auth)
+# NOTE(2026-06-19): VL 은 OpenAI 단일화. 아래 두 ollama 변수는 미사용 모듈
+# structurizer.py(Surya OCR 구조화 — 현재 파이프라인에서 호출 안 됨)만 참조한다.
+# structurizer 자체를 죽은 코드 정리(D) 때 제거하면서 같이 삭제 예정.
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:26b")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/tmp/pdf_pipeline")

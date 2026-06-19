@@ -19,10 +19,9 @@
 - unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty_score/pitfall/solution_steps/common_mistakes AI 추출
 - **난이도 (difficulty_score) 구조 신호 기반 판정** (2026-04-22) — "수능 21/29/30번류" 번호 고정 제거. 경우분리 개수·중첩 깊이·개념 복합도로 1~10 스코어링. 시대 무관.
 - **solution_steps 3단 구조** (2026-04-23 필드명 통일) — `hint` (학생에게 보여주는 힌트 문장) + `formula` (핵심 식 \\( ... \\)) + `concept` (이 힌트가 짚는 개념명) 3필드 모두 필수 (null 금지). **개수 강제 폐지** (4차) — 모델이 풀이 복잡도에 맞춰 자유 결정, `CALL_B_MAX_STEPS` (기본 15) 만 상한 안전장치. 이전 이름 `description/formula/reason` 은 코드·문서·UI 5축에서 모두 `hint/formula/concept` 로 통일됨.
-- **Call B per-step loop** (2026-04-23 5차) — gemma4 repetition 폭주 근본 대응. 한방 호출 대신 "step 하나씩 N회 호출, 매번 이미지+누적 steps 재전송" 구조로 전환. 출력 토큰 짧아져 폭주 확률 급감. `{"done": true}` 신호로 루프 종료. 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`
-- **Call B / 검증 OpenAI 분기** (2026-04-22, 4차) — `difficulty_score >= CALL_B_HARD_THRESHOLD` (기본 7) 면 `gpt-5.4-mini` 강제. 검증도 같은 임계값 공유. `_retagged` 마커 + CMS "전체 재태깅" 버튼 추가. 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`
-- 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크). Layer 2 도 OpenAI 분기. 상세: `backend/pdf_pipeline/docs/TAG_VALIDATOR.md`
-- Provider 시간대 자동 선택 (`provider_selector.py` — 평일 09-19 KST Ollama, 그 외 OpenAI)
+- **VL = OpenAI 단일** (2026-06-19) — gemma4(ollama)/gemini 폐기. Call A·Call B·검증·튜터 모두 OpenAI. 옛 시간대 분기(`provider_selector`)·난이도 분기(`_route_call_b_provider`)·gemma4 폭주 방어 코드 제거. 임베딩만 bge-m3(ollama) 유지.
+- **Call B 2-Pass** — Pass 1 스켈레톤(role/produces/uses DAG) + Pass 2 step 내용 채움. (과거 per-step 은 gemma4 폭주 방어였으나 OpenAI 단일화로 명분 소멸 — 구조는 그대로 유지.)
+- 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크). Layer 2 OpenAI. 상세: `backend/pdf_pipeline/docs/TAG_VALIDATOR.md`
 - YOLO11n 기본 가중치 (`promote_model` 의존 제거 — 커밋 `56ecdd0`). 재학습은 11m + Optuna (`dev-rules.md` 참조)
 
 ### 막힌 지점 도우미 — 풀이 그래프 위치추적 RAG (`backend/pdf_pipeline`) ✅ 구현
@@ -55,22 +54,16 @@
 
 ### Provider 전략
 
-| 호출 | 조건 | Provider | 모델 |
-|------|------|----------|------|
-| 시간대 기본 (서버) | 평일 09-19 KST | Ollama | gemma4:26b |
-| 시간대 기본 (집) | 그 외 | OpenAI | gpt-4o (provider_selector 기본) |
-| Call A (메타) | 항상 | 시간대 기본 | gemma4:26b 우선 |
-| Call B (steps) | difficulty < 7 | ollama | gemma4:26b |
-| **Call B (steps)** | **difficulty >= 7** | **OpenAI 강제** | **gpt-5.4-mini** |
-| 검증 Layer 2 | difficulty < 7 | 시간대 기본 | gemma4:26b |
-| **검증 Layer 2** | **difficulty >= 7** | **OpenAI 강제** | **gpt-5.4-mini** |
-| Embed | 시간대 기본 | bge-m3 / text-embedding-3-small | |
+| 호출 | Provider | 모델 |
+|------|----------|------|
+| Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o) |
+| Call B (steps) | OpenAI | 2-Pass(스켈레톤 + per-step) |
+| 검증 Layer 2 | OpenAI | 난이도 무관 항상 OpenAI |
+| 막힌 지점 도우미 (튜터) | OpenAI | localize / generate / 노드추출 |
+| Embed | Ollama | bge-m3 (1024d 고정) |
 
-- `VL_PROVIDER` / `EMBED_PROVIDER` env 로 시간대 무시 강제 override 가능
-- `CALL_B_HARD_THRESHOLD` env 로 OpenAI 분기 임계값 조정 (기본 7)
-- 서버 Ollama 모델: `gemma4:26b` (19GB, RTX 4090 24GB) — 이전 `gemma3:27b` 는 2026-04-21 교체 → gemma4 운영 중
-- Gemini 는 코드에 분기 잔존하지만 운영에서 빠짐 (free tier 한도)
-- 상세: `backend/pdf_pipeline/docs/CALL_B_ROUTING.md`
+- VL 은 OpenAI 단일(2026-06-19 gemma4 폐기). 시간대·난이도 분기 모두 제거됨.
+- 임베딩만 bge-m3(ollama) 유지 — `EMBED_PROVIDER=openai` 로만 강제 전환 가능(차원 1024→1536 주의).
 
 ### UPLOAD_DIR
 

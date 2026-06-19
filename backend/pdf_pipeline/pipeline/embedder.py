@@ -1,12 +1,10 @@
-"""임베딩 생성 모듈 — Ollama / OpenAI provider 분기 (/api/embed 전환)
+"""임베딩 생성 모듈 — bge-m3 (Ollama) 단일. /api/embed 사용.
 
-provider 는 `provider_selector.select_embed_provider()` 로 결정:
-  ollama  (bge-m3, 1024차원)           — 서버 근무시간 default
-  openai  (text-embedding-3-small,     — 집 / 서버 OFF 시 default
-          1536차원)
-
-Ollama 접속 실패 시 OPENAI_API_KEY 가 있으면 자동 fallback.
-캐시 파일명이 provider 를 포함하므로 차원 불일치 걱정 없음.
+2026-06-19: VL 은 OpenAI 단일화됐으나 임베딩은 bge-m3(ollama 1024차원) 그대로 유지.
+  (OpenAI 임베딩은 1536차원이라 바꾸면 problems·solution_nodes 전체 재임베딩 필요 → 안 함.)
+  provider_selector(시간대 분기) 제거 — 임베딩은 항상 ollama.
+  단, ollama 접속 실패 시 OPENAI_API_KEY 가 있으면 비상 fallback(차원 혼입 방지 위해
+  EMBED_PROVIDER=openai 를 명시했을 때만). 기본은 ollama 고정.
 
 공개 API (시그니처 불변 — 호출처 무변경):
   generate_embedding(text) -> list[float]
@@ -20,9 +18,15 @@ from typing import List, Tuple
 
 import requests
 
-from . import provider_selector
-
 logger = logging.getLogger(__name__)
+
+
+def _select_embed_provider() -> str:
+  """임베딩 provider — 기본 ollama 고정. EMBED_PROVIDER=openai 로만 강제 전환 가능."""
+  forced = os.environ.get("EMBED_PROVIDER", "").strip().lower()
+  if forced == "openai":
+    return "openai"
+  return "ollama"
 
 # Ollama
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
@@ -39,7 +43,7 @@ def _sanitize(name: str) -> str:
 
 def get_provider_model_tag() -> Tuple[str, str]:
   """캐시 파일명에 사용할 (provider, model_tag) 튜플."""
-  provider = provider_selector.select_embed_provider()
+  provider = _select_embed_provider()
   if provider == "openai":
     return "openai", _sanitize(OPENAI_EMBED_MODEL)
   return "ollama", _sanitize(EMBED_MODEL)
@@ -183,7 +187,7 @@ def _openai_fallback_available() -> bool:
 # ── 공개 API ──────────────────────────────────────────────────────────────────
 
 def generate_embedding(text: str) -> List[float]:
-  provider = provider_selector.select_embed_provider()
+  provider = _select_embed_provider()
   if provider == "openai":
     return _generate_embedding_openai(text)
   try:
@@ -196,7 +200,7 @@ def generate_embedding(text: str) -> List[float]:
 
 
 def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
-  provider = provider_selector.select_embed_provider()
+  provider = _select_embed_provider()
   if provider == "openai":
     return _generate_embeddings_batch_openai(texts)
   try:

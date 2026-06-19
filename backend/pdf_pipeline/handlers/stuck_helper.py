@@ -13,7 +13,7 @@
 해설 노드가 없는 문제(미백필)는 retrieve 를 건너뛰고 문제 이미지만 보고 즉석 힌트(fallback).
 
 - 임베딩: embedder.generate_embedding() 통일 (problems/solution_nodes.embedding 과 동일 차원).
-- VL: call_vl(provider=...) 통일. 기본 openai(gpt-4o) — 한국어/도형 품질. env TUTOR_VL_PROVIDER 로 override.
+- VL: call_vl() 통일. OpenAI 단일(2026-06-19 gemma4 폐기).
 - 모든 LLM 출력은 Pydantic structured output 으로 강제.
 """
 from __future__ import annotations
@@ -33,8 +33,7 @@ from storage.supabase_client import get_client
 
 logger = logging.getLogger(__name__)
 
-# 튜터 힌트 VL provider — 기본 openai(gpt-4o). ollama 로 바꾸면 gemma4 사용 (비용 절감)
-TUTOR_VL_PROVIDER = os.environ.get("TUTOR_VL_PROVIDER", "openai")
+# 튜터 힌트 VL 은 OpenAI 단일(2026-06-19 gemma4 폐기). call_vl 이 항상 OpenAI 호출.
 
 
 # ── 이미지 다운로드 (call_vl 은 로컬 파일 경로를 요구) ─────────────────────────
@@ -82,7 +81,7 @@ def _localize(problem_image_path: Optional[str], blocked_desc: str, nodes: list[
 - "여기까지 했다"는 게 명확하면 그 단계 index."""
 
   try:
-    res = call_vl(problem_image_path, prompt, _Localized, provider=TUTOR_VL_PROVIDER)
+    res = call_vl(problem_image_path, prompt, _Localized)
     idx = res.last_understood_index
     max_idx = max(n["node_index"] for n in nodes)
     return max(-1, min(idx, max_idx))
@@ -174,7 +173,7 @@ def _generate(problem_image_path: Optional[str], blocked_desc: str,
       hint_text="문제 이미지를 불러오지 못했어요. 어디까지 풀었는지 조금 더 자세히 알려줄래요?",
       next_step_concept=None,
     )
-  hint = call_vl(images if len(images) > 1 else images[0], prompt, _Hint, provider=TUTOR_VL_PROVIDER)
+  hint = call_vl(images if len(images) > 1 else images[0], prompt, _Hint)
   # answer leakage 경량 검사 — 보기기호/정답 패턴이면 경고 로깅(차단은 안 함, 운영 관찰용).
   if _LEAK_PATTERN.search(hint.hint_text or ""):
     logger.warning(f"[leakage?] 힌트에 정답/보기 패턴 의심: {hint.hint_text!r}")

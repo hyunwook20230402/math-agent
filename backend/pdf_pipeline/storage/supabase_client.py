@@ -148,6 +148,7 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
             "title": p.get("title") or _build_title(p),
             "problem_number": p.get("problem_number", 1),
             "difficulty_score": p.get("difficulty_score", 5),
+            "correct_rate": p.get("correct_rate"),
             "category": p.get("category", "기타"),
             "unit": p.get("unit", "미분류"),
             "image_url": p.get("source_image_url"),
@@ -416,6 +417,7 @@ def update_staging_solution(
     pitfall: str | None = None,
     unit: str | None = None,
     difficulty_score: int | None = None,
+    correct_rate: float | None = None,
     solution_steps: list | None = None,
     common_mistakes: list | None = None,
     validation_status: str | None = None,
@@ -444,6 +446,8 @@ def update_staging_solution(
         payload["unit"] = unit
     if difficulty_score is not None:
         payload["difficulty_score"] = difficulty_score
+    if correct_rate is not None:
+        payload["correct_rate"] = correct_rate
     if solution_steps is not None:
         payload["solution_steps"] = solution_steps
     if common_mistakes is not None:

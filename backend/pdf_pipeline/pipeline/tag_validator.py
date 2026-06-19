@@ -1,14 +1,14 @@
 """온톨로지 태깅 검증 에이전트 (3-layer)
 
 Layer 1 — Rule 기반 (비용 0): 필드 누락, 영어 혼입, formula delimiter, placeholder, step_no 중복 등
-Layer 2 — LLM 재검증 (call_vl 1호출): 이미지 + 태깅 결과 cross-check
-                                       어려운 문제(difficulty >= CALL_B_HARD_THRESHOLD)는 OpenAI 강제 분기
+Layer 2 — LLM 재검증 (call_vl 1호출, OpenAI): 이미지 + 태깅 결과 cross-check
 Layer 3 — 임베딩 자가 체크 (비용 0): solution_steps ↔ concept_tags cosine 일치도
+
+VL 은 OpenAI 단일(2026-06-19 gemma4 폐기).
 
 환경변수:
   TAG_VALIDATOR_ENABLED  — "true" (기본) | "false"
   TAG_VALIDATOR_LAYERS   — "123" (기본) | "1" | "13" 등 조합 가능
-  CALL_B_HARD_THRESHOLD  — Layer 2 OpenAI 분기 임계값 (Call B 와 공유, 기본 7)
 
 상세 문서: backend/pdf_pipeline/docs/TAG_VALIDATOR.md
 """
@@ -156,6 +156,33 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
       severity="high",
     ))
 
+  # skeleton 오염 증상: 번호는 다르지만 hint 내용이 같은 step 여러 개 (Pass 1 repetition)
+  hint_seen: dict[str, int] = {}
+  for s in steps:
+    h = (s.get("hint") or "").strip()
+    if not h:
+      continue
+    prev = hint_seen.get(h)
+    if prev is not None:
+      issues.append(ValidationIssue(
+        field="solution_steps",
+        reason=f"step {prev}/{s.get('step')} hint 텍스트 중복 (skeleton 오염)",
+        severity="high",
+      ))
+      break
+    hint_seen[h] = s.get("step")
+
+  # LaTeX cases 짝 (\\begin{cases} vs \\end{cases}) — 토큰 잘림으로 미완성 감지
+  full_text = json.dumps(steps, ensure_ascii=False)
+  begin_cnt = full_text.count(r"\begin{cases}")
+  end_cnt = full_text.count(r"\end{cases}")
+  if begin_cnt != end_cnt:
+    issues.append(ValidationIssue(
+      field="solution_steps",
+      reason=f"LaTeX cases 짝 안 맞음: begin={begin_cnt} end={end_cnt}",
+      severity="high",
+    ))
+
   # hint 한국어 비율 (< 50% 이면 영어 혼입 심각)
   for s in steps:
     d = s.get("hint") or ""
@@ -183,6 +210,115 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
   for m in tag_result.get("common_mistakes", []):
     if _has_english(m.get("text", "")):
       issues.append(ValidationIssue(field="common_mistakes.text", reason=f"common_mistakes text 영어 혼입: {m.get('text', '')[:30]}", severity="high"))
+      break
+
+  # role 분포·연속 warning (schema v2 에서 추가된 role 필드 기준, 일반론)
+  if any("role" in s for s in steps):
+    roles = [s.get("role") for s in steps if s.get("role")]
+    # 동일 role 이 3 step 이상 연속
+    run = 1
+    for i in range(1, len(roles)):
+      if roles[i] == roles[i - 1]:
+        run += 1
+        if run >= 3:
+          issues.append(ValidationIssue(
+            field="solution_steps",
+            reason=f"동일 role '{roles[i]}' 이 {run} step 이상 연속 (Pass 1 구조 이상 의심)",
+            severity="medium",
+          ))
+          break
+      else:
+        run = 1
+    # conclusion 갯수 체크
+    conclusion_cnt = sum(1 for r in roles if r == "conclusion")
+    if conclusion_cnt == 0 and len(roles) >= 3:
+      issues.append(ValidationIssue(
+        field="solution_steps",
+        reason="conclusion role 이 없음 — 마지막 step 이 결론이어야 함",
+        severity="medium",
+      ))
+    elif conclusion_cnt >= 2:
+      issues.append(ValidationIssue(
+        field="solution_steps",
+        reason=f"conclusion role 이 {conclusion_cnt}개 — 풀이 전체에서 1개여야 함",
+        severity="medium",
+      ))
+
+  # ── schema v2 DAG 검증 (produces/uses/whys 일관성) ──
+  # v2 필드가 하나라도 있는 step 이 있으면 DAG 규칙 적용. 구 데이터에는 skip.
+  if any("produces" in s or "uses" in s for s in steps):
+    issues.extend(_layer1_dag(steps))
+
+  return issues
+
+
+def _layer1_dag(steps: list[dict]) -> list[ValidationIssue]:
+  """produces/uses 일관성 + DAG cycle + whys 형식 검증."""
+  issues: list[ValidationIssue] = []
+
+  # 1) produces.label 중복 (같은 라벨 여러 step 이 정의 → 의존관계 모호)
+  label_to_steps: dict[str, list[int]] = {}
+  for s in steps:
+    for p in (s.get("produces") or []):
+      label = p.get("label") if isinstance(p, dict) else None
+      if label:
+        label_to_steps.setdefault(label, []).append(s.get("step"))
+  dups = {l: ss for l, ss in label_to_steps.items() if len(ss) > 1}
+  if dups:
+    issues.append(ValidationIssue(
+      field="solution_steps",
+      reason=f"produces 라벨 중복: {dups}",
+      severity="high",
+    ))
+
+  # 2) uses 가 이전 step 의 produces 에 존재하는 라벨만 참조해야 함 (유령 참조)
+  produced_so_far: set[str] = set()
+  for s in steps:
+    for u in (s.get("uses") or []):
+      if u not in produced_so_far:
+        issues.append(ValidationIssue(
+          field="solution_steps",
+          reason=f"step {s.get('step')} uses='{u}' — 이전 step produces 에 미정의 (유령 참조)",
+          severity="high",
+        ))
+        break
+    for p in (s.get("produces") or []):
+      label = p.get("label") if isinstance(p, dict) else None
+      if label:
+        produced_so_far.add(label)
+
+  # 3) step 순서가 이미 배열 인덱스 순이므로, 2) 에서 "이전에 정의된 것만 uses"
+  # 체크가 곧 DAG 무결성 (cycle 불가능). 추가 cycle 검증 생략.
+
+  # 4) whys 형식: question 물음표 필수
+  for s in steps:
+    for w in (s.get("whys") or []):
+      q = (w.get("question") if isinstance(w, dict) else None) or ""
+      if q and "?" not in q and "？" not in q:
+        issues.append(ValidationIssue(
+          field="solution_steps",
+          reason=f"step {s.get('step')} whys.question 물음표 누락: {q[:30]}",
+          severity="medium",
+        ))
+        break
+
+  # 5) produces 개수 상한 (2) / uses 개수 상한 (3) — Pydantic 에서 이미 막지만 구 데이터 안전망
+  for s in steps:
+    prod = s.get("produces") or []
+    uses = s.get("uses") or []
+    if len(prod) > 2:
+      issues.append(ValidationIssue(
+        field="solution_steps",
+        reason=f"step {s.get('step')} produces 과다 ({len(prod)} > 2)",
+        severity="medium",
+      ))
+      break
+    if len(uses) > 3:
+      issues.append(ValidationIssue(
+        field="solution_steps",
+        reason=f"step {s.get('step')} uses 과다 ({len(uses)} > 3)",
+        severity="medium",
+      ))
       break
 
   return issues
@@ -316,11 +452,10 @@ def _build_canonical_section() -> str:
 
 
 def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[ValidationIssue], SuggestedFixes | None]:
-  """LLM 으로 태깅 결과를 재검증.
+  """LLM 으로 태깅 결과를 재검증. VL=OpenAI 단일(2026-06-19 gemma4 폐기).
 
   image_path 는 단일 경로 또는 리스트([문제경로, 해설경로]). 리스트면 멀티 이미지로 전달.
-  어려운 문제 (difficulty_score >= CALL_B_HARD_THRESHOLD) 는 CALL_B_HARD_PROVIDER 로 분기 — Call B 와 동일 임계값·env.
-  CALL_B_HARD_PROVIDER=ollama 면 OpenAI 분기 비활성화 (모든 난이도 기본 VL_PROVIDER 사용).
+  (구 난이도 기반 provider 분기는 OpenAI 단일화로 제거.)
   """
   try:
     from .vl_providers import call_vl
@@ -338,15 +473,9 @@ def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[Val
     )
 
     d = int(tag_result.get("difficulty_score") or 5)
-    threshold = int(os.environ.get("CALL_B_HARD_THRESHOLD", "7"))
-    if d >= threshold:
-      hard_provider = os.environ.get("CALL_B_HARD_PROVIDER", "openai").strip().lower()
-      provider = hard_provider if hard_provider and hard_provider != "ollama" else None
-    else:
-      provider = None
-    logger.info(f"[validator L2] difficulty={d} provider={provider or 'default'}")
+    logger.info(f"[validator L2] difficulty={d} provider=openai")
 
-    llm_result = call_vl(image_path, prompt, _LLMValidation, provider=provider)
+    llm_result = call_vl(image_path, prompt, _LLMValidation)
     return llm_result.issues, llm_result.suggested_fixes
 
   except Exception as e:

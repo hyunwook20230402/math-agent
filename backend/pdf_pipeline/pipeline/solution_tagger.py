@@ -1,11 +1,7 @@
 """VL 모델 기반 온톨로지 데이터 추출
 
-환경변수:
-  VL_PROVIDER    — ollama (기본) | gemini | openai
-  VL_OLLAMA_URL  — Ollama 서버 URL (기본 http://localhost:11434)
-  VL_MODEL       — Ollama 모델 태그 (기본 gemma4:26b)
-  GEMINI_MODEL   — Gemini 모델 ID (기본 gemini-2.0-flash)
-  VL_TIMEOUT     — 호출 타임아웃 초 (기본 180)
+VL 은 OpenAI 단일(2026-06-19 gemma4 폐기). 환경변수:
+  OPENAI_MODEL   — OpenAI 모델 ID (기본 gpt-4o)
 
 주요 함수:
   extract_tags_from_image(image_path, has_solution) → dict
@@ -13,34 +9,22 @@
 """
 import logging
 import os
+from collections import Counter
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
+
+RoleType = Literal["condition_analysis", "equation_setup", "case_split", "computation", "conclusion"]
 
 import requests
 from pydantic import BaseModel, Field, ValidationError
 
-from . import tag_normalizer, unit_matcher
-from .vl_providers import attempts_scope, call_vl
+from . import difficulty_resolver, tag_normalizer, unit_matcher
+from .vl_providers import call_vl
 
 logger = logging.getLogger(__name__)
 
 
-def _route_call_b_provider(difficulty_score: int) -> str:
-  """Call B 호출용 provider 결정 (난이도 기반).
-
-  환경변수:
-    CALL_B_PROVIDER         = openai | ollama (강제 override, 비면 라우팅)
-    CALL_B_HARD_THRESHOLD   = 어려움 기준 difficulty_score (기본 7)
-    CALL_B_HARD_PROVIDER    = 어려움일 때 provider (기본 openai)
-    CALL_B_EASY_PROVIDER    = 쉬움일 때 provider (기본 ollama)
-  """
-  forced = os.environ.get("CALL_B_PROVIDER", "").strip().lower()
-  if forced:
-    return forced
-  threshold = int(os.environ.get("CALL_B_HARD_THRESHOLD", "7"))
-  if difficulty_score >= threshold:
-    return os.environ.get("CALL_B_HARD_PROVIDER", "openai").strip().lower()
-  return os.environ.get("CALL_B_EASY_PROVIDER", "ollama").strip().lower()
+SCHEMA_VERSION = 2  # solution_steps DAG 구조 (produces/uses/whys) 도입 시점
 
 
 # ── Pydantic 응답 스키마 ──────────────────────────────────────────────────────
@@ -50,6 +34,67 @@ class SolutionStep(BaseModel):
   hint: str                            # 학생에게 공개하는 힌트 텍스트 (한국어, 수식 인라인 허용)
   formula: str                         # 이 힌트의 핵심 식 \( ... \) — 필수, null 금지
   concept: str                         # 이 힌트가 짚는 개념/정리 이름 (한국어 1~3단어, 필수)
+
+
+# ── Schema v2 (DAG 구조) ─────────────────────────────────────────────────────
+# 2-Pass 파이프라인용. Pass 1 에서 라벨 관계(produces/uses) 확정, Pass 2 에서 내용 채움.
+# 소비자는 DeepTutor LLM — 튜터가 막힌 step 의 uses 를 역추적해 학생에게 복기시킴.
+
+class ProducesEntry(BaseModel):
+  label: str = Field(..., max_length=8)   # 기계 id: r1, r2, ... (CMS 에서 ㉠/㉡ 로 번역 가능)
+  value: str = Field(..., max_length=200) # 짧은 식/조건 문자열 (튜터가 "이 조건이 나왔었죠?" 복기용)
+
+
+class WhyEntry(BaseModel):
+  question: str = Field(..., max_length=60)  # "왜 X?" 형태 물음표 포함
+  reason: str = Field(..., max_length=140)   # 짧은 한국어 이유
+
+
+class SkeletonStep(BaseModel):
+  """Pass 1 출력 — step 의 라벨 관계 구조만. 내용(hint/formula/concept) 은 비어있다."""
+  id: str = Field(..., max_length=6)           # s1, s2, ...
+  step: int
+  role: RoleType                                # 수학 풀이 논리 역할 5종 (condition_analysis/equation_setup/case_split/computation/conclusion)
+  produces: list[str] = Field(default_factory=list, max_length=2)  # 이 step 이 도출하는 라벨 (0~2)
+  uses: list[str] = Field(default_factory=list, max_length=3)      # 이 step 이 참조하는 이전 라벨 (0~3)
+
+
+class Skeleton(BaseModel):
+  """Pass 1 전체 응답 — DAG 구조."""
+  steps: list[SkeletonStep] = Field(default_factory=list, min_length=1, max_length=15)
+
+
+class FilledStep(BaseModel):
+  """Pass 2 한 호출의 응답 — 한 step 의 내용 채움.
+
+  Pass 1 에서 id/role/produces 라벨이 이미 고정되어 있으므로,
+  Pass 2 는 라벨에 value 채우기 + 힌트 문장 작성 + whys 추가만 수행. role 은 echo-back.
+  """
+  id: str = Field(..., max_length=6)
+  role: RoleType
+  hint: str = Field(..., max_length=120)
+  formula: str = Field(..., max_length=200)
+  concept: str = Field(..., max_length=40)
+  produces_values: list[ProducesEntry] = Field(default_factory=list, max_length=2)
+  whys: list[WhyEntry] = Field(default_factory=list, max_length=2)
+
+
+class SolutionStepV2(BaseModel):
+  """Pass 1 + Pass 2 병합 결과 — DB 저장용 step.
+
+  `schema_version: 2` 와 함께 저장된다. 기존 SolutionStep (v1) 과 공존 가능 —
+  DeepTutor/CMS 는 필드 유무로 분기.
+  """
+  id: str = Field(..., max_length=6)
+  step: int
+  role: Optional[RoleType] = None
+  hint: str
+  formula: str
+  concept: str
+  produces: list[ProducesEntry] = Field(default_factory=list)
+  uses: list[str] = Field(default_factory=list)
+  whys: list[WhyEntry] = Field(default_factory=list)
+
 
 class CommonMistake(BaseModel):
   text: str         # 한국어, 학생 UI 노출
@@ -67,11 +112,12 @@ class TagResult(BaseModel):
 
 
 class TagResultMeta(BaseModel):
-  """Call A 전용 — solution_steps 제외한 메타 정보.
-
-  gemma4 가 한 번에 steps 까지 뱉다가 repetition 루프에 빠지는 문제 완화 (2026-04-22).
-  """
+  """Call A 전용 — solution_steps 제외한 메타 정보."""
   difficulty_score: int = Field(ge=1, le=10)
+  correct_rate: Optional[float] = Field(
+    default=None, ge=0, le=100,
+    description="해설에 적힌 정답률(%). 이미지에 정답률이 보이면 그 숫자, 없으면 null."
+  )
   concept_tags: list[str] = Field(default_factory=list, min_length=1)
   skill_tags: list[str] = Field(default_factory=list, min_length=1)
   answer_type: Optional[str] = None
@@ -86,10 +132,15 @@ class SolutionStepsOnly(BaseModel):
 
 
 class _SingleStepPayload(BaseModel):
-  """per-step loop 한 호출의 출력 — step 하나 (필드명 _ 접두사로 단일용 구분)."""
-  hint: str
-  formula: str
-  concept: str
+  """per-step loop 한 호출의 출력 — step 하나 (필드명 _ 접두사로 단일용 구분).
+
+  max_length 는 ollama format=schema_json 에서 **생성 단계 강제** 로 작동 —
+  모델이 길게 쓰려다 끊기는 게 아니라 애초에 짧게 맞춰 쓴다.
+  gemma4 의 한국어 BPE 반복·풀이 장황화 억제 효과.
+  """
+  hint: str = Field(..., max_length=80)
+  formula: str = Field(..., max_length=200)
+  concept: str = Field(..., max_length=40)
 
 
 class SingleStepResult(BaseModel):
@@ -146,6 +197,7 @@ PIECEWISE FUNCTIONS (구간별 함수):
 _TAGGING_PROMPT_WITH_SOLUTION = """You are analyzing a Korean high school math solution image.
 
 Rules:
+- correct_rate: 해설 이미지에 "정답률"(예: "정답률 34.5%", "정답률: 72%") 이 적혀 있으면 그 숫자(0~100)를 그대로. 없으면 null. 추측하지 말 것 — 이미지에 명시된 경우만.
 - difficulty_score: integer 1-10. 문제 번호는 참고만 할 것. 구조적 특징으로 판단한다.
     1-2 (very_easy): 공식 1개 직접 대입으로 즉시 답. (예: 로그 성질 1번 적용, 이차함수 꼭짓점)
     3-4 (easy): 2~3단 계산. 개념 1개 안에서 해결. (예: 인수분해 후 해, 미분 1회 후 극값)
@@ -188,6 +240,7 @@ You are given TWO images in order:
 Use BOTH images together: the problem tells you what is being asked and which given conditions matter; the solution tells you which techniques were actually used. Tags must reflect both the problem's intent and the solution's method.
 
 Rules:
+- correct_rate: 해설 이미지에 "정답률"(예: "정답률 34.5%", "정답률: 72%") 이 적혀 있으면 그 숫자(0~100)를 그대로. 없으면 null. 추측하지 말 것 — 이미지에 명시된 경우만.
 - difficulty_score: integer 1-10. 문제 번호는 참고만 할 것. 구조적 특징으로 판단한다.
     1-2 (very_easy): 공식 1개 직접 대입으로 즉시 답. (예: 로그 성질 1번 적용, 이차함수 꼭짓점)
     3-4 (easy): 2~3단 계산. 개념 1개 안에서 해결. (예: 인수분해 후 해, 미분 1회 후 극값)
@@ -312,45 +365,236 @@ _STEPS_LOOP_PROMPT_TEMPLATE = """You are a math tutor assistant analyzing a Kore
 
 Your task: generate EXACTLY ONE next step of the solution hints, OR signal that no more steps are needed.
 
-PROGRESSIVE DIFFICULTY (STRICT):
-- 초반 step: 추상적 질문/방향 — "어떤 개념/조건에 주목해야 할까?"
-- 중반 step: 핵심 관계식 하나 제시, 방향 구체화
-- 마지막 step: 핵심 계산식 또는 최종 결론을 직접 제시
-- 이번 step 은 이미 만든 이전 step 들보다 더 구체적이어야 한다.
+세 필드 역할 (삼분할 엄수 — 절대 섞지 마라):
+  hint    = "무엇을 할지" 한 문장 질문 or 지시. **식 포함 금지** (식은 formula 로).
+            ✅ "두 점의 좌표를 어떻게 표현할 수 있을까?"
+            ✅ "조건 AB = CD 를 이용해 k 와 m 의 관계를 찾아보자."
+            ❌ "\\\\(a = 2^k\\\\) 를 대입하여 \\\\(a + \\\\frac{1}{a} = ...\\\\) 로 정리하자" (식이 hint 에 섞임)
+            최대 60자. 풀이 과정 서술·계산 결과 나열 금지.
+  formula = 이 step 에서 **새로 세운 핵심 식 1개**. 반드시 \\( 로 시작 \\) 로 끝.
+            여러 식을 이어붙이지 마라. 중간 계산 나열 금지.
+            ✅ "\\\\(a + \\\\frac{1}{a} = 2 + \\\\frac{1}{a}\\\\)"
+            ❌ "\\\\(a = 2^k, a + \\\\frac{1}{a} = 2^m + 2^{-m}, a = 3\\\\)" (3개 식 병렬 금지)
+  concept = 이 step 이 짚는 개념 이름 **1~3단어 명사구만**. 풀이 동작 설명 금지.
+            ✅ "함수의 연속", "인수분해", "로그의 밑 변환"
+            ❌ "방정식의 변수 변환과 대입입력" (너무 서술적)
+            ❌ "점의 좌표와 조건식의 활용" (동작 설명)
+            영어 금지, "null" 문자열 금지.
 
-CRITICAL — ORDER: 이번 step 은 해설 이미지에서 이전 step 들 다음에 오는 논리 단위여야 한다. 앞 step 이 이미 짚은 내용을 중복하거나, 이미지에 없는 내용을 임의로 추가하지 마라.
+STEP 진행 원칙 (STRICT):
+- 한 step = 해설 이미지의 **한 논리 단위**. 같은 조작을 두 번 쪼개지 마라.
+- 이번 step 의 concept 는 **이전 step 들과 달라야 한다**. 같은 개념을 다른 식으로 반복 금지.
+- 이번 step 의 hint 가 이전 hint 의 유사 재진술이면 done=true 로 끝내라.
+- 권장 step 수는 3~6개. 한국 고등수학은 보통 이 범위에서 끝난다. 7개 넘어가면 조작을 쪼개고 있다는 신호.
 
 STOP CONDITION (done=true 반환):
-- 해설의 모든 논리 단계가 이미 steps 로 생성되어 더 이상 추가할 step 이 없을 때
-- 마지막 step 이 최종 결론 (답·결과·마무리) 을 이미 담고 있을 때
+- 최종 답·결론이 이미 직전 step 에 등장했을 때
+- 해설 이미지의 논리 단위를 모두 소화했을 때
+- 이번에 만들 step 이 이전과 동일 관점의 반복일 때 (억지로 새 step 만들지 마라)
 done=true 이면 step 필드는 null 또는 생략.
-
-세 필드 (done=false 일 때 모두 필수, null 금지):
-  hint: 학생에게 직접 보여주는 힌트 문장. 한국어 서술. 수식은 \\( ... \\) 인라인 허용.
-        영어 단어 단독 금지. "case 1:" / "step:" / "final result" 같은 메타 라벨 시작 금지.
-  formula: 이 step 의 핵심 식. 반드시 \\( 로 시작 \\) 로 종료. null 금지.
-           ✅ 올바름: "\\\\(f(k) = k\\\\)"  ❌ 금지: "f(k) = k" (래퍼 없음)
-           수식이 없는 step 이라도 핵심 조건·결론을 식으로 채운다.
-  concept: 이 step 이 짚는 개념/정리 이름. 한국어 명사구 1~3단어 ("함수의 연속", "인수분해", "적분 부호 조건").
-           영어 금지. null 금지. "null" 문자열 금지.
 
 """ + _MATH_RULES_BLOCK + """
 
 이전 step 들 (지금까지 누적):
 __PREV_STEPS_BLOCK__
 
-Reference — 이번이 첫 step 인 경우 well-formed 예시:
-{"done": false, "step": {"hint": "\\\\(g(x)\\\\) 가 실수 전체에서 미분가능하려면 \\\\(x = k\\\\) 에서 어떤 조건이 필요할까?", "formula": "\\\\(\\\\lim_{x \\\\to k^-} g(x) = \\\\lim_{x \\\\to k^+} g(x) = g(k)\\\\)", "concept": "함수의 연속과 미분가능"}}
+Reference — 첫 step 예시 (hint 는 질문형, formula 는 식 1개, concept 는 명사구):
+{"done": false, "step": {"hint": "\\\\(g(x)\\\\) 가 실수 전체에서 미분가능하려면 \\\\(x=k\\\\) 에서 어떤 조건이 필요할까?", "formula": "\\\\(\\\\lim_{x \\\\to k^-} g(x) = \\\\lim_{x \\\\to k^+} g(x) = g(k)\\\\)", "concept": "함수의 연속과 미분가능"}}
 
-Reference — 해설이 끝나서 더 이상 step 이 없는 경우:
+Reference — 해설 끝:
 {"done": true}
 
 부정 예시 (절대 금지):
-  ❌ {"done": false, "step": {"hint": "factorization을 이용하여 ...", "concept": "product rule"}}
-  ❌ {"done": false, "step": {"hint": "case 1: a<0 인 경우 ...", "concept": "case 2 calculation"}}
-  ❌ 이전 step 과 동일한 hint 또는 concept 반복
+  ❌ hint 에 식 대입/계산 과정 나열 ("a = 2^k 를 대입하여 정리하자")
+  ❌ formula 에 중간 계산 여러 개 병렬 ("a = 2^k, a + 1/a = ..., a = 3")
+  ❌ 이전 step 과 같은 concept 재사용 ("방정식의 변수 변환" 연속 2회)
+  ❌ concept 가 서술형 ("수식의 정리와 값의 결정")
 
 Output valid JSON only — 최상위 키는 오직 `done` 과 (선택) `step`. No prose, no markdown fences."""
+
+
+# ── 2-Pass 프롬프트 (2026-04-23, schema v2) ─────────────────────────────────
+#
+# Pass 1: 해설 이미지 → step 의 라벨 관계 구조만 (hint/formula/concept 없음).
+#         목적: Pass 2 에서 모델이 라벨을 즉흥으로 만들거나 중복 정의하는 걸 원천 차단.
+# Pass 2: 스켈레톤 고정 상태에서 각 step 의 내용 + whys + produces 값 채움.
+
+_PASS1_SKELETON_PROMPT = """You are a math tutor assistant analyzing a Korean high school math problem and its solution image.
+
+Your task: output the **STRUCTURE ONLY** of the solution — how many steps, each step's logical role, and the dependency graph between them. DO NOT write any hints, formulas, or concepts. Those come in a later pass.
+
+WHAT TO OUTPUT:
+- `steps`: ordered list of steps matching the solution image top-to-bottom.
+- Each step has:
+  - `id`: short machine id, format exactly "s1", "s2", "s3", ... in order.
+  - `step`: integer step number (1-based, matches id).
+  - `role`: one of five logical roles (see ROLE section below).
+  - `produces`: list of labels (format "r1", "r2", ...) that THIS step newly derives. 0~2 labels per step. Use a NEW label if this step produces a named intermediate result the solution later references; use [] if this step only manipulates previous results without introducing a new named quantity.
+  - `uses`: list of labels that THIS step references from EARLIER steps' `produces`. 0~3 labels per step. Must only reference labels that appear in earlier steps' produces.
+
+ROLE (new mandatory field — pick exactly one of these five):
+- `condition_analysis`: 주어진 조건·정의를 해석해 함수/수열/집합의 성질·범위·관계를 파악.
+- `equation_setup`: 새 식·함수·대수구조를 세우거나 변형 (치환, 일반형 도출, 정의 도입).
+- `case_split`: 경우를 나누거나 부호·기호를 결정 (절댓값 분리, 구간 나눔, 부호 판정).
+- `computation`: 기계적 대입·전개·수치 계산·방정식 해 구하기.
+- `conclusion`: 결과를 종합해 문제의 최종 답을 도출.
+
+ROLE ASSIGNMENT PRINCIPLES (general math, not problem-specific):
+- 한 step 은 정확히 한 role. 두 역할이 섞이면 step 을 분리하라.
+- 동일 role 이 3 step 이상 연속되면 구조가 잘못된 것이다. 묶어서 하나로 만들거나 중간에 다른 role (보통 condition_analysis 나 equation_setup) 을 끼워 넣어라.
+- `conclusion` 은 풀이 전체에서 마지막 1개만 — 중간에 "소결론" 이라도 conclusion 으로 라벨링하지 마라.
+- role 분포는 대체로 condition_analysis 1~2 + equation_setup 1~2 + computation 1~3 + conclusion 1 이 정상. case_split 는 문제에 경우 분리가 실제로 있을 때만.
+
+LABEL POLICY (STRICT):
+- Labels are strictly sequential: r1, r2, r3, ... Assign a new label only when the step derives a *referenceable intermediate result* (e.g., a constraint like "㉠", "㉡", a derived function definition, a specific value).
+- A step can produce 0 labels if it's pure computation that the solution doesn't later point back to.
+- `uses` must ONLY contain labels already produced by earlier steps. Never forward-reference.
+- Total label count is typically 2~6 across the whole solution. Not every step produces a label.
+
+STEP COUNT:
+- Match the logical units in the solution image. Typical Korean high-school solutions have 3~7 steps.
+- Do not over-split trivial arithmetic into separate steps.
+- Do not merge distinct logical operations into one step.
+
+EXAMPLE (삼차함수+적분부등식 류 — role 배정 시범):
+{
+  "steps": [
+    {"id": "s1", "step": 1, "role": "condition_analysis", "produces": ["r1"], "uses": []},
+    {"id": "s2", "step": 2, "role": "condition_analysis", "produces": ["r2"], "uses": []},
+    {"id": "s3", "step": 3, "role": "equation_setup",     "produces": ["r3"], "uses": ["r1", "r2"]},
+    {"id": "s4", "step": 4, "role": "condition_analysis", "produces": ["r4"], "uses": []},
+    {"id": "s5", "step": 5, "role": "case_split",         "produces": ["r5"], "uses": ["r4"]},
+    {"id": "s6", "step": 6, "role": "computation",        "produces": ["r6"], "uses": ["r3", "r5"]},
+    {"id": "s7", "step": 7, "role": "conclusion",         "produces": [],     "uses": ["r6"]}
+  ]
+}
+(역할 분포 예시 — condition_analysis 3, equation_setup 1, case_split 1, computation 1, conclusion 1. 이는 한 예시일 뿐이며 실제 문제에선 풀이 구조에 맞게 자유롭게 배정하라.)
+
+Output valid JSON only. ONE top-level key: `steps`. No prose, no markdown fences."""
+
+
+_PASS2_FILL_PROMPT_TEMPLATE = """You are a math tutor assistant. The solution image and its skeleton structure are given. Your task: fill in the content of EXACTLY ONE step.
+
+SKELETON (already fixed — do NOT change ids or labels):
+__SKELETON_BLOCK__
+
+ALREADY FILLED STEPS (for continuity, do not repeat):
+__FILLED_BLOCK__
+
+TARGET STEP TO FILL NOW: __TARGET_ID__
+  role:            __TARGET_ROLE__
+  produces labels: __TARGET_PRODUCES__
+  uses labels:     __TARGET_USES__
+
+FIELDS TO OUTPUT:
+  id              = "__TARGET_ID__" (copy as-is)
+  role            = "__TARGET_ROLE__" (copy as-is — do not change)
+  hint            = One sentence telling the student WHAT to do / think about. Korean. 수식은 \\( ... \\) 인라인 허용. ≤120자. 식 나열 금지.
+  formula         = The NEW key equation this step sets up. Must start with \\( and end with \\). ONE equation (or one cases block). ≤200자.
+  concept         = 1~3 단어 한국어 명사구 (e.g., "함수의 연속", "적분 부호 조건"). ≤40자.
+  produces_values = For each label in TARGET's produces, give { "label": "r?", "value": "<short math or condition>" }. value 는 짧은 수식/조건 (예: "f(k)=k, f'(k)=2" 또는 "0 ≤ k ≤ 2"). 길이 ≤200자.
+  whys            = 0~2개. 학생이 막힐 법한 "왜 X?" 서브질문만. 각 { "question": "왜 ...?", "reason": "..." }. 없으면 빈 배열.
+
+ROLE GUIDANCE (수학 풀이 일반 원칙 — target step 의 role 에 맞춰 hint·formula·whys 톤을 결정하라):
+- `condition_analysis`: hint = "어떤 조건을 어떤 성질·도구로 해석할지" 안내. formula = 해석 대상 조건식. whys 유도 질문 1~2개 권장.
+- `equation_setup`: hint = "무엇을 어떻게 세우는지". formula = 새로 도입하는 식 1개. whys = 치환·정의 선택 이유.
+- `case_split`: hint = 분기 기준과 갯수 명시. formula = 분기 조건식 또는 cases block. whys = 왜 이 기준으로 나누는지.
+- `computation`: hint = 짧은 한 문장 ("X 를 Y 에 대입해 Z 를 얻는다"). formula = 계산 결과식. whys = 보통 빈 배열.
+- `conclusion`: hint = 최종적으로 무엇을 합산·선택하는지. formula = 답에 이르는 마무리 식. whys = 빈 배열.
+
+RELATIONSHIP TO PRIOR STEPS:
+- 직전 step 과 role 이 같다면 관점을 반드시 바꿔라 — 다른 조건, 다른 값, 다른 케이스를 다루어야 한다. 같은 문장 복붙 금지.
+- uses 에 라벨이 있으면 hint 에서 그 라벨의 value 를 "앞서 얻은 \\(...\\) 를 이용해" 형태로 인용. 단순 "이전 step 의 결과" 같은 모호한 언급 금지.
+
+WHYS POLICY:
+- whys 는 학생이 "이 조건이 왜 나왔지?" 헷갈릴 지점에만. 모든 step 에 억지로 만들지 마라.
+- 좋은 예: "왜 이 구간에서 직선 부분만 체크해도 되는가?" "왜 좌미분계수 = 우미분계수?"
+- 나쁜 예: "왜 더하면 이 값이 되는가?" (trivial 계산 설명)
+- question 은 반드시 물음표 포함, reason 은 한국어 한 문장.
+
+""" + _MATH_RULES_BLOCK + """
+
+Output valid JSON only — keys: id, role, hint, formula, concept, produces_values, whys. No prose, no markdown fences."""
+
+
+def _format_skeleton_block(skeleton: Skeleton) -> str:
+  """Pass 2 프롬프트에 넣을 스켈레톤 블록 (읽기 쉬운 한 줄 요약)."""
+  lines: list[str] = []
+  for s in skeleton.steps:
+    produces = ",".join(s.produces) if s.produces else "-"
+    uses = ",".join(s.uses) if s.uses else "-"
+    lines.append(f"  {s.id} (step {s.step}, {s.role}): produces=[{produces}] uses=[{uses}]")
+  return "\n".join(lines)
+
+
+def _dedupe_skeleton(skeleton: Skeleton) -> Skeleton:
+  # Pass 1 (gemma4) repetition 방어: 두 가지 규칙으로 step 병합, 마지막 상한 적용.
+  # (a) produces/uses 가 직전과 완전 동일 → drop. (b) 같은 role 이 3+ 연속이면서 produces=[] 이고 uses 가 비슷 → 2번째부터 drop.
+  max_steps = int(os.environ.get("CALL_B_MAX_SKELETON_STEPS", "8"))
+
+  def _sig(s: SkeletonStep) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    return (tuple(s.produces or []), tuple(s.uses or []))
+
+  kept: list[SkeletonStep] = []
+  dropped_ids: list[str] = []
+  prev_sig: Optional[tuple[tuple[str, ...], tuple[str, ...]]] = None
+  role_run_len = 0  # 같은 role 이 몇 개 연속으로 나왔는지
+  prev_role: Optional[str] = None
+  for s in skeleton.steps:
+    cur_sig = _sig(s)
+    if prev_sig is not None and cur_sig == prev_sig:
+      dropped_ids.append(s.id)
+      continue
+    # role 연속 체크: 3번째부터 produces 비어있고 uses 도 유사하면 drop
+    if s.role == prev_role:
+      role_run_len += 1
+    else:
+      role_run_len = 1
+    if role_run_len >= 3 and not s.produces and prev_sig and set(s.uses or []) <= set(prev_sig[1]):
+      dropped_ids.append(s.id)
+      role_run_len -= 1  # drop 했으니 run 카운트 되돌림
+      continue
+    kept.append(s)
+    prev_sig = cur_sig
+    prev_role = s.role
+
+  if len(kept) > max_steps:
+    dropped_ids.extend(k.id for k in kept[max_steps:])
+    kept = kept[:max_steps]
+
+  renumbered: list[SkeletonStep] = []
+  for idx, s in enumerate(kept, start=1):
+    renumbered.append(SkeletonStep(
+      id=f"s{idx}",
+      step=idx,
+      role=s.role,
+      produces=list(s.produces or []),
+      uses=list(s.uses or []),
+    ))
+
+  if dropped_ids:
+    role_dist = ",".join(f"{r.role}:{i+1}" for i, r in enumerate(renumbered))
+    logger.info(f"[Call B Pass1 dedupe] before={len(skeleton.steps)} after={len(renumbered)} dropped={dropped_ids} roles=[{role_dist}]")
+
+  return Skeleton(steps=renumbered)
+
+
+def _format_filled_block(filled: list[dict]) -> str:
+  """Pass 2 프롬프트에 넣을 이미 채워진 step 들의 요약."""
+  if not filled:
+    return "(없음 — 이번이 첫 step 이다)"
+  lines: list[str] = []
+  for f in filled:
+    fid = f.get("id")
+    role = f.get("role") or "?"
+    hint = (f.get("hint") or "").strip()
+    if len(hint) > 80:
+      hint = hint[:80] + "…"
+    formula = (f.get("formula") or "").strip()
+    produces = f.get("produces") or []
+    prod_str = ",".join(f"{p.get('label')}={p.get('value')!r}" for p in produces) if produces else "-"
+    lines.append(f"  {fid} ({role}): hint={hint!r} formula={formula!r} produces=[{prod_str}]")
+  return "\n".join(lines)
 
 
 def _format_previous_steps_block(steps: list[dict]) -> str:
@@ -749,6 +993,7 @@ def extract_tags_from_image(
   skill_embeddings: dict | None = None,
   bug_embeddings: dict | None = None,
   problem_image_path: str | None = None,
+  correct_rate: float | None = None,
 ) -> dict:
   """단일 이미지(또는 문제+해설 2장)에서 온톨로지 데이터 추출.
 
@@ -757,6 +1002,8 @@ def extract_tags_from_image(
     problem_image_path: has_solution=True 일 때 함께 참조할 문제 이미지 (선택).
       전달되면 [problem_image_path, image_path] 순서로 VL 에 넘기며,
       프롬프트에서 "Image 1=문제, Image 2=해설" 로 명시된다.
+    correct_rate: 문항 정답률(0~100%). 주어지면 GPT 의 난이도 추정을 버리고
+      구간 매핑(difficulty_resolver)으로 difficulty_score 를 결정한다.
 
   Returns:
     {
@@ -794,6 +1041,7 @@ def extract_tags_from_image(
     "unit": "",
     "unit_score": 0.0,
     "difficulty_score": 5,
+    "correct_rate": correct_rate,
     "concept_tags": [],
     "skill_tags": [],
     "solution_summary": None,
@@ -819,70 +1067,88 @@ def extract_tags_from_image(
       except Exception as re_e:
         logger.warning(f"[Call A] 재시도 실패 (원본 결과 유지): {re_e}")
 
-    _d = max(1, min(10, int(meta.difficulty_score)))
+    # 정답률 출처 우선순위: 외부 전달(correct_rate 인자) > 해설에서 VL 이 읽은 값(meta.correct_rate).
+    # (해설 PDF 에 정답률이 박혀 있으므로 보통 meta.correct_rate 로 채워진다.)
+    effective_correct_rate = correct_rate if correct_rate is not None else meta.correct_rate
 
-    # ── Call B: per-step loop (옵션 C, 2026-04-23) ──
-    # 매 호출마다 이미지 + 누적 steps 요약을 넣고 "다음 step 하나" 만 생성.
-    # 호출 출력이 짧아서 gemma4 repetition 폭주가 거의 사라짐.
-    # MAX_STEPS 안전장치로 무한 루프 방지 (해설에 steps 20개 넘는 경우 거의 없음).
-    MAX_STEPS = int(os.environ.get("CALL_B_MAX_STEPS", "15"))
-    _PER_STEP_ATTEMPTS = [(0.1, 512), (0.25, 768)]  # 짧은 출력이라 2회면 충분
+    # 난이도: 정답률 있으면 구간매핑(GPT 추정 버림), 없으면 GPT 추정. (2026-06-19)
+    _d = difficulty_resolver.resolve_difficulty(effective_correct_rate, meta.difficulty_score)
+    if effective_correct_rate is not None:
+      logger.info(f"[난이도] correct_rate={effective_correct_rate}% → difficulty_score={_d} "
+                  f"(GPT 추정 {meta.difficulty_score} 무시)")
+
+    # ── Call B: 2-Pass (스키마 v2) — VL=OpenAI 단일(2026-06-19) ──
+    # Pass 1: 스켈레톤 (step 수 + 라벨 관계 DAG, 내용 없음). 1호출.
+    # Pass 2: 각 step 의 내용(hint/formula/concept/produces_values/whys) 채움. N호출.
+    # (구 gemma4 폭주 방어용 attempts_scope/provider 분기는 OpenAI 단일화로 제거.)
     steps_list: list[SolutionStep] = []
+    steps_v2: list[dict] = []   # 새 schema (id/produces/uses/whys 포함) — DB 저장용
     if has_solution:
-      call_b_provider = _route_call_b_provider(_d)
-      logger.info(f"[Call B] difficulty={_d} provider={call_b_provider} mode=per_step image={image_path}")
+      logger.info(f"[Call B] difficulty={_d} provider=openai mode=2pass image={image_path}")
 
-      accumulated: list[dict] = []
+      # ── Pass 1: 스켈레톤 ──
+      skeleton: Optional[Skeleton] = None
+      try:
+        skeleton = call_vl(vl_image_arg, _PASS1_SKELETON_PROMPT, Skeleton, None)
+        _role_counter = Counter(s.role for s in skeleton.steps)
+        logger.info(f"[Call B Pass1] skeleton steps={len(skeleton.steps)} "
+                    f"labels={[s.produces for s in skeleton.steps]} "
+                    f"role_dist={dict(_role_counter)}")
+      except Exception as se:
+        logger.warning(f"[Call B Pass1] 실패 — Pass2 생략 [{image_path}]: {se}")
 
-      def _call_single_step(prev_block: str) -> SingleStepResult:
-        # .format() 은 _MATH_RULES_BLOCK 안의 single-brace (\lim_{x \to 0} 등) 와 충돌 → replace 로 치환.
-        prompt = _STEPS_LOOP_PROMPT_TEMPLATE.replace("__PREV_STEPS_BLOCK__", prev_block)
-        if call_b_provider == "openai":
-          return call_vl(vl_image_arg, prompt, SingleStepResult, None, provider="openai")
-        with attempts_scope(_PER_STEP_ATTEMPTS):
-          return call_vl(vl_image_arg, prompt, SingleStepResult, None)
+      if skeleton and skeleton.steps:
+        skeleton = _dedupe_skeleton(skeleton)
 
-      seen_hints: set[str] = set()
-      for step_idx in range(1, MAX_STEPS + 1):
-        prev_block = _format_previous_steps_block(accumulated)
-        try:
-          res: SingleStepResult = _call_single_step(prev_block)
-        except Exception as se:
-          logger.warning(f"[Call B] step {step_idx} 호출 실패 → 루프 종료: {se}")
-          break
+      # ── Pass 2: per-step 채우기 ──
+      if skeleton and skeleton.steps:
+        skeleton_block = _format_skeleton_block(skeleton)
+        filled: list[dict] = []
 
-        if res.done:
-          logger.info(f"[Call B] done=true 수신 (생성된 steps={len(accumulated)})")
-          break
+        def _call_fill(target: SkeletonStep, filled_block: str) -> FilledStep:
+          prompt = (
+            _PASS2_FILL_PROMPT_TEMPLATE
+            .replace("__SKELETON_BLOCK__", skeleton_block)
+            .replace("__FILLED_BLOCK__", filled_block)
+            .replace("__TARGET_ID__", target.id)
+            .replace("__TARGET_ROLE__", target.role)
+            .replace("__TARGET_PRODUCES__", ",".join(target.produces) if target.produces else "(none)")
+            .replace("__TARGET_USES__", ",".join(target.uses) if target.uses else "(none)")
+          )
+          return call_vl(vl_image_arg, prompt, FilledStep, None)
 
-        payload = res.step
-        if payload is None:
-          logger.warning(f"[Call B] step {step_idx} done=false 인데 step 누락 → 루프 종료")
-          break
+        for sk_step in skeleton.steps:
+          filled_block = _format_filled_block(filled)
+          try:
+            fs: FilledStep = _call_fill(sk_step, filled_block)
+          except Exception as fe:
+            logger.warning(f"[Call B Pass2] {sk_step.id} 호출 실패 → 건너뜀: {fe}")
+            continue
 
-        # 이전 step 과 hint 완전 동일하면 중복 생성 신호 → 종료
-        hint_key = (payload.hint or "").strip()
-        if hint_key and hint_key in seen_hints:
-          logger.warning(f"[Call B] step {step_idx} hint 중복 감지 → 루프 종료")
-          break
-        seen_hints.add(hint_key)
+          produces_dicts = [{"label": p.label, "value": p.value} for p in fs.produces_values]
+          whys_dicts = [{"question": w.question, "reason": w.reason} for w in fs.whys]
+          filled.append({
+            "id": sk_step.id,
+            "step": sk_step.step,
+            "role": sk_step.role,
+            "hint": fs.hint,
+            "formula": fs.formula,
+            "concept": fs.concept,
+            "produces": produces_dicts,
+            "uses": list(sk_step.uses),
+            "whys": whys_dicts,
+          })
 
-        accumulated.append({
-          "step": step_idx,
-          "hint": payload.hint,
-          "formula": payload.formula,
-          "concept": payload.concept,
-        })
+        steps_v2 = filled
+        # v1 호환용 얇은 뷰 (아래 concept 정규화/저장 흐름과 호환)
+        steps_list = [
+          SolutionStep(step=f["step"], hint=f["hint"], formula=f["formula"], concept=f["concept"])
+          for f in filled
+        ]
+        if not steps_list:
+          logger.warning(f"[Call B Pass2] 모든 step 실패 [{image_path}] — Call A 메타만 유지")
       else:
-        logger.warning(f"[Call B] MAX_STEPS={MAX_STEPS} 도달 — 루프 강제 종료")
-
-      # accumulated(dict) → SolutionStep(Pydantic) 으로 변환. 기존 아래 로직 호환.
-      steps_list = [
-        SolutionStep(step=a["step"], hint=a["hint"], formula=a["formula"], concept=a["concept"])
-        for a in accumulated
-      ]
-      if not steps_list:
-        logger.warning(f"[Call B] 생성된 step 0개 [{image_path}] — 빈 상태로 Call A 결과만 유지")
+        logger.warning(f"[Call B] skeleton 비어 있음 [{image_path}] — steps 없이 Call A 만 반환")
 
     # 병합 — 기존 흐름 호환용 TagResult-shape dict 조립
     class _MergedResult:
@@ -900,20 +1166,44 @@ def extract_tags_from_image(
     concept_tags = normalize_tags(result.concept_tags, "concept", concept_embeddings, threshold=0.65)
     skill_tags = normalize_tags(result.skill_tags, "skill", skill_embeddings, threshold=0.65)
 
-    difficulty_score = max(1, min(10, int(result.difficulty_score)))
+    # _d 는 정답률 우선으로 이미 결정됨(정답률 있으면 구간매핑, 없으면 GPT). 저장도 _d 사용.
+    difficulty_score = _d
 
     pitfall = result.pitfall.strip() if isinstance(result.pitfall, str) else None
     solution_summary = result.solution_summary
 
-    solution_steps = [
-      {
-        "step": s.step,
-        "hint": s.hint,
-        "formula": s.formula,
-        "concept": s.concept,
-      }
-      for s in result.solution_steps
-    ]
+    # solution_steps — v2 (produces/uses/whys) 가 있으면 v2, 없으면 v1 형태로 저장
+    if steps_v2:
+      # step 번호 기준으로 매칭해 v2 의 새 필드 병합
+      _v2_by_step = {f["step"]: f for f in steps_v2}
+      solution_steps = []
+      for s in result.solution_steps:
+        v2 = _v2_by_step.get(s.step)
+        if v2 is not None:
+          solution_steps.append({
+            "id": v2.get("id"),
+            "step": s.step,
+            "hint": s.hint,
+            "formula": s.formula,
+            "concept": s.concept,
+            "produces": v2.get("produces", []),
+            "uses": v2.get("uses", []),
+            "whys": v2.get("whys", []),
+          })
+        else:
+          solution_steps.append({
+            "step": s.step, "hint": s.hint, "formula": s.formula, "concept": s.concept,
+          })
+    else:
+      solution_steps = [
+        {
+          "step": s.step,
+          "hint": s.hint,
+          "formula": s.formula,
+          "concept": s.concept,
+        }
+        for s in result.solution_steps
+      ]
     common_mistakes = _normalize_bug_ids(result.common_mistakes, bug_embeddings)
 
     unit = ""
@@ -975,27 +1265,47 @@ def extract_tags_from_image(
 
     solution_summary = _nm(solution_summary)
     pitfall = _nm(pitfall)
-    solution_steps = [
-      _sanitize_step({
+    def _sanitize_full(s: dict) -> dict:
+      """v1(step/hint/formula/concept) 만 _sanitize_step 로 돌리고,
+      v2 필드(id/produces/uses/whys) 는 _nm 만 적용해 그대로 보존."""
+      core = _sanitize_step({
         "step": s["step"],
         "hint": _nm(s.get("hint", "")),
         "formula": _nm(s.get("formula")) if s.get("formula") else None,
         "concept": _nm(s.get("concept")) if s.get("concept") else None,
       })
-      for s in solution_steps
-    ] if solution_steps else solution_steps
+      if "id" in s:
+        core["id"] = s["id"]
+      if "role" in s:
+        core["role"] = s["role"]
+      if "produces" in s:
+        core["produces"] = [
+          {"label": p.get("label"), "value": _nm(p.get("value") or "")}
+          for p in (s.get("produces") or [])
+        ]
+      if "uses" in s:
+        core["uses"] = list(s.get("uses") or [])
+      if "whys" in s:
+        core["whys"] = [
+          {"question": _nm(w.get("question") or ""), "reason": _nm(w.get("reason") or "")}
+          for w in (s.get("whys") or [])
+        ]
+      return core
+    solution_steps = [_sanitize_full(s) for s in solution_steps] if solution_steps else solution_steps
     common_mistakes = [{"bug_id": m.get("bug_id", ""), "text": _nm(m.get("text", ""))} for m in common_mistakes] if common_mistakes else common_mistakes
 
     tag_result = {
       "unit": unit,
       "unit_score": unit_score,
       "difficulty_score": difficulty_score,
+      "correct_rate": effective_correct_rate,  # 해설에서 읽은(또는 외부 전달) 정답률 — DB 저장용
       "concept_tags": concept_tags,
       "skill_tags": skill_tags,
       "solution_summary": solution_summary,
       "pitfall": pitfall,
       "solution_steps": solution_steps,
       "common_mistakes": common_mistakes,
+      "schema_version": SCHEMA_VERSION if steps_v2 else 1,
     }
 
     if os.environ.get("TAG_VALIDATOR_ENABLED", "true") == "true":
@@ -1035,12 +1345,14 @@ def tag_all_solutions(
   progress_callback=None,
   numbers_filter: set[int] | None = None,
   problem_images: dict[int, str] | None = None,
+  correct_rates: dict[int, float] | None = None,
 ) -> dict:
   """모든 해설 이미지 일괄 태깅.
 
   Args:
     solution_images: {번호: 해설 이미지 로컬 경로}
     problem_images: {번호: 문제 이미지 로컬 경로} — 있으면 문제+해설을 함께 VL 에 전달
+    correct_rates: {번호: 정답률(0~100)} — 있으면 그 번호는 난이도를 정답률 구간매핑으로 결정
 
   Returns:
     {
@@ -1071,6 +1383,7 @@ def tag_all_solutions(
 
     logger.info(f"태깅 중: {num}번 ({i+1}/{total})")
     problem_path = problem_images.get(num) if problem_images else None
+    num_correct_rate = correct_rates.get(num) if correct_rates else None
     try:
       result = extract_tags_from_image(
         img_path,
@@ -1081,6 +1394,7 @@ def tag_all_solutions(
         skill_embeddings=skill_embeddings,
         bug_embeddings=bug_embeddings,
         problem_image_path=problem_path,
+        correct_rate=num_correct_rate,
       )
     except Exception as e:
       logger.error(f"[tag_all_solutions] {num}번 실패 (skip, 다음 번호로 진행): {e}")

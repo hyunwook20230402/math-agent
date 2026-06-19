@@ -40,19 +40,17 @@
 │    │                                                              │
 │    ▼                                                              │
 │  VL 태깅 (solution_tagger.extract_tags_from_image)               │
-│    - Call A (메타): vl_providers.call_vl() → 항상 ollama gemma4   │
-│    - Call B (steps): 어려움(≥THRESHOLD) → OpenAI gpt-5.4-mini     │
-│                       그 외 → ollama gemma4                       │
+│    - Call A (메타): vl_providers.call_vl() → OpenAI               │
+│    - Call B (steps): 2-Pass(스켈레톤 + per-step) → OpenAI         │
 │    - tag_normalizer 로 concept/skill canonical 매칭               │
 │    - unit_matcher 로 bge-m3 cosine → units leaf 매핑             │
 │    │                                                              │
 │    ▼                                                              │
 │  tag_validator (3-layer 검증)                                     │
 │    - Layer 1: Rule 기반 (필드 누락, 영어 혼입, unit_score < 0.5)  │
-│    - Layer 2: LLM 재검증 (이미지 + 태깅 결과 cross-check)         │
-│                어려움(≥THRESHOLD) → OpenAI, 그 외 → ollama        │
+│    - Layer 2: LLM 재검증 (이미지 + 태깅 결과 cross-check) → OpenAI│
 │    - Layer 3: 임베딩 자가체크 (solution_steps ↔ concept_tags)    │
-│    → 상세: docs/TAG_VALIDATOR.md, docs/CALL_B_ROUTING.md          │
+│    → 상세: docs/TAG_VALIDATOR.md                                  │
 │    │                                                              │
 │    ▼                                                              │
 │  problem_staging 저장                                             │
@@ -72,37 +70,31 @@
 
 ## 2. Provider 운영 전략
 
-### 2.1 시간대 기반 (provider_selector)
+### 2.1 VL = OpenAI 단일 (2026-06-19)
 
-| 시간대 | 위치 | VL Provider 기본 | Embed Provider |
-|--------|------|------------------|----------------|
-| 평일 09:00~19:00 KST | 서버 (회사) | **Ollama Gemma4 26B** | **bge-m3** (Ollama) |
-| 그 외 | 집 | **OpenAI gpt-4o** (오프시간 기본) | **OpenAI** (text-embedding-3-small) |
+이미지 분석(VL) 호출은 OpenAI 하나로 통일. gemma4(ollama)/gemini 는 폐기.
 
-- `pipeline/provider_selector.py` 가 시간대 감지 → `VL_PROVIDER` / `EMBED_PROVIDER` 결정
-- 환경변수로 강제 override 가능: `VL_PROVIDER=ollama` (서버 Ollama 고정 운영 시)
-- `VL_PROVIDER=ollama` 시 OpenAI fallback 차단 (`vl_providers._call_ollama_with_fallback`)
+| 호출 | Provider | 비고 |
+|------|----------|------|
+| Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o) |
+| Call B (steps) | OpenAI | 2-Pass(스켈레톤 + per-step) |
+| 검증 Layer 2 | OpenAI | 난이도 무관 항상 OpenAI |
+| 막힌 지점 도우미 (튜터) | OpenAI | localize / generate / 노드추출 |
 
-### 2.2 호출별 강제 분기 (4차 도입, 2026-04-22)
+- `call_vl(...)` 은 항상 OpenAI 호출. `provider` 인자는 하위호환용으로 받기만 하고 무시.
+- 옛 `provider_selector.py`(시간대 분기), `_route_call_b_provider`(난이도 분기), gemma4 반복 폭주 방어 코드는 모두 제거됨.
 
-`call_vl(image_path, prompt, schema, *, provider="openai")` 로 시간대와 무관하게 호출별 provider 강제 가능. 운영 정책:
+### 2.2 임베딩은 그대로 (bge-m3 / Ollama)
 
-| 호출 | difficulty | Provider | 모델 |
-|------|------------|----------|------|
-| Call A (메타) | 무관 | 시간대 기본 (보통 ollama) | gemma4:26b |
-| Call B (steps) | < `CALL_B_HARD_THRESHOLD` | ollama | gemma4:26b |
-| **Call B (steps)** | ≥ `CALL_B_HARD_THRESHOLD` | **OpenAI 강제** | **gpt-5.4-mini** |
-| 검증 Layer 2 | < `CALL_B_HARD_THRESHOLD` | 시간대 기본 | gemma4:26b |
-| **검증 Layer 2** | ≥ `CALL_B_HARD_THRESHOLD` | **OpenAI 강제** | **gpt-5.4-mini** |
+VL 과 달리 임베딩은 bge-m3(Ollama, 1024차원) 유지.
 
-기본 `CALL_B_HARD_THRESHOLD=7`. Call B 와 검증이 같은 임계값을 공유 — 어려운 문제 일관성. 상세: `docs/CALL_B_ROUTING.md`.
+- OpenAI 임베딩은 1536차원이라 바꾸면 `problems`·`solution_nodes` 전체 재임베딩이 필요 → 안 바꿈.
+- 기본 ollama 고정. `EMBED_PROVIDER=openai` 로만 강제 전환 가능(차원 혼입 주의).
 
 ### 2.3 공통
 
-- Ollama 접속 실패 시 OpenAI 자동 fallback (`VL_PROVIDER=ollama` 명시 시 차단됨 — 비용 제어)
-- **모든 LLM 호출은 Pydantic structured output 강제** — free-form JSON 파싱 없음
-- 서버 Ollama 모델: `gemma4:26b` (19GB, vision, RTX 4090 24GB). 이전 `gemma3:27b` 는 2026-04-21 교체
-- Gemini 분기는 `vl_providers.py` 에 코드 잔존하지만 **운영 스택에선 빠짐** (free tier 한도로 실용성 부족)
+- **모든 LLM 호출은 Pydantic structured output 강제** — free-form JSON 파싱 없음.
+- OpenAI 응답이 토큰 한계로 잘리면(`status=incomplete`) 조용한 손상 대신 loud fail.
 
 ---
 
@@ -115,9 +107,8 @@
 | `yolo_detector.py` | 모의고사 문제 박스 YOLO 추론 (conf=0.3) |
 | `yolo_solution_detector.py` | 해설지 박스 YOLO 추론 |
 | `solution_parser.py` | 정답표/인라인 정답 OCR 파싱 + 페이지 걸침 해설 병합 |
-| `vl_providers.py` | Ollama/Gemini/OpenAI provider 분기. `call_vl(image_path, prompt, schema)` |
-| `provider_selector.py` | 시간대 감지 → VL/Embed provider 자동 선택 |
-| `embedder.py` | 텍스트 → 벡터 (Ollama bge-m3 1024d / OpenAI 3-small 1536d) |
+| `vl_providers.py` | VL 호출 (OpenAI 단일). `call_vl(image_path, prompt, schema)` |
+| `embedder.py` | 텍스트 → 벡터 (bge-m3 1024d, Ollama 고정) |
 | `solution_tagger.py` | VL 호출 → TagResult → tag_normalizer/unit_matcher 후처리 → DB 저장 |
 | `tag_normalizer.py` | 태그 문자열 → concepts/skills canonical 매칭 (cosine ≥ 0.65) |
 | `unit_matcher.py` | 태그 문자열 → units leaf 경로 매칭 (cosine, 캐시 pkl) |
@@ -158,7 +149,7 @@ class SolutionStep(BaseModel):
 
 **solution_steps 개수**: 모델 자율 결정 (4차에서 난이도별 강제 폐지). 빈 리스트만 금지. `CALL_B_MAX_STEPS` (기본 15) 가 상한 안전장치로만 작동. 자세한 step 품질 검증은 `docs/TAG_VALIDATOR.md` Layer 1 참조.
 
-**Call B 구조 (5차, 2026-04-23)**: 한 번에 전체 steps 리스트를 뽑는 한방 호출에서 **per-step loop** 로 전환. 매 호출마다 이미지(문제+해설) + 누적된 이전 steps 요약을 프롬프트에 넣고 "다음 step 하나만" 생성. 모델이 `{"done": true}` 반환하면 루프 종료. 출력 토큰이 짧아 gemma4 repetition 폭주 확률 급감. 상세: `docs/CALL_B_ROUTING.md`.
+**Call B 구조 (2-Pass)**: Pass 1 에서 스켈레톤(step 수 + role/produces/uses DAG, 내용 없음)을 1회 받고, Pass 2 에서 각 step 의 내용(hint/formula/concept/whys)을 채운다. VL 은 OpenAI 단일(2026-06-19 gemma4 폐기). 과거 per-step loop 는 gemma4 반복 폭주 방어용이었으나 OpenAI 는 그 문제가 없어 의미가 약해짐 — 현재는 OpenAI 로 안정 동작.
 
 **필드명 이력 (2026-04-23)**: `description / formula / reason` → `hint / formula / concept` 로 통일 (4차 리팩터 연장). 학생에게 공개되는 힌트 의미를 필드명에 직접 반영 + 3필드 모두 필수로 강화.
 
@@ -301,7 +292,7 @@ AI 튜터 온톨로지의 기반. 이 파일을 기준으로 모든 태깅이 �
 API: `POST /api/tutor/hint` (`routers/tutor.py`, `main.py include_router(prefix=/api/tutor)`)
 흐름: localize → retrieve → generate (`handlers/stuck_helper.py`). 서버 무상태.
 노드 코퍼스: `solution_nodes` 테이블 (마이그레이션 `add_solution_nodes`) + RPC `search_solution_nodes_for_hint`
-노드 추출: `pipeline/rag_node_extractor.py` (해설 이미지 **1회 통합** VL 분해 — 전체 노드 배열 1회 structured output, 각 노드에 uses(전이 DAG)+whys(논리 근거) 포함 → `backfill_solution_nodes.py` 로 적재). 2-pass(1+N회)는 gemma4 폭주 방어 잔재라 폐기.
+노드 추출: `pipeline/rag_node_extractor.py` (해설 이미지 **1회 통합** VL 분해 — 전체 노드 배열 1회 structured output, 각 노드에 uses(전이 DAG)+whys(논리 근거) 포함 → `backfill_solution_nodes.py` 로 적재). VL=OpenAI 단일.
 
 ### 풀이 노드 검색 (solution_nodes — 위치추적 RAG 핵심)
 ```sql
