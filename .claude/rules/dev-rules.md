@@ -174,6 +174,7 @@ npm run dev                  # http://localhost:8081
   - 라우터 `routers/tutor.py` → `POST /api/tutor/hint` (`main.py` 에 `include_router(prefix="/api/tutor")`)
   - 핸들러 `handlers/stuck_helper.py` — localize → retrieve → generate 3단
   - 노드 추출 `pipeline/rag_node_extractor.py` — 해설 이미지 **1회 통합** VL 분해(전체 노드 배열 1회 structured output). 각 노드에 `uses`(이전 node_index 참조=전이 근거 DAG)+`whys`({question,reason}=논리 완결성) 포함. VL=OpenAI 단일. (`solution_tagger`의 Call B 는 2-Pass 구조 그대로 유지 — 과거 per-step 은 gemma4 폭주 방어였으나 OpenAI 단일화로 그 명분은 사라짐.)
+  - **유형별 프롬프트 라우팅(2026-06-19)**: `_compose_extraction_prompt()` 가 베이스 프롬프트에 [과목 조각 또는 혼합형 패턴 조각] + (difficulty>=7 이면) 난이도 조각을 1개씩 덧붙인다. 거대 프롬프트도 과목별 서브에이전트도 아님 — `problem.unit`(첫 토큰=과목)·`difficulty_score` 가 이미 있어 분류 비용 0. 혼합형 판정은 1차 단순 규칙(difficulty>=8). unit 무매핑/패턴 없음이면 베이스만(graceful). few-shot 예시 주입은 검증 노드 표본이 쌓인 뒤(후속).
   - **answer leakage 방지**: `stuck_helper`가 whys.question만 소크라테스 질문으로 노출(reason은 배경 근거), conclusion 노드 최종 수식 제외, 힌트 보기기호/정답 패턴 경고. 마이그레이션 `012`(uses/whys 컬럼+RPC). LaTeX 조합기호 `{}_nC_r` 프롬프트 강화 + `_fix_latex_subscript_escapes`(저장 직전 `\_`→`_`).
   - **RAG 배포 의존성 순서: 마이그레이션 → 코드 → 테스트.** RPC `RETURNS TABLE` 시그니처 변경은 `CREATE OR REPLACE` 불가 → `DROP FUNCTION ... CASCADE` 먼저. 코드 먼저 배포하면 RPC 시그니처 불일치로 런타임 500.
   - 인증 `auth.py` — `get_student_id`(Bearer JWT → profiles.id, student role 강제). `SUPABASE_ANON_KEY` 필요

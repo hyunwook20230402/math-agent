@@ -177,6 +177,100 @@ _UNIFIED_EXTRACTION_PROMPT = f"""당신은 고등학교 수학 해설을 분석�
 - 아래첨자는 a_1, a_{{n+1}} 처럼 쓰고, **밑줄(_) 앞에 백슬래시(\\_)를 절대 붙이지 마세요.**
 - 시그마 \\sum, 분수 \\frac{{}}{{}}, 제곱근 \\sqrt{{}}, 적분 \\int."""
 
+# 하위호환 별칭(기존 참조 보존). 실제 호출은 _compose_extraction_prompt() 가 베이스로 사용.
+_BASE_EXTRACTION_PROMPT = _UNIFIED_EXTRACTION_PROMPT
+
+
+# ── 문제 유형별 프롬프트 조각 (베이스에 1개만 덧붙임) ──────────────────────────
+# 거대 프롬프트(모든 과목 가이드 욱여넣기)도 서브에이전트(과목마다 별도)도 아닌,
+# "문제에 맞는 짧은 가이드 한 조각"만 그때그때 붙이는 라우팅. unit/difficulty 가 이미
+# problem dict 에 있어 분류 비용 0. (2026-06-19)
+
+# 과목별 — 한 과목 안에서 끝나는(비혼합) 문제용. unit 첫 토큰으로 매칭.
+_SUBJECT_FRAGMENTS: dict[str, str] = {
+  "기하": "\n\n[과목 가이드: 기하] 도형/그래프가 풀이의 핵심이면 그 단계의 figure_description 을 "
+          "구체적으로 채우고 has_figure=true 로 두세요. 좌표·벡터·도형 성질을 쓰는 전이는 whys 로 "
+          "'왜 이 성질을 쓰나'를 남기세요.",
+  "확률과 통계": "\n\n[과목 가이드: 확률과 통계] 경우를 나누는 단계는 case_split 로 두고 whys 에 "
+                 "'왜 이 기준으로 나누나'를 꼭 채우세요. 조합 {{}}_nC_r·순열 {{}}_nP_r·중복조합 "
+                 "{{}}_nH_r LaTeX 표기를 엄수하세요.",
+  "미적분": "\n\n[과목 가이드: 미적분] 극한·극값·증가감소에서 점을 나누는 단계는 case_split 로 두고 "
+            "whys 에 '왜 이 점/구간에서 나누나(미분계수 0, 불연속 등)'를 남기세요. 극한값과 함숫값을 "
+            "혼동하지 않도록 output_formula 를 정확히.",
+  "대수": "\n\n[과목 가이드: 대수] 지수·로그·삼각·수열의 정의·성질을 적용하는 전이는 key_concept 에 "
+          "그 성질명을 적고, 식 변형이 비약하지 않도록 단계를 충분히 쪼개세요.",
+  "공통수학1": "\n\n[과목 가이드: 공통수학1] 다항식·방정식·부등식의 식 변형은 한 단계에 몰지 말고 "
+               "entry_conditions 로 직전 상태를 명확히 이어가세요.",
+  "공통수학2": "\n\n[과목 가이드: 공통수학2] 도형의 방정식·함수 그래프가 나오면 figure_description 을 "
+               "채우고, 집합·명제의 논리 전이는 whys 로 근거를 남기세요.",
+}
+
+# 혼합형(단원이 섞이는 문제)용 — "어떻게 쪼개나" 패턴. 과목 조각 대신 적용.
+_PATTERN_FRAGMENTS: dict[str, str] = {
+  "figure_heavy": "\n\n[유형 가이드: 도형+대수 혼합] 도형 해석 단계와 대수 계산 단계를 분리해 "
+                  "각각 독립 노드로 두세요. 도형 단계는 figure_description·has_figure 를 채우세요.",
+  "case_heavy": "\n\n[유형 가이드: 경우분리 많음] 경우가 3개 이상이면 각 경우를 독립 노드로 두고, "
+                "분기 직전에 '왜 이 기준으로 나누나'를 whys 로 남기세요. 경우를 한 노드에 뭉치지 마세요.",
+  "compose_heavy": "\n\n[유형 가이드: 합성·역·절댓값 중첩] 안쪽 함수→바깥쪽 순서로 노드를 분리하고, "
+                   "각 단계가 어느 함수의 어느 성질을 쓰는지 key_concept 에 적으세요.",
+}
+
+# 난이도 조각 — 위 조각에 겹쳐 적용.
+_DIFFICULTY_HARD_FRAGMENT = (
+  "\n\n[난이도 가이드: 어려운 문제] 경우분리·중첩이 있는 단계를 얕게 묶지 말고 충분히 쪼개세요. "
+  "전이마다 whys 를 적극적으로 채워 '왜 다음으로 넘어갈 수 있는지' 논리 비약이 없게 하세요."
+)
+
+
+def _subject_of(unit: str | None) -> str:
+  """unit('과목 > 대단원 > ...') 첫 토큰을 과목명으로. 없으면 빈 문자열."""
+  if not unit:
+    return ""
+  return unit.split(">")[0].strip()
+
+
+def _is_mixed(problem: dict) -> bool:
+  """혼합형 판정(1차 = 싼 규칙, 추가 호출 없음).
+
+  - concept_tags 가 서로 다른 과목/대단원에 걸치는지(태그가 여러 갈래)는 아직 단원 매핑이
+    없어 정확히 못 봄 → 1차는 difficulty_score>=8(킬러류는 대개 혼합)만 혼합 신호로 사용.
+  """
+  d = problem.get("difficulty_score")
+  return isinstance(d, int) and d >= 8
+
+
+def _pattern_key(problem: dict) -> str | None:
+  """혼합형일 때 어떤 패턴 조각을 붙일지. 1차는 unit 과목 기반의 단순 추정."""
+  subj = _subject_of(problem.get("unit"))
+  if subj in ("기하", "공통수학2"):
+    return "figure_heavy"
+  if subj in ("확률과 통계",):
+    return "case_heavy"
+  if subj in ("미적분", "대수"):
+    return "compose_heavy"
+  return None
+
+
+def _compose_extraction_prompt(problem: dict) -> str:
+  """베이스 프롬프트에 [과목 조각 또는 패턴 조각] + (어려우면) 난이도 조각을 덧붙인다.
+
+  unit 무매핑/혼합형 패턴 없음이면 조각 생략(베이스만) — graceful.
+  """
+  prompt = _BASE_EXTRACTION_PROMPT
+  if _is_mixed(problem):
+    pk = _pattern_key(problem)
+    if pk and pk in _PATTERN_FRAGMENTS:
+      prompt += _PATTERN_FRAGMENTS[pk]
+  else:
+    subj = _subject_of(problem.get("unit"))
+    if subj in _SUBJECT_FRAGMENTS:
+      prompt += _SUBJECT_FRAGMENTS[subj]
+
+  d = problem.get("difficulty_score")
+  if isinstance(d, int) and d >= 7:
+    prompt += _DIFFICULTY_HARD_FRAGMENT
+  return prompt
+
 
 # ── 추출 ─────────────────────────────────────────────────────────────────────
 
@@ -222,8 +316,13 @@ def extract_nodes(problem: dict) -> NodeExtractionResult:
     sol_path = _download_to_temp(sol_url)
     images = [p for p in (prob_path, sol_path) if p]
 
+    # 문제 유형(과목/혼합/난이도)에 맞는 가이드 조각을 베이스에 덧붙여 조립.
+    prompt = _compose_extraction_prompt(problem)
+    logger.info(f"[rag_node] problem_id={problem_id} unit={problem.get('unit')!r} "
+                f"difficulty={problem.get('difficulty_score')} prompt_len={len(prompt)}")
+
     # 1회 통합 호출 — 전체 노드 배열을 한 번에. 잘리면 _call_openai 가 loud fail.
-    payload = call_vl(images, _UNIFIED_EXTRACTION_PROMPT, _NodeExtractionPayload,
+    payload = call_vl(images, prompt, _NodeExtractionPayload,
                       provider="openai", max_tokens=RAG_MAX_OUTPUT_TOKENS)
 
     nodes = sorted(payload.nodes, key=lambda n: n.node_index)
