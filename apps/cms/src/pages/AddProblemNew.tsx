@@ -14,7 +14,6 @@ import {
   Save,
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
-import { EditableMath } from '@shared/ui/EditableMath';
 
 interface Textbook {
   id: string;
@@ -83,16 +82,6 @@ const AddProblemNew = () => {
 
   // 편집 모드 전용 — unit 전체 문자열 (읽기 전용 표시용)
   const [unitText, setUnitText] = useState('');
-
-  // AI 태깅 필드 (편집 모드에서만 표시)
-  const [solutionImageUrl, setSolutionImageUrl] = useState('');
-  const [solutionSummary, setSolutionSummary] = useState('');
-  const [pitfall, setPitfall] = useState('');
-  const [solutionSteps, setSolutionSteps] = useState<{ step: number; hint: string; formula?: string | null; concept?: string | null }[]>([]);
-  const [commonMistakes, setCommonMistakes] = useState<{ bug_id: string; text: string }[]>([]);
-
-  // 해설 이미지 라이트박스
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   // 파일 업로드 상태
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -457,13 +446,6 @@ const AddProblemNew = () => {
       // 편집 모드: unit 전체 읽기 전용 표시
       setUnitText(problem.unit || '');
 
-      // AI 태깅 필드 로드
-      setSolutionImageUrl((problem as any).solution_image_url || '');
-      setSolutionSummary((problem as any).solution_summary || '');
-      setPitfall((problem as any).pitfall || '');
-      setSolutionSteps((problem as any).solution_steps || []);
-      setCommonMistakes((problem as any).common_mistakes || []);
-
       // 이미지 파일 상태 초기화 (편집 시에는 기존 이미지 URL만 사용)
       setImageFile(null);
       setExplanationImageFile(null);
@@ -641,11 +623,6 @@ const AddProblemNew = () => {
         correct_answer: formData.correct_answer,
         choices: null,
         explanation: formData.explanation || null,
-        // AI 태깅 필드
-        solution_summary: solutionSummary || null,
-        pitfall: pitfall || null,
-        solution_steps: solutionSteps.length > 0 ? solutionSteps : null,
-        common_mistakes: commonMistakes.length > 0 ? commonMistakes : null,
       };
 
       let data, error;
@@ -1086,167 +1063,6 @@ const AddProblemNew = () => {
             </CardContent>
         </Card>
 
-        {/* AI 태깅 필드 — 편집 모드에서만 표시 */}
-        {isEditMode && (
-          <Card className="mt-4">
-            <CardHeader>
-              <CardTitle className="text-base">AI 해설 정보</CardTitle>
-              <CardDescription>PDF 파이프라인에서 추출한 해설 데이터</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* 해설 이미지 (읽기 전용, 클릭 시 라이트박스) */}
-              {solutionImageUrl && (
-                <div>
-                  <Label className="text-sm">해설 이미지 <span className="text-xs text-muted-foreground font-normal">(클릭하면 크게 보기)</span></Label>
-                  <img
-                    src={solutionImageUrl}
-                    alt="해설 이미지"
-                    className="mt-1 w-full rounded border cursor-zoom-in hover:opacity-90 transition-opacity"
-                    style={{ maxHeight: '900px', objectFit: 'contain' }}
-                    onClick={() => setLightboxSrc(solutionImageUrl)}
-                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                  />
-                </div>
-              )}
-
-              {/* 해설 요약 */}
-              <div>
-                <Label htmlFor="solution_summary" className="text-sm">해설 요약</Label>
-                <div className="mt-1">
-                  <EditableMath
-                    value={solutionSummary}
-                    onChange={setSolutionSummary}
-                    placeholder="해설 요약"
-                  />
-                </div>
-              </div>
-
-              {/* 오답 포인트 */}
-              <div>
-                <Label htmlFor="pitfall" className="text-sm">오답 포인트</Label>
-                <div className="mt-1">
-                  <EditableMath
-                    value={pitfall}
-                    onChange={setPitfall}
-                    placeholder="자주 틀리는 포인트"
-                  />
-                </div>
-              </div>
-
-              {/* 단계별 풀이 */}
-              <div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-sm">단계별 풀이</Label>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-6 text-xs px-2"
-                    onClick={() => setSolutionSteps(prev => [...prev, { step: prev.length + 1, hint: '', formula: '', concept: '' }])}
-                  >
-                    + 단계 추가
-                  </Button>
-                </div>
-                <div className="mt-1 space-y-2">
-                  {solutionSteps.map((s, i) => (
-                    <div key={i} className="flex gap-2 items-start">
-                      <span className="text-xs text-muted-foreground mt-2 w-12 shrink-0">Step {s.step}</span>
-                      <div className="flex-1 space-y-1">
-                        <EditableMath
-                          value={s.hint || ''}
-                          onChange={(v) => {
-                            const next = [...solutionSteps];
-                            next[i] = { ...next[i], hint: v };
-                            setSolutionSteps(next);
-                          }}
-                          placeholder="힌트 문장"
-                        />
-                        <EditableMath
-                          value={s.formula || ''}
-                          onChange={(v) => {
-                            const next = [...solutionSteps];
-                            next[i] = { ...next[i], formula: v };
-                            setSolutionSteps(next);
-                          }}
-                          placeholder="핵심 식 \\( ... \\)"
-                        />
-                        <input
-                          type="text"
-                          className="w-full text-xs border rounded px-2 py-1"
-                          value={s.concept || ''}
-                          onChange={(e) => {
-                            const next = [...solutionSteps];
-                            next[i] = { ...next[i], concept: e.target.value };
-                            setSolutionSteps(next);
-                          }}
-                          placeholder="개념/정리 이름"
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 px-1 text-red-400 hover:text-red-600 mt-1"
-                        onClick={() => setSolutionSteps(prev => prev.filter((_, j) => j !== i).map((s, j) => ({ ...s, step: j + 1 })))}
-                      >
-                        ×
-                      </Button>
-                    </div>
-                  ))}
-                  {solutionSteps.length === 0 && (
-                    <p className="text-xs text-muted-foreground">단계가 없습니다. "+ 단계 추가"를 눌러 추가하세요.</p>
-                  )}
-                </div>
-              </div>
-
-              {/* 자주 하는 실수 */}
-              <div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-sm">자주 하는 실수</Label>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-6 text-xs px-2"
-                    onClick={() => setCommonMistakes(prev => [...prev, { bug_id: `bug_${Date.now()}`, text: '' }])}
-                  >
-                    + 항목 추가
-                  </Button>
-                </div>
-                <div className="mt-1 space-y-2">
-                  {commonMistakes.map((m, i) => (
-                    <div key={i} className="flex gap-2 items-start">
-                      <div className="flex-1">
-                        <EditableMath
-                          value={m.text}
-                          onChange={(v) => {
-                            const next = [...commonMistakes];
-                            next[i] = { ...next[i], text: v };
-                            setCommonMistakes(next);
-                          }}
-                          placeholder="자주 하는 실수"
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 px-1 text-red-400 hover:text-red-600 mt-1"
-                        onClick={() => setCommonMistakes(prev => prev.filter((_, j) => j !== i))}
-                      >
-                        ×
-                      </Button>
-                    </div>
-                  ))}
-                  {commonMistakes.length === 0 && (
-                    <p className="text-xs text-muted-foreground">항목이 없습니다. "+ 항목 추가"를 눌러 추가하세요.</p>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
         {/* 등록 버튼 */}
         <Button
           onClick={handleSubmit}
@@ -1272,28 +1088,6 @@ const AddProblemNew = () => {
           </Button>
       </div>
     </div>
-
-    {/* 해설 이미지 라이트박스 */}
-
-    {lightboxSrc && (
-      <div
-        className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80"
-        onClick={() => setLightboxSrc(null)}
-      >
-        <img
-          src={lightboxSrc}
-          alt="해설 이미지 전체보기"
-          className="max-w-[90vw] max-h-[90vh] object-contain rounded shadow-2xl"
-          onClick={e => e.stopPropagation()}
-        />
-        <button
-          className="absolute top-4 right-4 text-white bg-black/40 hover:bg-black/70 rounded-full w-9 h-9 flex items-center justify-center text-xl transition-colors"
-          onClick={() => setLightboxSrc(null)}
-        >
-          ✕
-        </button>
-      </div>
-    )}
     </>
   );
 };

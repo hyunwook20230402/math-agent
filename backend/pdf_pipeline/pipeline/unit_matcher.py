@@ -138,7 +138,7 @@ def match_unit(
   - 그 미만: 빈 문자열
 
   Args:
-    query_text: concept_tags + skill_tags + solution_summary 를 합친 한 문장
+    query_text: concept_tags + skill_tags 를 합친 한 문장
     leaf_embeddings: load_or_build_embeddings 결과
     threshold: top-1 cosine 유사도 임계값
 

@@ -159,10 +159,6 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
             "structuring_status": "pending",
             # 해설/온톨로지 필드 (staging → problems 복사)
             "solution_image_url": p.get("solution_image_url"),
-            "solution_summary": p.get("solution_summary"),
-            "pitfall": p.get("pitfall"),
-            "solution_steps": p.get("solution_steps"),
-            "common_mistakes": p.get("common_mistakes"),
             "source_info": {
                 "book": p.get("category", "기타"),
                 "page": p.get("source_page"),
@@ -409,17 +405,13 @@ def get_problem_tags(
 def update_staging_solution(
     staging_id: str,
     solution_image_url: str | None = None,
-    solution_summary: str | None = None,
     solution_job_id: str | None = None,
     match_confidence: float | None = None,
     correct_answer: str | None = None,
     answer_type: str | None = None,
-    pitfall: str | None = None,
     unit: str | None = None,
     difficulty_score: int | None = None,
     correct_rate: float | None = None,
-    solution_steps: list | None = None,
-    common_mistakes: list | None = None,
     validation_status: str | None = None,
     validation_score: float | None = None,
     validation_issues: list | None = None,
@@ -430,8 +422,6 @@ def update_staging_solution(
     payload: dict = {}
     if solution_image_url is not None:
         payload["solution_image_url"] = solution_image_url
-    if solution_summary is not None:
-        payload["solution_summary"] = solution_summary
     if solution_job_id is not None:
         payload["solution_job_id"] = solution_job_id
     if match_confidence is not None:
@@ -440,18 +430,12 @@ def update_staging_solution(
         payload["correct_answer"] = correct_answer
     if answer_type is not None:
         payload["answer_type"] = answer_type
-    if pitfall is not None:
-        payload["pitfall"] = pitfall
     if unit is not None:
         payload["unit"] = unit
     if difficulty_score is not None:
         payload["difficulty_score"] = difficulty_score
     if correct_rate is not None:
         payload["correct_rate"] = correct_rate
-    if solution_steps is not None:
-        payload["solution_steps"] = solution_steps
-    if common_mistakes is not None:
-        payload["common_mistakes"] = common_mistakes
     if validation_status is not None:
         payload["validation_status"] = validation_status
     if validation_score is not None:

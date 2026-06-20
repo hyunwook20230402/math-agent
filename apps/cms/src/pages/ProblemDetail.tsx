@@ -76,10 +76,6 @@ interface StagingProblem {
   unit: string;
   source_image_url: string | null;
   solution_image_url: string | null;
-  solution_summary: string | null;
-  pitfall: string | null;
-  solution_steps: { step: number; hint: string; formula?: string | null; concept?: string | null }[] | null;
-  common_mistakes: { bug_id: string; text: string }[] | null;
   match_confidence: number | null;
   validation_status: 'ok' | 'warning' | 'reject' | null;
   validation_score: number | null;
@@ -224,7 +220,6 @@ const ProblemDetail = () => {
       correct_answer: p.correct_answer || '',
       explanation: p.explanation || '',
       unit: p.unit || '',
-      solution_summary: p.solution_summary || '',
     });
     setActiveTab('problem');
 
@@ -559,71 +554,6 @@ const ProblemDetail = () => {
                 onRemove={idx => setSkillTags(prev => prev.filter((_, i) => i !== idx))}
               />
 
-              {/* 풀이 요약 (AI 생성) */}
-              {(editValues.solution_summary || selectedProblem.solution_summary) && (
-                <div>
-                  <Label className="text-sm flex items-center gap-1">
-                    <Bot className="h-3 w-3" />
-                    풀이 요약 (AI)
-                  </Label>
-                  <textarea
-                    value={editValues.solution_summary || ''}
-                    onChange={e => setEditValues(prev => ({ ...prev, solution_summary: e.target.value }))}
-                    rows={3}
-                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 resize-none"
-                  />
-                </div>
-              )}
-
-              {/* 오답 포인트 */}
-              {selectedProblem.pitfall && (
-                <div>
-                  <Label className="text-sm flex items-center gap-1">
-                    <Bot className="h-3 w-3" />
-                    오답 포인트 (AI)
-                  </Label>
-                  <p className="mt-1 text-sm text-muted-foreground bg-muted/40 rounded-md px-3 py-2"><MathText text={selectedProblem.pitfall} /></p>
-                </div>
-              )}
-
-              {/* 단계별 풀이 */}
-              {selectedProblem.solution_steps && selectedProblem.solution_steps.length > 0 && (
-                <div>
-                  <Label className="text-sm flex items-center gap-1">
-                    <Bot className="h-3 w-3" />
-                    단계별 풀이 (AI)
-                  </Label>
-                  <ol className="mt-1 space-y-1">
-                    {selectedProblem.solution_steps.map(s => (
-                      <li key={s.step} className="text-sm bg-muted/40 rounded-md px-3 py-1.5">
-                        <span className="font-medium text-xs text-muted-foreground mr-2">Step {s.step}</span>
-                        <MathText text={s.hint} />
-                        {s.formula && (
-                          <div className="ml-2 mt-0.5"><MathText text={s.formula} /></div>
-                        )}
-                        {s.concept && (
-                          <div className="ml-2 mt-0.5 text-xs text-muted-foreground italic">↳ {s.concept}</div>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              )}
-
-              {/* 자주 하는 실수 */}
-              {selectedProblem.common_mistakes && selectedProblem.common_mistakes.length > 0 && (
-                <div>
-                  <Label className="text-sm flex items-center gap-1">
-                    <Bot className="h-3 w-3" />
-                    자주 하는 실수 (AI)
-                  </Label>
-                  <ul className="mt-1 space-y-1">
-                    {selectedProblem.common_mistakes.map((m, i) => (
-                      <li key={i} className="text-sm bg-muted/40 rounded-md px-3 py-1.5">• <MathText text={m.text} /></li>
-                    ))}
-                  </ul>
-                </div>
-              )}
 
               {/* 해설 이미지 */}
               {selectedProblem.solution_image_url && (

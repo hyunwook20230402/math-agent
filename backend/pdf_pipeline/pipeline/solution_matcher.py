@@ -56,7 +56,7 @@ def match_solutions_to_problems(
       solution_images: merge_cross_page_solutions 결과
         {번호: 이미지경로}
       tag_results: tag_all_solutions 결과
-        {번호: {"concept_tags": [...], "skill_tags": [...], "solution_summary": str}}
+        {번호: {"concept_tags": [...], "skill_tags": [...], "unit": str, ...}}
 
     Returns:
       {staging_id: {
@@ -66,7 +66,6 @@ def match_solutions_to_problems(
         "answer_type": str | None,
         "concept_tags": [...],
         "skill_tags": [...],
-        "solution_summary": str | None,
         "match_confidence": float,
       }}
     """
@@ -99,12 +98,9 @@ def match_solutions_to_problems(
             "answer_type": answer_type,
             "concept_tags": tags.get("concept_tags", []),
             "skill_tags": tags.get("skill_tags", []),
-            "solution_summary": tags.get("solution_summary"),
             "unit": tags.get("unit") or "",
             "difficulty_score": tags.get("difficulty_score"),
-            "pitfall": tags.get("pitfall"),
-            "solution_steps": tags.get("solution_steps"),
-            "common_mistakes": tags.get("common_mistakes"),
+            "correct_rate": tags.get("correct_rate"),
             "match_confidence": confidence,
             "validation_status": validation.get("status"),
             "validation_score": validation.get("score"),

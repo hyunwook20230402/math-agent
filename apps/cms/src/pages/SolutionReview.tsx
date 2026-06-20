@@ -16,7 +16,6 @@ import {
   ArrowLeft, Upload, Loader2, RotateCcw, Check, SkipForward, X,
 } from 'lucide-react';
 import BboxEditor, { type BboxItem } from '@/components/BboxEditor';
-import { MathText } from '@shared/ui/MathText';
 
 const PIPELINE_URL = 'http://localhost:8001';
 
@@ -1079,50 +1078,6 @@ export default function SolutionReview() {
                             ? r.skill_tags.map((t: any) => typeof t === 'string' ? t : `${t.tag}`).join(', ')
                             : '-'}
                         </div>
-                        <div>
-                          <strong className="text-xs text-muted-foreground">풀이 요약:</strong>{' '}
-                          {r?.solution_summary ? <MathText text={r.solution_summary} /> : '-'}
-                        </div>
-                        <div>
-                          <strong className="text-xs text-muted-foreground">오답 포인트:</strong>{' '}
-                          {r?.pitfall ? <MathText text={r.pitfall} /> : '-'}
-                        </div>
-                        {Array.isArray(r?.solution_steps) && r.solution_steps.length > 0 && (
-                          <div>
-                            <strong className="text-xs text-muted-foreground">단계별 풀이:</strong>
-                            <ol className="mt-1 ml-4 list-decimal space-y-2">
-                              {r.solution_steps.map((s: any, i: number) => (
-                                <li key={i} className="text-xs">
-                                  <div>
-                                    <span className="font-medium">Step {s.step}</span>
-                                    {s.hint && <span className="text-muted-foreground"> — <MathText text={s.hint} /></span>}
-                                  </div>
-                                  {s.formula && (
-                                    <div className="ml-2 mt-0.5 text-foreground">
-                                      <MathText text={s.formula} />
-                                    </div>
-                                  )}
-                                  {s.concept && (
-                                    <div className="ml-2 mt-0.5 text-[11px] text-muted-foreground italic">
-                                      ↳ {s.concept}
-                                    </div>
-                                  )}
-                                </li>
-                              ))}
-                            </ol>
-                          </div>
-                        )}
-                        {Array.isArray(r?.common_mistakes) && r.common_mistakes.length > 0 && (
-                          <div>
-                            <strong className="text-xs text-muted-foreground">자주 하는 실수:</strong>
-                            <ul className="mt-1 ml-4 list-disc space-y-1">
-                              {r.common_mistakes.map((m: any, i: number) => {
-                                const txt = typeof m === 'string' ? m : (m.text ?? m.id ?? JSON.stringify(m));
-                                return <li key={i} className="text-xs"><MathText text={txt} /></li>;
-                              })}
-                            </ul>
-                          </div>
-                        )}
                         {r?._validation && (
                           <div className={`mt-1 text-xs rounded px-2 py-1 ${
                             r._validation.status === 'ok' ? 'bg-green-50 text-green-700'
