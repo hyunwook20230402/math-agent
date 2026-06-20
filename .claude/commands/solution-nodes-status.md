@@ -97,6 +97,6 @@ python -m scripts.backfill_solution_nodes --problem-id <uuid>
 ## 참고
 
 - 백필 스크립트: `backend/pdf_pipeline/scripts/backfill_solution_nodes.py`
-- 노드 추출 로직: `backend/pdf_pipeline/pipeline/rag_node_extractor.py` (해설 2-pass VL)
-- 검색 RPC: `search_solution_nodes_for_hint` (마이그레이션 `011_add_solution_nodes.sql`)
+- 노드 추출 로직: `backend/pdf_pipeline/pipeline/rag_node_extractor.py` (해설 1회 통합 VL, uses/whys)
+- 검색 RPC: `search_solution_nodes_for_hint` (baseline 에 포함 — `baseline_20260620.sql`)
 - 임베딩은 bge-m3 1024 — `OPENAI_API_KEY`(VL) + ollama(임베딩) 필요. 상세 `.claude/rules/dev-rules.md`

@@ -10,42 +10,41 @@
 - SolutionReview 같은 번호 묶기 + 그룹 확정 UI + 번호 인라인 편집
 - 재태깅 UI (개별/일괄 재실행) + LaTeX 수식 렌더링 (KaTeX)
 - 해설 이미지 라이트박스 + 편집 모드 UI 개편
+- **풀이 노드 편집기** (2026-06-20, 4차) — 교재 화면(`TextbookManagementNew.tsx`) 문제 카드의 "풀이 노드" 버튼 → `SolutionNodeEditorModal.tsx`(순수 HTML/CSS 모달). 노드 조회·수정·추가·삭제·AI 재추출. 수식은 기존 LaTeX 편집/렌더 부품 재사용. 옛 해설 4섹션(요약/오답포인트/단계별풀이/자주하는실수)은 제거됨.
 
 ### 파이프라인
 - 해설지 PDF 파이프라인 (정답 파싱 + 해설 크롭 + AI 태깅)
 - 문제별 개념/스킬 태그 (`problem_tags` 테이블, VL 모델 + bge-m3 정규화)
 - 해설 태깅 샘플/이어서 모드 (4개 먼저 → 나머지)
 - 단원 계통도 (공통수학1/2, 대수, 미적분I, 확률과 통계 — concepts 375 / skills 359 / units 15)
-- unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty_score/pitfall/solution_steps/common_mistakes AI 추출
-- **난이도 (difficulty_score) 구조 신호 기반 판정** (2026-04-22) — "수능 21/29/30번류" 번호 고정 제거. 경우분리 개수·중첩 깊이·개념 복합도로 1~10 스코어링. 시대 무관.
-- **solution_steps 3단 구조** (2026-04-23 필드명 통일) — `hint` (학생에게 보여주는 힌트 문장) + `formula` (핵심 식 \\( ... \\)) + `concept` (이 힌트가 짚는 개념명) 3필드 모두 필수 (null 금지). **개수 강제 폐지** (4차) — 모델이 풀이 복잡도에 맞춰 자유 결정, `CALL_B_MAX_STEPS` (기본 15) 만 상한 안전장치. 이전 이름 `description/formula/reason` 은 코드·문서·UI 5축에서 모두 `hint/formula/concept` 로 통일됨.
-- **VL = OpenAI 단일** (2026-06-19) — gemma4(ollama)/gemini 폐기. Call A·Call B·검증·튜터 모두 OpenAI. 옛 시간대 분기(`provider_selector`)·난이도 분기(`_route_call_b_provider`)·gemma4 폭주 방어 코드 제거. 임베딩만 bge-m3(ollama) 유지.
-- **Call B 2-Pass** — Pass 1 스켈레톤(role/produces/uses DAG) + Pass 2 step 내용 채움. (과거 per-step 은 gemma4 폭주 방어였으나 OpenAI 단일화로 명분 소멸 — 구조는 그대로 유지.)
-- 3-layer 태깅 검증 (`tag_validator.py` — rule / LLM cross-check / 임베딩 자가체크). Layer 2 OpenAI. 상세: `backend/pdf_pipeline/docs/TAG_VALIDATOR.md`
+- unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty_score AI 추출 (정답률 있으면 구간매핑 우선)
+- **난이도 (difficulty_score) 정답률 우선 / 구조 신호 보조** (2026-06-19) — 해설 PDF 정답률(`problems.correct_rate`) 있으면 `difficulty_resolver.py` 구간매핑. 없으면 구조 신호(경우분리 개수·중첩 깊이·개념 복합도)로 1~10 스코어링. 둘 다 "수능 21/29/30번류" 번호 고정 안 함 — 시대 무관.
+- **VL = OpenAI 단일** (2026-06-19) — gemma4(ollama)/gemini 폐기. Call A(메타)·검증 Layer 2·튜터 모두 OpenAI. 옛 시간대 분기(`provider_selector`)·난이도 분기(`_route_call_b_provider`)·gemma4 폭주 방어 코드 제거. 임베딩만 bge-m3(ollama) 유지.
+- **해설 태깅 = Call A(메타)만** (2026-06-20, 4차) — 옛 단계별풀이(Call B 2-Pass)와 4필드(solution_summary/pitfall/solution_steps/common_mistakes)는 추출·저장·검증·DB컬럼까지 전부 제거. `solution_tagger.py` 는 Call A 한 번으로 메타(unit/difficulty/concept_tags/skill_tags/correct_rate)만 뽑는다. 풀이 그래프는 별도 추출기 `rag_node_extractor.py`(노드 1회 통합)가 담당.
+- 2-layer 태깅 검증 (`tag_validator.py` — Layer 1 rule(concept_tags/skill_tags/difficulty_score/unit_score) + Layer 2 LLM cross-check). Layer 2 OpenAI. (4차에서 solution_steps 검증 규칙 제거 → 3-layer→2-layer 축소.) 상세: `backend/pdf_pipeline/docs/TAG_VALIDATOR.md`
 - YOLO11n 기본 가중치 (`promote_model` 의존 제거 — 커밋 `56ecdd0`). 재학습은 11m + Optuna (`dev-rules.md` 참조)
 
 ### 막힌 지점 도우미 — 풀이 그래프 위치추적 RAG (`backend/pdf_pipeline`) ✅ 구현
 - **deeptutor(LangGraph 대화튜터) 폐기 (2026-06-18)** — `backend/deeptutor/` 삭제. 막힌 지점 도우미만 pdf_pipeline 으로 이전·개선.
 - API: `POST /api/tutor/hint` (`pdf_pipeline/routers/tutor.py`, `main.py include_router(prefix=/api/tutor)`)
 - 흐름: localize(현재 위치 추정) → retrieve(다음 노드+유사 기출 pgvector) → generate(다음 한 스텝 힌트). 서버 무상태(클라이언트가 `revealed_node_index` 보유).
-- 핸들러 `handlers/stuck_helper.py`, 노드 추출 `pipeline/rag_node_extractor.py`(해설 2-pass VL 분해), 인증 `auth.py`, 모델 `models.py`
-- 데이터: `solution_nodes` 테이블(role/key_concept/output_formula/figure_description/embedding 1024) + RPC `search_solution_nodes_for_hint`
+- 핸들러 `handlers/stuck_helper.py`, 노드 추출 `pipeline/rag_node_extractor.py`(해설 1회 통합 VL 분해 + uses/whys), 인증 `auth.py`(`get_student_id`/`get_teacher_id`), 모델 `models.py`
+- 노드 CRUD(교사 전용): `routers/nodes.py` — 조회·수정·추가·삭제·재추출. 수정 시 임베딩 자동 재생성, uses(DAG) acyclic 정제, node_index 순번 재매김.
+- 데이터: `solution_nodes` 테이블(role/key_concept/output_formula/uses INT[]/whys JSONB/figure_description/embedding 1024) + RPC `search_solution_nodes_for_hint`
 - 백필: `python -m scripts.backfill_solution_nodes --limit N` (VL=OpenAI, 임베딩=bge-m3 ollama)
 - 도형: 자동 crop 없음 — `figure_description` 언어화만, crop URL 은 CMS 수동 bbox 로 후속. 상세 `dev-rules.md`
 - 프론트: `apps/student/SolveProblem.tsx` → `components/tutor/StuckHelperModal.tsx` → `ragHintApi`
 
 ### DB 마이그레이션
-- 원격 DB 기준 **add_solution_nodes** 까지 적용 (Supabase MCP `list_migrations` 확인)
-  - 009 `add_validation_columns`
-  - 010 `add_difficulty_score` — `difficulty_score` INT 1~10 + 5단계 GENERATED 라벨
-  - `add_solution_nodes` (20260618) — `solution_nodes` 테이블 + RPC `search_solution_nodes_for_hint` (튜터 RAG)
-- ✅ **마이그레이션 baseline 리셋(2026-06-20)** — 드리프트 해소. 엉킨 001~016 은 `_archive/` 로 치우고, 현재 원격 DB 구조를 `baseline_20260620.sql` 한 장으로 스냅샷. 이후 변경은 `017_` 부터. 상세 `supabase/migrations/README.md`
-- ℹ️ `student_conversations`/`student_attempts`/`search_similar_problems`(구 deeptutor) 는 **원격에 적용된 적 없음** (로컬 007 파일만 존재 → deeptutor 폐기로 무의미)
-- `problem_sets` 3지표 avg/p75/max, `recalc_set_difficulty` RPC 포함
+- ✅ **baseline 리셋(2026-06-20)** — 드리프트 해소. 엉킨 001~016 은 `_archive/` 로 치우고, 현재 원격 DB 구조를 `baseline_20260620.sql` 한 장으로 스냅샷(테이블 18 + FK·UNIQUE·인덱스·트리거 + RPC 2개). 이후 변경은 `017_` 부터 순번. 상세 `supabase/migrations/README.md`
+  - baseline 에 포함: `solution_nodes`(uses/whys 포함) + RPC `search_solution_nodes_for_hint`, `difficulty_score`/`correct_rate`, `problem_sets` 3지표 avg/p75/max + `recalc_set_difficulty` RPC.
+  - `017_fix_recalc_set_difficulty_column.sql` — baseline 이후 첫 변경(세트 난이도 함수 버그 수정).
+- 4차 정리(015/016 — `_archive/`에 기록): 옛 해설 4컬럼 DROP(problems·problem_staging), `tags`·`problem_sets_new` 테이블 DROP. 결과는 baseline 에 반영됨.
+- ℹ️ `student_conversations`/`student_attempts`/`search_similar_problems`(구 deeptutor) 는 **원격에 적용된 적 없음** — deeptutor 폐기로 무의미.
 
 ## 향후 작업
 
-- **튜터 고도화** — CMS 해설 도형 수동 bbox 입력 UI(`solution_nodes.figure_image_crop_url` 채우기), 난이도 기반 VL provider 분기(비용), 대화 이력 저장 여부
+- **튜터 고도화** — CMS 해설 도형 수동 bbox 입력 UI(`solution_nodes.figure_image_crop_url` 채우기), 노드 전이 자동 검증(논리 비약 탐지), 대화 이력 저장 여부
 - **teacher 앱** 숙제 배포/분석 완성도 ↑ (현재 기초 구현 60~70%)
 - **student 앱** 오답노트 고도화 (막힌 지점 도우미 연계 UI 포함)
 - ~~로컬 migrations 드리프트 해소~~ ✅ 완료(2026-06-20 baseline 리셋)
@@ -56,10 +55,9 @@
 
 | 호출 | Provider | 모델 |
 |------|----------|------|
-| Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o) |
-| Call B (steps) | OpenAI | 2-Pass(스켈레톤 + per-step) |
+| Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o). 해설 태깅은 Call A 한 번뿐(Call B 제거, 4차) |
 | 검증 Layer 2 | OpenAI | 난이도 무관 항상 OpenAI |
-| 막힌 지점 도우미 (튜터) | OpenAI | localize / generate / 노드추출 |
+| 막힌 지점 도우미 (튜터) | OpenAI | localize / generate / 노드추출(1회 통합) |
 | Embed | Ollama | bge-m3 (1024d 고정) |
 
 - VL 은 OpenAI 단일(2026-06-19 gemma4 폐기). 시간대·난이도 분기 모두 제거됨.

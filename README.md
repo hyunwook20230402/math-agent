@@ -10,7 +10,7 @@
 
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Radix UI, TanStack Query v5, React Router v6
 - **Backend (DB/Auth)**: Supabase (PostgreSQL, Auth, Storage)
-- **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, EasyOCR + YOLO11 (ultralytics), **VL=OpenAI 단일**(2026-06-19 gemma4 폐기), 임베딩=bge-m3(Ollama). 난이도는 해설 PDF 정답률 우선(없으면 GPT 추정).
+- **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, YOLO11 (ultralytics, OCR 레거시 제거), **VL=OpenAI 단일**(2026-06-19 gemma4 폐기), 임베딩=bge-m3(Ollama). 난이도는 해설 PDF 정답률 우선(없으면 GPT 추정).
 - **막힌 지점 도우미 (AI 튜터)**: 풀이 그래프 위치추적 RAG. `pdf_pipeline` 내 `POST /api/tutor/hint` (localize→retrieve→generate). 데이터: `solution_nodes` + RPC. _구 deeptutor(LangGraph 대화) 폐기 — 2026-06-18._
 - **개발 환경**: Windows 11, 로컬 RTX 4070 8GB / 서버 RTX 4090 24GB
 
@@ -61,18 +61,20 @@ uvicorn main:app --reload --port 8001
 
 ### 문제 PDF 자동 추출
 1. CMS `/pdf-import` 에서 PDF 업로드 (쎈/모의고사).
-2. OCR 또는 YOLO 가 문제 박스를 검출 → `problem_staging` 에 저장.
+2. YOLO11 이 문제 박스를 검출 → `problem_staging` 에 저장.
 3. `/pdf-review` 에서 bbox/번호 검수 (수동).
 4. 승인 → `problems` 테이블 이관.
 
 ### 해설지 태깅
 1. CMS `/solution-review` 에서 해설 PDF 업로드.
-2. 해설 크롭 + 정답 파싱.
-3. "샘플 (앞 4개)" → "이어서" → "전체 재태깅" 으로 VL 태깅 (unit, difficulty, concept/skill, summary, pitfall, solution_steps, common_mistakes).
-   - 메타 (Call A) 는 항상 Gemma4 26B
-   - solution_steps (Call B) 는 어려운 문제만 OpenAI gpt-5.4-mini, 나머지는 Gemma4
-   - 3-layer 검증 (`tag_validator`) 도 같은 임계값으로 OpenAI 분기
+2. 해설 크롭 + 정답·정답률 파싱.
+3. "샘플 (앞 4개)" → "이어서" → "전체 재태깅" 으로 메타 태깅 (unit, difficulty, concept_tags, skill_tags, correct_rate). **Call A 한 번**(VL=OpenAI 단일).
+   - 옛 단계별풀이(Call B 2-Pass)와 4필드(summary/pitfall/solution_steps/common_mistakes)는 4차에서 제거 — 풀이 그래프는 별도 추출기 `rag_node_extractor.py` 가 담당.
+   - 2-layer 검증 (`tag_validator`): Layer 1 rule + Layer 2 OpenAI cross-check.
 4. "문제에 적용" → `problem_staging` 에 병합.
+
+### 풀이 노드 (CMS 편집)
+- 교재 화면 문제 카드 "풀이 노드" 버튼 → 노드 편집 모달. 조회·수정·추가·삭제·AI 재추출. 노드는 막힌 지점 도우미 RAG 의 코퍼스(`solution_nodes`). 노드 추출/편집 통로: `pipeline/rag_node_extractor.py`(1회 통합) + `routers/nodes.py`(교사 CRUD).
 
 ### 막힌 지점 도우미 (풀이 그래프 위치추적 RAG)
 1. 학생이 문제 풀다 막힘 → SolveProblem "막혔어요" → `POST /api/tutor/hint` (problem_id, 막힌 서술, revealed_node_index).
@@ -84,9 +86,9 @@ uvicorn main:app --reload --port 8001
 ## 상세 문서
 
 - **개발 규칙 / 컨벤션** — `CLAUDE.md`, `.claude/rules/`
-- **슬래시 커맨드** — `.claude/commands/` (`/pdf-import`, `/solution-tagging-status`, `/migration-safety`, `/bbox-verify`, `/cms-dev-check`)
+- **슬래시 커맨드** — `.claude/commands/` (`/pdf-import`, `/register-problems`, `/solution-tagging-status`, `/solution-nodes-status`, `/tutor-smoke`, `/migration-safety`, `/bbox-verify`, `/cms-dev-check`)
 - **에이전트** — `.claude/agents/pdf-extractor.md`
-- **Supabase 마이그레이션** — 원격 DB 기준 **add_solution_nodes 까지 적용**. 로컬 `supabase/migrations/` 폴더는 **008 + 011_add_solution_nodes** 파일 존재 (009·010 은 원격 직접 적용 — Supabase MCP `list_migrations` 로 확인)
+- **Supabase 마이그레이션** — **baseline 리셋(2026-06-20)**: 현재 원격 구조를 `baseline_20260620.sql` 한 장으로 스냅샷, 이후 `017_` 부터 순번. 옛 001~016 은 `_archive/`. 상세 `supabase/migrations/README.md`
 
 ---
 

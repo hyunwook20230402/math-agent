@@ -1,6 +1,8 @@
 # 태깅 검증 에이전트 (`tag_validator.py`)
 
-해설 태깅 결과 (`TagResult`) 의 품질을 3-layer 로 자동 검증하는 모듈. `solution_tagger.extract_tags_from_image` 직후 호출되어 `validation_status` / `validation_score` / `validation_issues` / `suggested_fixes` 를 산출한다. 일부 issue 는 `_apply_suggested_fixes` 에서 자동 반영된다.
+해설 메타 태깅 결과 (`TagResultMeta`) 의 품질을 2-layer 로 자동 검증하는 모듈. `solution_tagger.extract_tags_from_image` 직후 호출되어 `validation_status` / `validation_score` / `validation_issues` / `suggested_fixes` 를 산출한다. 일부 issue 는 `_apply_suggested_fixes` 에서 자동 반영된다.
+
+> 검증 대상은 **메타 필드(concept_tags / skill_tags / difficulty_score / unit)** 뿐이다. 옛 단계별풀이(solution_steps)·4필드 검증과 임베딩 자가체크(구 Layer 3)는 4차(2026-06-20)에 함께 제거됐다.
 
 운영 흐름 / DB 스키마 전반은 `ARCHITECTURE.md`. 이 문서는 검증 에이전트 한정 상세.
 
@@ -20,56 +22,33 @@ result: ValidationResult = tag_validator.validate(tag_result_dict, image_path)
 | env | 기본 | 의미 |
 |-----|------|------|
 | `TAG_VALIDATOR_ENABLED` | `true` | `false` 면 호출 측에서 검증 자체 스킵 |
-| `TAG_VALIDATOR_LAYERS` | `"123"` | 활성화할 layer 조합. `"1"` / `"13"` / `"23"` 등 가능 |
+| `TAG_VALIDATOR_LAYERS` | `"12"` | 활성화할 layer 조합. `"1"`(rule만) / `"2"`(LLM만) 가능 |
 
 ---
 
-## 3-Layer 구조
+## 2-Layer 구조
 
 ```
 validate(tag_result, image_path)
   ├─ Layer 1 — Rule (비용 0)
-  ├─ Layer 3 — Embedding (비용 0)   ← 순서상 먼저
   └─ Layer 2 — LLM (호출 1회, 가장 비쌈) — OpenAI 단일
 
 → ValidationResult { status, score, issues[], suggested_fixes? }
 ```
 
+(구 Layer 3 임베딩 자가체크는 solution_steps 폐기와 함께 제거 — 4차.)
+
 ### Layer 1 — Rule (`_layer1_rule`)
 
-Pydantic 검증을 통과한 `tag_result` 에 대해 **순수 파이썬 규칙**으로 품질 검사. 비용 0, 항상 빠름.
+Pydantic 검증을 통과한 `tag_result` 에 대해 **순수 파이썬 규칙**으로 메타 품질 검사. 비용 0, 항상 빠름. (코드 `pipeline/tag_validator.py:_layer1_rule` 기준 — 아래가 전부다.)
 
 | 검사 항목 | severity | 비고 |
 |-----------|----------|------|
 | `concept_tags` 비어있음 | **high** | reject 직행 |
 | `skill_tags` 비어있음 | medium | warning |
-| `solution_steps` 비어있음 | medium | |
-| `common_mistakes` 비어있음 | low | |
 | `difficulty_score` 1~10 범위 밖 | **high** | |
 | `unit_score < 0.5` | medium | bge-m3 단원 매칭 신뢰도 낮음 |
-| `common_mistakes.bug_id` null 비율 ≥ 70% | medium | bugs taxonomy 동의어 부족 신호 |
-| `solution_summary` / `pitfall` 영어 혼입 | **high** | `_has_english` (4자+ 영단어 비율 > 30%) |
-| step `hint` 영어 혼입 | **high** | |
-| step `hint` 안에 수식 (`\(`, `\[`, `$`) | medium | formula 필드 분리 위반 |
-| step `formula` delimiter 없음 (`\(`/`\[` 시작 안 함) | **high** | |
-| step `hint` placeholder 잔존 (`description_error`, `final_result`, `implying`) | **high** | 미완성 출력 잔존 |
-| step `concept` 이 `"null"`/`"none"` 문자열 | medium | |
-| `step_no` 중복 | **high** | 자기복제 방어 (`solution_tagger._dedup_steps` 가 1차 차단, 잔존 시 발급) |
-| step `hint` 한국어 비율 < 50% | **high** | |
-| `concept_tags` / `skill_tags` 태그가 영어 (≥80%) | **high** | |
-| `common_mistakes.text` 영어 혼입 | **high** | 학생 UI 노출 |
-
-**제거된 검사 (4차)**: 난이도별 step 개수 구간 (1-2: 2~3 / ... / 9-10: 8~12) 검증은 step 개수 강제 폐지와 함께 제거됨. step 개수 자체로는 issue 발급 안 함.
-
-### Layer 3 — Embedding 자가체크 (`_layer3_embedding`)
-
-`solution_steps` 의 hint 들을 한 문자열로 합친 임베딩 ↔ `concept_tags` 합친 문자열 임베딩의 cosine 유사도 검사.
-
-- 사용 임베더: `pipeline.embedder.generate_embedding` (`EMBED_PROVIDER` 따라감 — bge-m3 / OpenAI 3-small)
-- 임계값: `cosine < 0.4` 면 medium issue 발급 (`solution_steps 와 concept_tags 임베딩 유사도 낮음`)
-- 임베더 실패 시 silent skip (debug 로그만)
-
-비용 0 (bge-m3 로컬) ~ 미미 (OpenAI 3-small 1문제당 $0.0001 미만).
+| `concept_tags` / `skill_tags` 태그가 영어 (≥80%) | **high** | `_has_english` — 한 개라도 걸리면 발급 후 중단 |
 
 ### Layer 2 — LLM cross-check (`_layer2_llm`)
 
@@ -81,12 +60,12 @@ Pydantic 검증을 통과한 `tag_result` 에 대해 **순수 파이썬 규칙**
 - **검증 항목** (프롬프트 명시):
   1. `concept_tags` / `skill_tags` 누락 / 오태깅
   2. `unit` (단원 경로) 와 이미지 일치
-  3. `solution_steps` 가 실제 풀이 흐름과 맞는지 (누락 / 순서 / 내용 / 세분화)
-  4. `difficulty_score` 가 문제 난이도와 맞는지 (구조 신호 기반)
+  3. `difficulty_score` 가 문제 난이도와 맞는지 (구조 신호 기반)
+  4. 모든 text 필드 한국어 강제 (영어 혼입 지적)
 - **suggested_fixes 제약**: canonical 목록 안에서만 고르도록 강제 (목록 밖 용어는 후처리 매칭 실패)
 - **실패 처리**: 호출 실패 시 silent (`return [], None`) — 검증 모듈이 파이프라인 자체를 막진 않음
 
-**비용 (gpt-5.4-mini, 어려운 문제 1건)**: input 9K × $0.75/M + output 0.5K × $4.50/M ≈ **$0.009 (₩12)**
+**비용**: input ~9K + output ~0.5K tok × `OPENAI_MODEL` 단가 — 문제당 1원 안팎.
 
 ---
 
@@ -115,7 +94,7 @@ score = max(0.0, round(score, 2))
 
 ```python
 class ValidationIssue(BaseModel):
-  field: str                      # "concept_tags", "solution_steps", ...
+  field: str                      # "concept_tags", "skill_tags", "difficulty_score", "unit"
   reason: str                     # 한국어 사람이 읽는 메시지
   severity: Literal["low", "medium", "high"]
   applied: bool = False           # _apply_suggested_fixes 가 자동 반영 시 True
@@ -172,9 +151,7 @@ CMS UI 는 `validation_issues` 에서 `applied=true` 인 항목을 **자동 반�
 
 ## 운영 팁
 
-- **빠른 디버깅**: `TAG_VALIDATOR_LAYERS=1` 로 두면 LLM 호출 없이 rule 검증만 → 빠르게 회귀 확인
-- **비용 줄이기**: `TAG_VALIDATOR_LAYERS=13` 으로 Layer 2 끄기 (rule + embedding 만)
-- **Layer 2 만 끄고 OpenAI 비용 0**: 위와 동일
+- **빠른 디버깅 / 비용 0**: `TAG_VALIDATOR_LAYERS=1` 로 두면 LLM 호출 없이 rule 검증만 → 빠르게 회귀 확인 (OpenAI 비용 0)
 - **canonical 목록 캐시**: `_canonical_cache` 가 module-level → uvicorn reload 가 아니면 갱신 안 됨. taxonomy 갱신 후 서버 재기동 필수
 
 ---

@@ -29,15 +29,14 @@ copy .env.example .env
 
 ### 3. Supabase DB 마이그레이션
 
-원격 DB 기준 **010 까지 적용** (Supabase MCP `list_migrations` 로 확인). 로컬 `supabase/migrations/` 폴더에는 008 까지만 SQL 파일 존재 — 009/010 은 원격 DB 직접 적용 (드리프트 상태).
+**baseline 리셋(2026-06-20).** 현재 원격 구조 전체를 `baseline_20260620.sql` 한 장으로 스냅샷했다. 이후 변경은 `017_` 부터 순번으로 쌓는다. 옛 001~016 은 `_archive/`(역사 보존, 새 환경 실행 금지).
 
 신규 환경 셋업 시:
 ```
-supabase/migrations/001_fix_image_url_and_add_staging.sql ... 008_*.sql 순서로 실행
-009/010 은 Supabase MCP 또는 SQL Editor 에서 별도 적용 필요
+supabase/migrations/baseline_20260620.sql 한 장 실행 → 017_*.sql 이상 순서로 실행
 ```
 
-마이그레이션 이력은 `ARCHITECTURE.md` §10 참조.
+상세는 `supabase/migrations/README.md`.
 
 ### 4. 서버 실행
 
@@ -64,25 +63,31 @@ pdf_pipeline/
 ├── config.py                  # 환경변수
 ├── ARCHITECTURE.md            # AI 튜터 데이터 파이프라인 전체 구조 ← 읽어볼 것
 ├── docs/
-│   └── TAG_VALIDATOR.md       # 3-layer 검증 에이전트 상세 (Layer 1/2/3, OpenAI)
+│   └── TAG_VALIDATOR.md       # 2-layer 검증 에이전트 상세 (Layer 1 rule / Layer 2 OpenAI)
 ├── requirements.txt
 ├── data/
 │   └── concept_taxonomy.json  # concepts 375 / skills 359 / units 15 / bugs 14
 ├── pipeline/
 │   ├── file_converter.py        # PDF → 페이지 이미지 (PyMuPDF)
 │   ├── image_cropper.py         # 문제 박스 크롭 (OpenCV, 한글 경로 대응)
-│   ├── ocr_engine.py            # EasyOCR 래퍼
+│   ├── ocr_engine.py            # EasyOCR 래퍼 (레거시 — 현재 흐름 미사용)
 │   ├── yolo_detector.py         # 모의고사 문제 박스 YOLO 추론
 │   ├── yolo_solution_detector.py # 해설 박스 YOLO 추론
-│   ├── solution_parser.py       # 해설 크롭 + 정답 파싱 + 페이지 걸침 병합
+│   ├── solution_parser.py       # 해설 크롭 + 정답·정답률 파싱 + 페이지 걸침 병합
 │   ├── vl_providers.py          # VL 호출 (OpenAI 단일) — call_vl(image, prompt, schema)
-│   ├── solution_tagger.py       # Call A/B + 정답률 난이도(difficulty_resolver) + _apply_suggested_fixes
+│   ├── solution_tagger.py       # Call A(메타) + 정답률 난이도(difficulty_resolver) + _apply_suggested_fixes
 │   ├── difficulty_resolver.py   # 정답률 → 난이도 구간매핑
+│   ├── rag_node_extractor.py    # 풀이 그래프 노드 1회 통합 추출(uses/whys) — 막힌 지점 도우미 코퍼스
 │   ├── tag_normalizer.py        # 태그 → canonical 매칭 (bge-m3 cosine ≥ 0.65)
 │   ├── unit_matcher.py          # 태그 → units leaf 경로 매핑 (bge-m3)
-│   ├── tag_validator.py         # 3-layer 태깅 검증 에이전트 → docs/TAG_VALIDATOR.md
+│   ├── tag_validator.py         # 2-layer 태깅 검증 에이전트 → docs/TAG_VALIDATOR.md
 │   ├── embedder.py              # 임베딩 (bge-m3, Ollama 고정)
 │   └── solution_matcher.py      # 문제 ↔ 해설 번호 매칭
+├── routers/
+│   ├── tutor.py               # POST /api/tutor/hint (학생, 막힌 지점 도우미)
+│   └── nodes.py               # 풀이 노드 CRUD (교사, CMS 노드 편집기)
+├── handlers/
+│   └── stuck_helper.py        # localize → retrieve → generate
 └── storage/
     └── supabase_client.py     # problem_staging / solution_jobs CRUD
 ```
@@ -90,24 +95,29 @@ pdf_pipeline/
 ## 처리 흐름
 
 ```
-문제 PDF → OCR/YOLO 크롭 → problem_staging → CMS 검수 → problems 테이블
+문제 PDF → YOLO11 크롭 → problem_staging → CMS 검수 → problems 테이블
 
-해설 PDF → 페이지 이미지 → 걸침 병합 → VL 태깅 (OpenAI 단일)
-           ├─ Call A (메타: 정답률/concept/skill/...) — 정답률 있으면 난이도 구간매핑
-           ├─ Call B (steps): 2-Pass(스켈레톤 + per-step)
+해설 PDF → 페이지 이미지 → 걸침 병합 → 메타 태깅 (Call A, OpenAI 단일)
+           ├─ Call A (메타: 정답률/concept/skill/난이도/단원) — 정답률 있으면 난이도 구간매핑
            ├─ tag_normalizer (canonical) + unit_matcher (단원)
-           └─ tag_validator (3-layer; Layer 2 OpenAI)
-         → problem_staging (solution_steps/common_mistakes 포함) → problem_tags
+           └─ tag_validator (2-layer; Layer 2 OpenAI)
+         → problem_staging → problem_tags
          → CMS 검수 (재태깅 / 전체 재태깅 버튼) → problems 테이블
+
+풀이 그래프 (RAG 코퍼스, 별도 추출):
+해설 이미지 → rag_node_extractor (1회 통합 VL, uses/whys) → solution_nodes
+           → CMS 노드 편집기(routers/nodes.py) 수동 보정
+           → 막힌 지점 도우미(routers/tutor.py) localize→retrieve→generate
 ```
 
 상세는:
 - 데이터 흐름 / DB 스키마: `ARCHITECTURE.md`
 - 검증 에이전트 동작: `docs/TAG_VALIDATOR.md`
 
-## 연관 백엔드
+## 막힌 지점 도우미 (AI 튜터, 통합)
 
-- `backend/deeptutor/` — AI 튜터링 (운영 중, LangGraph 다중턴 대화)
-  - `problem_tags` + `solution_steps` + `common_mistakes` 를 활용해 학생 답안 진단 및 단계별 힌트 생성
-  - API: `POST /api/tutor/start`, `POST /api/tutor/chat/{conversation_id}`
-  - 상세: `backend/deeptutor/routers/tutor.py`, `graph/`, `handlers/`
+별도 백엔드 없음 — 이 파이프라인(8001) 안에 통합됐다. _구 `backend/deeptutor/`(LangGraph 다중턴 대화)는 2026-06-18 폐기·삭제._
+
+- API: `POST /api/tutor/hint` (학생) — `routers/tutor.py`. 흐름 `handlers/stuck_helper.py` localize→retrieve→generate.
+- 데이터: `solution_nodes`(uses/whys, bge-m3 1024) + RPC `search_solution_nodes_for_hint`. 적재 `scripts/backfill_solution_nodes.py`.
+- 노드 편집(교사): `routers/nodes.py` — CMS 노드 편집기 CRUD. 수정 시 임베딩 자동 재생성.

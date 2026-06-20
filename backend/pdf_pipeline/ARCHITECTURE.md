@@ -13,11 +13,9 @@
 │                                                                   │
 │  PDF 업로드                                                       │
 │    │                                                              │
-│    ├─ [쎈 교재] EasyOCR/Surya 로 문제번호 경계 검출              │
-│    │              → image_cropper.crop_and_save()                 │
-│    │                                                              │
-│    └─ [모의고사] YOLO 로 문제 박스 검출                           │
+│    └─ YOLO11 로 문제 박스 검출 (쎈/모의고사 공통)                │
 │                   → yolo_detector.detect()                        │
+│                   (OCR 레거시 제거 — 커밋 0f633eb)                │
 │                                                                   │
 │    문제 크롭 이미지 → problem_staging (bbox, source_image_url)   │
 │    CMS 검수 (bbox 편집, 번호 수정)                                │
@@ -39,31 +37,36 @@
 │    - 정답표 OCR 또는 "N) ④" 인라인 패턴                          │
 │    │                                                              │
 │    ▼                                                              │
-│  VL 태깅 (solution_tagger.extract_tags_from_image)               │
-│    - Call A (메타): vl_providers.call_vl() → OpenAI               │
-│    - Call B (steps): 2-Pass(스켈레톤 + per-step) → OpenAI         │
+│  메타 태깅 (solution_tagger.extract_tags_from_image)             │
+│    - Call A (메타): vl_providers.call_vl() → OpenAI (한 번)       │
+│      (difficulty_score, correct_rate, concept_tags,               │
+│       skill_tags, answer_type)                                    │
 │    - tag_normalizer 로 concept/skill canonical 매칭               │
 │    - unit_matcher 로 bge-m3 cosine → units leaf 매핑             │
-│    │                                                              │
+│    - difficulty_resolver: correct_rate 있으면 난이도 구간매핑     │
+│    │   (옛 Call B 단계별풀이·4필드는 4차에서 제거)               │
 │    ▼                                                              │
-│  tag_validator (3-layer 검증)                                     │
-│    - Layer 1: Rule 기반 (필드 누락, 영어 혼입, unit_score < 0.5)  │
+│  tag_validator (2-layer 검증)                                     │
+│    - Layer 1: Rule 기반 (필드 누락, 영어 혼입, 범위 검사)         │
 │    - Layer 2: LLM 재검증 (이미지 + 태깅 결과 cross-check) → OpenAI│
-│    - Layer 3: 임베딩 자가체크 (solution_steps ↔ concept_tags)    │
 │    → 상세: docs/TAG_VALIDATOR.md                                  │
 │    │                                                              │
 │    ▼                                                              │
 │  problem_staging 저장                                             │
-│    (solution_summary, pitfall, unit, difficulty,                  │
-│     solution_steps, common_mistakes,                              │
+│    (unit, difficulty, difficulty_score, correct_rate,             │
 │     validation_status, validation_score, validation_issues)       │
 │    │                                                              │
 │    ▼                                                              │
 │  problem_tags 저장 (concept/skill 정규화 레코드)                  │
 │    │                                                              │
 │    ▼                                                              │
-│  승인 → problems 테이블 (solution_steps, common_mistakes 포함)    │
+│  승인 → problems 테이블                                           │
 └─────────────────────────────────────────────────────────────────┘
+
+  풀이 그래프 (RAG 코퍼스, 별도 추출 — solution_tagger 와 독립):
+    해설 이미지 → rag_node_extractor (1회 통합 VL, uses/whys)
+                → solution_nodes → CMS 노드 편집기(routers/nodes.py)
+                → 막힌 지점 도우미(routers/tutor.py)
 ```
 
 ---
@@ -76,10 +79,9 @@
 
 | 호출 | Provider | 비고 |
 |------|----------|------|
-| Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o) |
-| Call B (steps) | OpenAI | 2-Pass(스켈레톤 + per-step) |
+| Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o). 해설 태깅은 이 한 번뿐(Call B 제거, 4차) |
 | 검증 Layer 2 | OpenAI | 난이도 무관 항상 OpenAI |
-| 막힌 지점 도우미 (튜터) | OpenAI | localize / generate / 노드추출 |
+| 막힌 지점 도우미 (튜터) | OpenAI | localize / generate / 노드추출(1회 통합) |
 
 - `call_vl(...)` 은 항상 OpenAI 호출. `provider` 인자는 하위호환용으로 받기만 하고 무시.
 - 옛 `provider_selector.py`(시간대 분기), `_route_call_b_provider`(난이도 분기), gemma4 반복 폭주 방어 코드는 모두 제거됨.
@@ -106,57 +108,42 @@ VL 과 달리 임베딩은 bge-m3(Ollama, 1024차원) 유지.
 | `image_cropper.py` | 문제 박스 크롭. `_imread_unicode` / `_imwrite_unicode` (한글 경로 대응) |
 | `yolo_detector.py` | 모의고사 문제 박스 YOLO 추론 (conf=0.3) |
 | `yolo_solution_detector.py` | 해설지 박스 YOLO 추론 |
-| `solution_parser.py` | 정답표/인라인 정답 OCR 파싱 + 페이지 걸침 해설 병합 |
+| `solution_parser.py` | 정답표/인라인 정답·정답률 파싱 + 페이지 걸침 해설 병합 |
 | `vl_providers.py` | VL 호출 (OpenAI 단일). `call_vl(image_path, prompt, schema)` |
 | `embedder.py` | 텍스트 → 벡터 (bge-m3 1024d, Ollama 고정) |
-| `solution_tagger.py` | VL 호출 → TagResult → tag_normalizer/unit_matcher 후처리 → DB 저장 |
+| `solution_tagger.py` | Call A(메타) VL 호출 → TagResultMeta → tag_normalizer/unit_matcher 후처리 → DB 저장 |
+| `difficulty_resolver.py` | correct_rate → 난이도 구간매핑 (있으면 GPT 추정보다 우선) |
+| `rag_node_extractor.py` | 풀이 그래프 노드 1회 통합 추출(uses/whys) → solution_nodes (RAG 코퍼스) |
 | `tag_normalizer.py` | 태그 문자열 → concepts/skills canonical 매칭 (cosine ≥ 0.65) |
 | `unit_matcher.py` | 태그 문자열 → units leaf 경로 매칭 (cosine, 캐시 pkl) |
-| `tag_validator.py` | 3-layer 검증 에이전트 → ValidationResult |
+| `tag_validator.py` | 2-layer 검증 에이전트 → ValidationResult |
 | `solution_matcher.py` | 문제 ↔ 해설 번호 매칭 + match_confidence |
-| `ocr_engine.py` | EasyOCR 래퍼 (Korean+English, GPU) |
+| `ocr_engine.py` | EasyOCR 래퍼 (레거시 — 현재 흐름 미사용) |
 
 ---
 
-## 4. AI 태깅 스키마 (TagResult)
+## 4. AI 태깅 스키마 (TagResultMeta)
 
-VL 모델이 해설 이미지 1장에서 추출하는 필드:
+해설 태깅은 **Call A 한 번**(VL=OpenAI)으로 메타만 뽑는다. 옛 단계별풀이(Call B 2-Pass)와 4필드(solution_summary/pitfall/solution_steps/common_mistakes)는 **4차에서 추출·저장·검증·DB컬럼까지 전부 제거**. 풀이 그래프는 별도 추출기(`rag_node_extractor.py`)가 담당한다(§8).
 
 ```python
-class TagResult(BaseModel):
-    difficulty_score: int                 # 1~10 정수 (1-2=very_easy ... 9-10=very_hard, 구조 신호 기반)
-    concept_tags: list[str]               # 최대 3개, 한국어 canonical
-    skill_tags: list[str]                 # 최대 3개, 한국어 canonical
+class TagResultMeta(BaseModel):
+    difficulty_score: int                 # 1~10 정수 (정답률 우선, 없으면 구조 신호)
+    correct_rate: float | None            # 해설 이미지에 "정답률 N%" 명시 시 0~100, 없으면 null(추측 금지)
+    concept_tags: list[str]               # 1~3개 (빈 리스트 금지), 한국어 canonical
+    skill_tags: list[str]                 # 1~3개 (빈 리스트 금지), 한국어 canonical
     answer_type: str | None               # "multiple_choice" | "short_answer"
-    solution_summary: str | None          # 풀이 요약, 20단어 이내
-    pitfall: str | None                   # 오답포인트, 20단어 이내
-    solution_steps: list[SolutionStep]    # 난이도별 2~12 steps, 점진 증가
-    common_mistakes: list[CommonMistake]  # 2-3개 [{text, bug_id?}]
-
-class SolutionStep(BaseModel):
-    step: int
-    hint: str                             # 학생에게 공개하는 힌트 문장 (한국어, 수식 인라인 허용)
-    formula: str                          # 이 힌트의 핵심 식 \( ... \) — 필수, null 금지
-    concept: str                          # 이 힌트가 짚는 개념/정리 이름 (한국어 1~3단어, 필수)
 ```
 
-**난이도 (difficulty_score)** 구조 신호 기반 판정:
-- 1-2 (very_easy): 공식 1개 직접 대입
-- 3-4 (easy): 2~3단 계산, 개념 1개 내
-- 5-6 (medium): 조건 2~3개 조합, 개념 1~2개
-- 7-8 (hard): 경우분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개
-- 9-10 (killer): 위 신호 2개 이상 해당 (경우분리 3+, 중첩 2+, 미지수 2+, 스텝 7+ 등)
-
-**solution_steps 개수**: 모델 자율 결정 (4차에서 난이도별 강제 폐지). 빈 리스트만 금지. `CALL_B_MAX_STEPS` (기본 15) 가 상한 안전장치로만 작동. 자세한 step 품질 검증은 `docs/TAG_VALIDATOR.md` Layer 1 참조.
-
-**Call B 구조 (2-Pass)**: Pass 1 에서 스켈레톤(step 수 + role/produces/uses DAG, 내용 없음)을 1회 받고, Pass 2 에서 각 step 의 내용(hint/formula/concept/whys)을 채운다. VL 은 OpenAI 단일(2026-06-19 gemma4 폐기). 과거 per-step loop 는 gemma4 반복 폭주 방어용이었으나 OpenAI 는 그 문제가 없어 의미가 약해짐 — 현재는 OpenAI 로 안정 동작.
-
-**필드명 이력 (2026-04-23)**: `description / formula / reason` → `hint / formula / concept` 로 통일 (4차 리팩터 연장). 학생에게 공개되는 힌트 의미를 필드명에 직접 반영 + 3필드 모두 필수로 강화.
+**난이도 (difficulty_score)** — 정답률 우선, 없으면 구조 신호:
+- 정답률 있으면 `difficulty_resolver` 구간매핑(80%↑=2 / 60~80=4 / 40~60=6 / 20~40=8 / 20%↓=10).
+- 정답률 없으면 구조 신호(경우분리 개수·중첩 깊이·개념 복합도)로 1~10. 하한 규칙: 경우분리 3+ → 최소 8, 신호 2+ → 최소 9. 문제 번호는 참고만(시대 무관).
 
 후처리:
 - `tag_normalizer` 가 concept/skill 을 `concept_taxonomy.json` canonical 로 정규화 (cosine ≥ 0.65)
 - `unit_matcher` 가 태그 조합으로 단원 경로 결정 (예: `"대수 > 삼각함수"`)
-- `tag_validator` 3-layer 검증 → `validation_status` (ok/warning/reject) + `validation_score` — `docs/TAG_VALIDATOR.md`
+- `difficulty_resolver` 가 correct_rate 있으면 난이도를 구간매핑으로 덮어씀
+- `tag_validator` 2-layer 검증 → `validation_status` (ok/warning/reject) + `validation_score` — `docs/TAG_VALIDATOR.md`
 - `suggested_fixes` 가 있으면 canonical 매칭 성공 시 자동 반영 (`applied: true` 플래그)
 
 ---
@@ -174,11 +161,10 @@ class SolutionStep(BaseModel):
 | `difficulty` | text | very_easy/easy/medium/hard/very_hard (GENERATED from difficulty_score) |
 | `answer_type` | text | multiple_choice/short_answer |
 | `correct_answer` | text | 정답 |
-| `solution_summary` | text | AI 추출 풀이 요약 |
-| `pitfall` | text | AI 추출 오답포인트 |
-| `solution_steps` | jsonb | `[{step, hint, formula, concept}, ...]` — 단계별 힌트용 (3필드 모두 필수, null 금지) |
-| `common_mistakes` | jsonb | `[{text, bug_id}, ...]` — 오답 원인 진단용 |
+| `correct_rate` | float | 해설 정답률(0~100), 난이도 구간매핑 입력 |
 | `image_url` | text | Supabase Storage 문제 이미지 |
+
+> 옛 `solution_summary`·`pitfall`·`solution_steps`·`common_mistakes` 컬럼은 4차(2026-06-20)에 DROP. 풀이는 별도 `solution_nodes` 테이블(§8)로 이전.
 
 ### `problem_staging` (검수 중간 저장)
 
@@ -260,7 +246,7 @@ AI 튜터 온톨로지의 기반. 이 파일을 기준으로 모든 태깅이 �
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | POST | `/api/upload` | 문제 PDF 업로드 |
-| POST | `/api/extract/{job_id}` | OCR/YOLO 추출 (비동기) |
+| POST | `/api/extract/{job_id}` | YOLO11 추출 (비동기) |
 | GET | `/api/jobs/{job_id}` | 추출 진행 상황 |
 | GET | `/api/staging/{job_id}` | 검수용 staging 목록 |
 | PATCH | `/api/staging/{staging_id}` | bbox/번호 수정 |
@@ -289,10 +275,11 @@ AI 튜터 온톨로지의 기반. 이 파일을 기준으로 모든 태깅이 �
 
 > 구 deeptutor(LangGraph 다중턴 대화)는 **폐기됨 (2026-06-18)**. 막힌 지점 도우미만 이 파이프라인으로 이전·개선.
 
-API: `POST /api/tutor/hint` (`routers/tutor.py`, `main.py include_router(prefix=/api/tutor)`)
+API: `POST /api/tutor/hint` (학생, `routers/tutor.py`, `main.py include_router(prefix=/api/tutor)`)
 흐름: localize → retrieve → generate (`handlers/stuck_helper.py`). 서버 무상태.
-노드 코퍼스: `solution_nodes` 테이블 (마이그레이션 `add_solution_nodes`) + RPC `search_solution_nodes_for_hint`
+노드 코퍼스: `solution_nodes` 테이블 (uses/whys 포함, baseline 에 반영) + RPC `search_solution_nodes_for_hint`
 노드 추출: `pipeline/rag_node_extractor.py` (해설 이미지 **1회 통합** VL 분해 — 전체 노드 배열 1회 structured output, 각 노드에 uses(전이 DAG)+whys(논리 근거) 포함 → `backfill_solution_nodes.py` 로 적재). VL=OpenAI 단일.
+노드 편집(교사): `routers/nodes.py` — CMS 노드 편집기 CRUD(조회·수정·추가·삭제·재추출). 수정 시 임베딩 자동 재생성, uses DAG acyclic 정제, node_index 순번 재매김.
 
 ### 풀이 노드 검색 (solution_nodes — 위치추적 RAG 핵심)
 ```sql
@@ -309,16 +296,7 @@ SELECT * FROM search_solution_nodes_for_hint(
 
 아래 쿼리는 튜터가 보조로 참조하는 데이터 패턴.
 
-### 단계별 힌트 (solution_steps)
-```sql
-SELECT solution_steps FROM problems WHERE id = $problem_id;
--- [{step: 1, hint: "시그마를 두 항으로 분리해볼까?",
---   formula: "\\(\\sum (a_k+1) = \\sum a_k + \\sum 1\\)", concept: "시그마 분배"}, ...]
--- 학생이 막혔을 때 step 1 → step 2 순서로 공개.
--- hint (학생에게 보여주는 힌트) → formula (식) → concept (개념명) 3단 구조.
-```
-
-### 오답 원인 진단 (common_mistakes + bug_id)
+### 오답 원인 진단 (problem_tags.bug_id)
 ```sql
 SELECT cm.text, cm.bug_id
 FROM problem_tags pt
@@ -366,20 +344,15 @@ Supabase Storage (`problem-images` 버킷) 에는 CMS 검수 완료 후 승인�
 
 ---
 
-## 10. 마이그레이션 이력
+## 10. 마이그레이션 (baseline 리셋, 2026-06-20)
 
-| 번호 | 파일 | 주요 변경 |
-|------|------|-----------|
-| 001 | `001_fix_image_url_and_add_staging.sql` | image_url 수정 + problem_staging 추가 |
-| 002 | `002_add_structuring_columns.sql` | 구조화 컬럼 추가 |
-| 003 | `003_add_textbook_relations.sql` | 교재 관계 테이블 |
-| 004 | `004_add_bbox_columns.sql` | bbox JSONB 컬럼 |
-| 005 | `005_add_solution_and_tags.sql` | solution_jobs, problem_tags 테이블 |
-| 006 | `006_problem_staging_pitfall.sql` | pitfall, match_confidence 컬럼 |
-| 007 | `007_deeptutor_conversation.sql` | ~~DeepTutor student_conversations~~ — **폐기(원격 미적용)**. 로컬 파일 deprecated |
-| 008 | `008_add_ontology_columns.sql` | solution_steps, common_mistakes JSONB |
-| 009 | `add_validation_columns` (원격 DB 전용) | validation_status/score/issues 컬럼 |
-| 010 | `add_difficulty_score` (원격 DB 전용) | difficulty_score INT 1~10 + 5단계 GENERATED 라벨 |
-| **011** | `011_add_solution_nodes.sql` | **solution_nodes 테이블 + RPC search_solution_nodes_for_hint (튜터 RAG)** ← 현재 |
+엉킨 001~016 드리프트를 해소하고 **현재 원격 DB 구조 전체를 `baseline_20260620.sql` 한 장으로 스냅샷**했다. 이후 변경은 `017_` 부터 순번. 옛 001~016 은 `_archive/`(역사 보존, 새 환경 실행 금지).
 
-⚠️ 009·010 은 로컬 `supabase/migrations/` 폴더엔 파일 없음(원격 전용). 011 은 로컬 파일 존재(원격 `add_solution_nodes` 로 적용됨). Supabase MCP `list_migrations` 로 확인.
+| 파일 | 내용 |
+|------|------|
+| `baseline_20260620.sql` | 원격 구조 전체 — 테이블 18(problems, problem_staging, problem_tags, solution_jobs, solution_nodes(uses/whys), problem_sets, …) + FK·UNIQUE·인덱스·트리거 + RPC 2개(recalc_set_difficulty, search_solution_nodes_for_hint) |
+| `017_fix_recalc_set_difficulty_column.sql` | baseline 이후 첫 변경(세트 난이도 함수 버그 수정) |
+
+신규 환경: baseline 한 장 → 017 이상 순서로 실행. 상세 `supabase/migrations/README.md`.
+
+> 4차 정리(015/016, `_archive/`): 옛 해설 4컬럼(solution_summary/pitfall/solution_steps/common_mistakes) DROP + `tags`·`problem_sets_new` 테이블 DROP — 결과는 baseline 에 반영됨.

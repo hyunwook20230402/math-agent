@@ -16,6 +16,7 @@ import sys
 _TUTOR_FILES = (
     "backend/pdf_pipeline/handlers/stuck_helper.py",
     "backend/pdf_pipeline/routers/tutor.py",
+    "backend/pdf_pipeline/routers/nodes.py",
     "backend/pdf_pipeline/auth.py",
     "backend/pdf_pipeline/models.py",
     "backend/pdf_pipeline/pipeline/rag_node_extractor.py",
@@ -38,8 +39,9 @@ if not os.path.exists(PY):
 # 실제 호출 없이 import 그래프만 — 빠르고 부작용 없음
 code = (
     "from routers.tutor import router; "
+    "from routers.nodes import router as nodes_router; "
     "from handlers import stuck_helper; "
-    "from auth import get_student_id; "
+    "from auth import get_student_id, get_teacher_id; "
     "from models import HintRequest"
 )
 try:

@@ -17,7 +17,7 @@
 2. `POST /solutions/{job_id}/extract` — 해설 크롭 + 정답 파싱.
 3. **샘플 태깅** (권장) — `POST /solutions/{job_id}/upload-and-tag?sample_count=4&mode=fresh` → 앞 4개만 태깅해 프롬프트/taxonomy 검증.
 4. **이어서 태깅** — `POST /solutions/{job_id}/upload-and-tag?mode=continue` → 나머지 26개.
-5. **적용** — `POST /solutions/{job_id}/apply` — `solution_summary / pitfall / unit / difficulty` 를 `problem_staging` 에 반영, `problem_tags` 에 concept/skill 삽입.
+5. **적용** — `POST /solutions/{job_id}/apply` — `unit / difficulty / difficulty_score / correct_rate` 를 `problem_staging` 에 반영, `problem_tags` 에 concept/skill 삽입. (옛 4필드는 4차에서 제거.)
 
 CMS 는 `apps/cms/src/pages/SolutionReview.tsx` 에서 이 흐름을 UI 로 제공 (샘플/이어서/전체 버튼 + 번호별 결과 카드).
 
@@ -27,7 +27,7 @@ CMS 는 `apps/cms/src/pages/SolutionReview.tsx` 에서 이 흐름을 UI 로 제�
 - **Supabase 키 누락** — `.env` 의 `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
 - **UPLOAD_DIR 불일치** — 업로드 파일이 안 보이면 `.env` 의 `UPLOAD_DIR` 가 실제 디렉토리 가리키는지 확인 (보통 `backend/pdf_pipeline/uploads`).
 - **VRAM OOM** — YOLO/VL 모델 동시 실행 금지. 각 단계가 독립 요청으로 쪼개진 이유.
-- **마이그레이션** — `solution_steps`, `common_mistakes` JSONB 컬럼 필요. 008 까지 적용 상태여야 함.
+- **마이그레이션** — baseline(`baseline_20260620.sql`) + 017 이상 적용 상태여야 함. 상세 `supabase/migrations/README.md`.
 
 ## 참고
 

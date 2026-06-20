@@ -4,18 +4,17 @@
 
 ## 역할
 
-세 가지 파이프라인 운영 중 (`backend/pdf_pipeline/main.py` ≈ 1700 줄, 엔드포인트 14개):
+두 파이프라인 운영 중 (`backend/pdf_pipeline/main.py`):
 
-1. **쎈 교재 파이프라인** — 스캔 PDF → EasyOCR/Surya 로 문제 번호 경계 검출 → 개별 문제 크롭 → `problem_staging` 저장.
-2. **모의고사 파이프라인** — YOLO 로 문제 박스 검출 → 크롭 → `problem_staging` 저장.
-3. **해설지 파이프라인** — 해설 PDF → 페이지 걸침 병합 → Storage 업로드 → VL 모델 태깅 → `problem_staging` 에 `solution_summary / pitfall / unit / difficulty_score / solution_steps(hint + formula + concept) / common_mistakes` 채움. → `problem_tags` 에 concept/skill canonical 저장.
+1. **문제 파이프라인** — PDF → YOLO11 로 문제 박스 검출 → 크롭 → `problem_staging` 저장 (쎈/모의고사 공통, OCR 레거시 제거).
+2. **해설지 파이프라인** — 해설 PDF → 페이지 걸침 병합 → Storage 업로드 → 메타 태깅(Call A, OpenAI) → `problem_staging` 에 `unit / difficulty_score / correct_rate / concept_tags / skill_tags` 채움. → `problem_tags` 에 concept/skill canonical 저장.
+   - 옛 4필드(solution_summary/pitfall/solution_steps/common_mistakes)·Call B 는 4차에서 제거. 풀이 그래프는 별도 추출기 `rag_node_extractor.py` 가 담당(`solution_nodes`).
 
 ## 환경
 
 - Python 3.11, FastAPI (포트 8001)
 - **VL=OpenAI 단일** (2026-06-19 gemma4 폐기). `OPENAI_API_KEY` 필요.
-- EasyOCR, Surya OCR (문제 크롭)
-- YOLO (ultralytics) — 모의고사/해설지 박스 검출
+- YOLO11 (ultralytics) — 문제/해설지 박스 검출 (OCR 레거시 제거)
 - bge-m3 (Ollama, 1024차원) — canonical 매칭 임베딩
 
 ## 주요 엔드포인트
@@ -23,7 +22,7 @@
 | 엔드포인트 | 역할 |
 |-----------|------|
 | `POST /api/upload` | 문제 PDF 업로드 |
-| `POST /api/extract/{job_id}` | OCR+YOLO 추출 (비동기) |
+| `POST /api/extract/{job_id}` | YOLO11 추출 (비동기) |
 | `GET /api/staging/{job_id}` | 검수용 staging 조회 |
 | `POST /api/staging/{job_id}/approve-all` | staging → problems 승인 |
 | `GET /api/staging/{staging_id}/tags` | 문제 태그 조회 |
@@ -44,14 +43,15 @@ backend/pdf_pipeline/
 ├── pipeline/
 │   ├── file_converter.py   # PDF → 페이지 이미지
 │   ├── image_cropper.py    # 문제 박스 크롭 (OpenCV, 한글 경로 대응)
-│   ├── ocr_engine.py       # EasyOCR 래퍼
-│   ├── yolo_detector.py    # YOLO 추론
-│   ├── solution_parser.py  # 해설 페이지 걸침 병합 + 정답 파싱
+│   ├── ocr_engine.py       # EasyOCR 래퍼 (레거시 — 현재 흐름 미사용)
+│   ├── yolo_detector.py    # YOLO11 추론
+│   ├── solution_parser.py  # 해설 페이지 걸침 병합 + 정답·정답률 파싱
 │   ├── vl_providers.py     # VL 호출 (OpenAI 단일)
-│   ├── solution_tagger.py  # VL 태깅 + tag_normalizer/unit_matcher 후처리
+│   ├── solution_tagger.py  # Call A(메타) 태깅 + tag_normalizer/unit_matcher 후처리
+│   ├── rag_node_extractor.py # 풀이 그래프 노드 추출 (solution_nodes, RAG)
 │   ├── tag_normalizer.py   # 태그 → canonical 매칭 (cosine ≥ 0.65)
 │   ├── unit_matcher.py     # 태그 → units leaf 경로 매핑 (bge-m3)
-│   ├── tag_validator.py    # 3-layer 검증 (rule / LLM / 임베딩)
+│   ├── tag_validator.py    # 2-layer 검증 (rule / LLM)
 │   ├── embedder.py         # 임베딩 (bge-m3, Ollama 고정)
 │   └── solution_matcher.py # 문제 ↔ 해설 매칭 + confidence
 ├── storage/
@@ -85,4 +85,4 @@ backend/pdf_pipeline/
 ## AI 튜터 데이터 구조
 
 상세 내용은 `backend/pdf_pipeline/ARCHITECTURE.md` 참조.
-핵심: solution_steps(단계별 힌트) + common_mistakes(오답 원인) + problem_tags(concept/skill/bug) 가 AI 튜터의 진단·추천 기반.
+핵심: `solution_nodes`(풀이 그래프 노드 — role/key_concept/output_formula/uses/whys/embedding) 가 막힌 지점 도우미(RAG 튜터)의 위치추적·힌트 기반. `problem_tags`(concept/skill/bug)는 단원·유사문제 보조.

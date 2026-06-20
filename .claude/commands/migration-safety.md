@@ -55,6 +55,6 @@ mcp__supabase__apply_migration
 
 ## 참고
 
-- 현재 적용 상태: 008 (`solution_steps`, `common_mistakes` JSONB — problems + problem_staging)
-- 마이그레이션 히스토리: `supabase/migrations/`
+- 현재 적용 상태: baseline 리셋(2026-06-20) — `baseline_20260620.sql` + `017_` 이상. 옛 001~016 은 `_archive/`.
+- 마이그레이션 히스토리: `supabase/migrations/README.md`
 - DB 규칙: `.claude/rules/db-conventions.md`

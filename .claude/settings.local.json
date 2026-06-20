@@ -32,7 +32,6 @@
       "Bash(head *)",
       "Bash(2>/dev/null)",
       "Read(//c/Users/user/workspaces/math/**)",
-      "Read(//c/tmp/pdf_pipeline/**)",
       "WebSearch",
       "WebFetch(domain:ollama.com)",
       "mcp__supabase__execute_sql",
