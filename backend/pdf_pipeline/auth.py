@@ -30,11 +30,8 @@ def _get_anon_client() -> Client:
     return _anon_client
 
 
-async def get_student_id(authorization: str = Header(...)) -> str:
-    """Authorization: Bearer <JWT> → profiles.id 반환.
-
-    student 역할이 아니면 403.
-    """
+def _resolve_profile(authorization: str, required_role: str) -> str:
+    """Authorization: Bearer <JWT> → profiles.id. required_role 이 아니면 403."""
     if not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Bearer 토큰이 필요합니다")
 
@@ -59,7 +56,20 @@ async def get_student_id(authorization: str = Header(...)) -> str:
     if not result.data:
         raise HTTPException(status_code=404, detail="프로필 없음")
 
-    if result.data.get("role") != "student":
-        raise HTTPException(status_code=403, detail="학생만 접근 가능합니다")
+    if result.data.get("role") != required_role:
+        raise HTTPException(status_code=403, detail=f"{required_role} 만 접근 가능합니다")
 
     return result.data["id"]
+
+
+async def get_student_id(authorization: str = Header(...)) -> str:
+    """Authorization: Bearer <JWT> → profiles.id 반환. student 역할이 아니면 403."""
+    return _resolve_profile(authorization, "student")
+
+
+async def get_teacher_id(authorization: str = Header(...)) -> str:
+    """Authorization: Bearer <JWT> → profiles.id 반환. teacher 역할이 아니면 403.
+
+    CMS 노드 편집 등 운영자 전용 API 용.
+    """
+    return _resolve_profile(authorization, "teacher")

@@ -279,6 +279,25 @@ def _normalize_role(role: str) -> str:
   return r if r in _VALID_ROLES else "computation"
 
 
+def compose_embedding_text(
+  key_concept: str | None,
+  entry_conditions: str | None,
+  whys: List[dict],
+  output_formula: str | None,
+  figure_description: str | None,
+) -> str:
+  """노드의 검색용 합성 텍스트 — 개념 + (진입조건) + (whys 질문) + 산출 수식 + 도형.
+
+  "이 노드가 어떤 상황에서 필요한가" 가 벡터에 녹아 학생 막힌 서술과 매칭↑.
+  노드 추출·CMS 수정 양쪽에서 동일 공식을 쓰도록 모듈 함수로 둔다.
+  """
+  why_q = " ".join(w.get("question", "") for w in (whys or []))
+  return ". ".join(
+    part for part in (key_concept, entry_conditions, why_q, output_formula, figure_description)
+    if part
+  )
+
+
 def _clean_uses(raw_uses: List[int], node_index: int, valid_indices: set[int]) -> List[int]:
   """uses 를 유효 범위로 정제 — 자기보다 작고 실제 존재하는 node_index 만 남긴다.
 
@@ -342,12 +361,12 @@ def extract_nodes(problem: dict) -> NodeExtractionResult:
       # uses 정제 — 자기보다 작고 존재하는 인덱스만(acyclic 보장)
       uses = _clean_uses(node.uses, node.node_index, valid_indices)
       whys = [{"question": w.question, "reason": w.reason} for w in node.whys]
-      # 검색용 합성 텍스트 — 개념 + (진입조건) + (whys 질문) + 산출 수식 + 도형.
-      # "이 노드가 어떤 상황에서 필요한가" 가 벡터에 녹아 학생 막힌 서술과 매칭↑.
-      why_q = " ".join(w["question"] for w in whys)
-      embedding_text = ". ".join(
-        part for part in (node.key_concept, node.entry_conditions, why_q, output_formula, fig_desc)
-        if part
+      embedding_text = compose_embedding_text(
+        key_concept=node.key_concept,
+        entry_conditions=node.entry_conditions,
+        whys=whys,
+        output_formula=output_formula,
+        figure_description=fig_desc,
       )
       out.append(ExtractedNode(
         node_index=node.node_index,

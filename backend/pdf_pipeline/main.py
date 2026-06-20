@@ -36,6 +36,7 @@ from pipeline.structurizer import (
 )
 from pipeline.embedder import generate_embedding, release_model as release_embedder
 from routers.tutor import router as tutor_router
+from routers.nodes import router as nodes_router
 
 # ── 업로드 파일명/폴더 유틸 ─────────────────────────────────────
 def _decode_upload_filename(name: str) -> str:
@@ -77,6 +78,7 @@ app.add_middleware(
 
 # 막힌 지점 도우미(풀이 그래프 위치추적 RAG) — POST /api/tutor/hint
 app.include_router(tutor_router, prefix="/api/tutor", tags=["tutor"])
+app.include_router(nodes_router, prefix="/api/cms/problems", tags=["cms-nodes"])
 
 # 작업 진행 상황 저장 (메모리, 재시작 시 초기화)
 jobs: Dict[str, dict] = {}
