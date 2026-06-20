@@ -19,11 +19,13 @@ import {
   Trash2,
   Search,
   FolderInput,
+  Workflow,
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
 import { useTextbook } from '@/context/TextbookContext';
 import type { Textbook, Chapter, Subchapter } from '@shared/types/database';
 import PdfUploadDialog from '@/components/PdfUploadDialog';
+import { SolutionNodeEditorModal } from '@/components/SolutionNodeEditorModal';
 
 const gradeOptions = [
   { value: '중학교 1학년', label: '중학교 1학년' },
@@ -84,6 +86,8 @@ const TextbookManagementNew = () => {
   const [textbooks, setTextbooks] = useState<Textbook[]>([]);
   const [chapters, setChapters] = useState<Record<string, Chapter[]>>({});
   const [subchapters, setSubchapters] = useState<Record<string, Subchapter[]>>({});
+  // 풀이 노드 편집 모달 대상 (problems.id + 제목). null=닫힘.
+  const [nodeEditTarget, setNodeEditTarget] = useState<{ id: string; title: string } | null>(null);
 
   const [selectedTextbook, setSelectedTextbook] = useState<Textbook | null>(ctxTextbook);
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(ctxChapter);
@@ -808,6 +812,14 @@ const TextbookManagementNew = () => {
                         <Button
                           variant="ghost"
                           size="sm"
+                          title="풀이 노드 편집"
+                          onClick={() => setNodeEditTarget({ id: problem.id, title: problem.title })}
+                        >
+                          <Workflow className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => navigate(`/cms/problems/new?edit=${problem.id}`)}
                         >
                           <Edit className="h-3.5 w-3.5" />
@@ -1019,6 +1031,14 @@ const TextbookManagementNew = () => {
           onOpenChange={setIsPdfDialogOpen}
           textbook={selectedTextbook}
           chapter={selectedChapter}
+        />
+      )}
+
+      {nodeEditTarget && (
+        <SolutionNodeEditorModal
+          problemId={nodeEditTarget.id}
+          problemTitle={nodeEditTarget.title}
+          onClose={() => setNodeEditTarget(null)}
         />
       )}
     </>

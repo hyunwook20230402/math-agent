@@ -1054,3 +1054,64 @@ export const ragHintApi = {
     return resp.json();
   },
 };
+
+// ===== CMS 풀이 노드 편집 API (교사 전용) =====
+// 백엔드: backend/pdf_pipeline (포트 8001). /api/cms/problems/{problemId}/nodes...
+// 노드 수정/추가 시 서버가 embedding_text 재합성 + bge-m3 재임베딩, uses(DAG)·순번 자동 정리.
+export interface SolutionNodeWhy {
+  question: string;
+  reason: string;
+}
+export interface SolutionNode {
+  node_index: number;
+  role: string;
+  entry_conditions: string | null;
+  key_concept: string;
+  output_formula: string;
+  uses: number[];
+  whys: SolutionNodeWhy[];
+  figure_description: string | null;
+  figure_image_crop_url: string | null;
+}
+
+async function _nodeAuthHeaders(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error('로그인이 필요합니다');
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${session.access_token}`,
+  };
+}
+
+async function _nodeFetch(path: string, init?: RequestInit): Promise<{ problem_id: string; nodes: SolutionNode[] }> {
+  const headers = await _nodeAuthHeaders();
+  const resp = await fetch(`${TUTOR_API_BASE_URL}/api/cms/problems${path}`, { ...init, headers });
+  if (!resp.ok) {
+    let detail = '노드 작업에 실패했습니다';
+    try { detail = (await resp.json())?.detail || detail; } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+  return resp.json();
+}
+
+// 노드 본문 입력(서버 NodeIn 과 일치 — node_index 는 서버가 순번 부여).
+export type SolutionNodeInput = Omit<SolutionNode, 'node_index'>;
+
+export const nodeApi = {
+  list: (problemId: string) =>
+    _nodeFetch(`/${problemId}/nodes`),
+
+  update: (problemId: string, nodeIndex: number, body: SolutionNodeInput) =>
+    _nodeFetch(`/${problemId}/nodes/${nodeIndex}`, { method: 'PUT', body: JSON.stringify(body) }),
+
+  add: (problemId: string, body: SolutionNodeInput, atIndex?: number) =>
+    _nodeFetch(`/${problemId}/nodes${atIndex != null ? `?at_index=${atIndex}` : ''}`, {
+      method: 'POST', body: JSON.stringify(body),
+    }),
+
+  remove: (problemId: string, nodeIndex: number) =>
+    _nodeFetch(`/${problemId}/nodes/${nodeIndex}`, { method: 'DELETE' }),
+
+  reExtract: (problemId: string) =>
+    _nodeFetch(`/${problemId}/nodes/re-extract`, { method: 'POST' }),
+};
