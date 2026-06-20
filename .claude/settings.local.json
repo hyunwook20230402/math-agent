@@ -71,7 +71,13 @@
       "WebFetch(domain:openai.com)",
       "WebFetch(domain:artificialanalysis.ai)",
       "Bash(venv/Scripts/python scripts/test_hint_callb.py)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(findstr \":8081\")",
+      "Bash(findstr \"LISTENING\")",
+      "Bash(echo \"---tsc done exit:$?---\")",
+      "Bash(cd /c/Users/user/workspaces/math/backend/pdf_pipeline && grep -i \"SUPABASE_URL\" .env | head -2)",
+      "mcp__supabase__get_publishable_keys",
+      "Bash(echo \"---tsc exit:$?---\")"
     ]
   }
 }

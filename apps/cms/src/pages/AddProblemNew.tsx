@@ -14,6 +14,7 @@ import {
   Save,
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
+import { SolutionNodeEditorModal } from '@/components/SolutionNodeEditorModal';
 
 interface Textbook {
   id: string;
@@ -50,7 +51,7 @@ const AddProblemNew = () => {
   const [loading, setLoading] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editingProblemId, setEditingProblemId] = useState<string | null>(null);
-  
+
   // 선택된 항목들
   const [selectedTextbook, setSelectedTextbook] = useState<Textbook | null>(null);
   const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
@@ -72,7 +73,7 @@ const AddProblemNew = () => {
     correct_answer: '',
     explanation: '',
     image_url: '',
-    explanation_image_url: '',
+    solution_image_url: '',
     // 새로운 필드들
     textbook: '',
     subject: '',
@@ -85,7 +86,7 @@ const AddProblemNew = () => {
 
   // 파일 업로드 상태
   const [imageFile, setImageFile] = useState<File | null>(null);
-  const [explanationImageFile, setExplanationImageFile] = useState<File | null>(null);
+  const [solutionImageFile, setSolutionImageFile] = useState<File | null>(null);
   const [clipboardLoading, setClipboardLoading] = useState(false);
 
   // 클립보드에서 이미지 읽기 함수
@@ -147,7 +148,7 @@ const AddProblemNew = () => {
   };
 
   // 해설 이미지용 클립보드 함수
-  const handleClipboardExplanationImage = async () => {
+  const handleClipboardSolutionImage = async () => {
     setClipboardLoading(true);
     try {
       if (!navigator.clipboard || !navigator.clipboard.read) {
@@ -163,7 +164,7 @@ const AddProblemNew = () => {
             const fileName = `clipboard-explanation-${Date.now()}.${type.split('/')[1]}`;
             const file = new File([blob], fileName, { type });
             
-            setExplanationImageFile(file);
+            setSolutionImageFile(file);
             
             toast({
               title: "클립보드 해설 이미지 업로드 완료",
@@ -222,7 +223,7 @@ const AddProblemNew = () => {
   };
 
   // 해설 이미지용 paste 이벤트
-  const handleExplanationPaste = async (e: React.ClipboardEvent) => {
+  const handleSolutionPaste = async (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (!items) return;
 
@@ -233,7 +234,7 @@ const AddProblemNew = () => {
         
         const file = item.getAsFile();
         if (file) {
-          setExplanationImageFile(file);
+          setSolutionImageFile(file);
           toast({
             title: "클립보드 해설 이미지 업로드 완료",
             description: "붙여넣기로 해설 이미지가 업로드되었습니다."
@@ -436,7 +437,7 @@ const AddProblemNew = () => {
         correct_answer: correctAnswer,
         explanation: problem.explanation || '',
         image_url: problem.image_url || '',
-        explanation_image_url: '',
+        solution_image_url: problem.solution_image_url || '',
         textbook: problem.category?.split(' ')[0] || '',
         subject: problem.unit?.split(' > ')[0] || '',
         major_unit: problem.unit?.split(' > ')[1] || '',
@@ -448,7 +449,7 @@ const AddProblemNew = () => {
 
       // 이미지 파일 상태 초기화 (편집 시에는 기존 이미지 URL만 사용)
       setImageFile(null);
-      setExplanationImageFile(null);
+      setSolutionImageFile(null);
       
     } catch (error) {
       console.error('문제 조회 실패:', error);
@@ -582,6 +583,13 @@ const AddProblemNew = () => {
         imageUrl = await handleImageUpload(imageFile);
       }
 
+      // 해설 이미지: 새로 선택한 파일이 있으면 업로드(범용 handleImageUpload 재사용),
+      // 없으면 기존 URL 유지. 사용자가 삭제했으면 formData.solution_image_url 이 빈 문자열.
+      let solutionUrl = formData.solution_image_url;
+      if (solutionImageFile) {
+        solutionUrl = await handleImageUpload(solutionImageFile);
+      }
+
       const subject = formData.subject || '수학';
       const majorUnit = formData.major_unit || '1단원';
       const minorUnit = formData.minor_unit || '기본';
@@ -619,6 +627,7 @@ const AddProblemNew = () => {
         category: formData.textbook || '기타',
         unit: unitString,
         image_url: finalImageUrl,
+        solution_image_url: solutionUrl || null,
         answer_type: formData.problem_type,
         correct_answer: formData.correct_answer,
         choices: null,
@@ -666,14 +675,14 @@ const AddProblemNew = () => {
           correct_answer: '1',
           explanation: '',
           image_url: '',
-          explanation_image_url: '',
+          solution_image_url: '',
           textbook: '',
           subject: '',
           major_unit: '',
           minor_unit: ''
         });
         setImageFile(null);
-        setExplanationImageFile(null);
+        setSolutionImageFile(null);
       }
 
       // 문제 관리 페이지로 이동은 setTimeout에서 처리
@@ -694,9 +703,108 @@ const AddProblemNew = () => {
     }
   };
 
+  // 해설 이미지 블록 — 등록 모드(폼 안)와 편집 모드(2열 왼쪽)에서 공유.
+  const solutionImageBlock = (
+    <div>
+      <Label>해설 이미지</Label>
+      <div
+        className="border-2 border-dashed border-border rounded-lg p-4 text-center"
+        onPaste={handleSolutionPaste}
+        tabIndex={0}
+      >
+        <input
+          type="file"
+          accept="image/*"
+          onChange={(e) => setSolutionImageFile(e.target.files?.[0] || null)}
+          className="hidden"
+          id="solution-image-upload"
+        />
+
+        {/* 새로 선택(파일/클립보드)한 해설 이미지 미리보기 */}
+        {solutionImageFile && (
+          <div className="mb-4">
+            <img
+              src={URL.createObjectURL(solutionImageFile)}
+              alt="업로드된 해설 이미지"
+              className="max-w-full mx-auto rounded-lg border"
+            />
+            <p className="text-sm text-green-600 mt-2">{solutionImageFile.name}</p>
+          </div>
+        )}
+
+        {/* 업로드 버튼들 (편집/등록 공통 — 편집 모드에선 '교체'로 동작) */}
+        <div className="flex flex-col gap-2">
+          <label htmlFor="solution-image-upload" className="cursor-pointer">
+            <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              {solutionImageFile
+                ? '다른 해설 이미지 선택'
+                : isEditMode && formData.solution_image_url
+                  ? '해설 이미지 교체 (파일 선택)'
+                  : '파일에서 해설 이미지 선택'}
+            </p>
+          </label>
+
+          <div className="flex gap-2 justify-center">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleClipboardSolutionImage}
+              disabled={clipboardLoading}
+              className="flex items-center gap-2"
+            >
+              {clipboardLoading ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
+              ) : (
+                <Clipboard className="h-4 w-4" />
+              )}
+              {clipboardLoading ? '읽는 중...' : '클립보드에서 가져오기'}
+            </Button>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            💡 해설 이미지도 클립보드에서 바로 가져올 수 있습니다
+          </p>
+        </div>
+
+        {/* 현재 저장된 해설 이미지 미리보기 + 삭제 (새 파일을 안 골랐을 때만) */}
+        {!solutionImageFile && formData.solution_image_url && (
+          <div className="mt-4">
+            <p className="text-sm text-green-600 mb-2">현재 해설 이미지:</p>
+            <div className="mb-3">
+              <img
+                src={formData.solution_image_url}
+                alt="현재 해설 이미지"
+                className="max-w-full mx-auto rounded-lg border"
+                onError={(e) => {
+                  console.error('해설 이미지 로드 실패:', formData.solution_image_url);
+                  e.currentTarget.style.display = 'none';
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => setFormData(prev => ({ ...prev, solution_image_url: '' }))}
+            >
+              해설 이미지 삭제
+            </Button>
+          </div>
+        )}
+
+        {/* 편집 모드 + 저장된 해설 이미지도 없고 새로 고른 것도 없음 */}
+        {isEditMode && !solutionImageFile && !formData.solution_image_url && (
+          <p className="text-sm text-muted-foreground mt-2">해설 이미지 없음 — 위에서 추가할 수 있습니다</p>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <>
-    <div className="container mx-auto px-4 py-6 max-w-4xl">
+    <div className={`container mx-auto px-4 py-6 ${isEditMode ? 'max-w-7xl' : 'max-w-4xl'}`}>
       {/* 헤더 */}
       <div className="flex items-center gap-4 mb-6">
         <Button variant="outline" size="sm" onClick={() => navigate('/cms/textbooks')}>
@@ -711,7 +819,7 @@ const AddProblemNew = () => {
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto">
+      <div className={`mx-auto ${isEditMode ? 'max-w-none' : 'max-w-2xl'}`}>
         {/* 문제 입력 폼 */}
         <Card>
           <CardHeader>
@@ -971,97 +1079,22 @@ const AddProblemNew = () => {
                 )}
               </div>
 
-              {!isEditMode && <div>
-                <Label>해설 이미지</Label>
-                <div
-                  className="border-2 border-dashed border-border rounded-lg p-4 text-center"
-                  onPaste={handleExplanationPaste}
-                  tabIndex={0}
-                >
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => setExplanationImageFile(e.target.files?.[0] || null)}
-                    className="hidden"
-                    id="explanation-image-upload"
-                  />
-                  
-                  {/* 업로드된 해설 이미지 미리보기 */}
-                  {explanationImageFile && (
-                    <div className="mb-4">
-                      <img 
-                        src={URL.createObjectURL(explanationImageFile)} 
-                        alt="업로드된 해설 이미지" 
-                        className="max-w-full max-h-48 mx-auto rounded-lg border"
-                      />
-                      <p className="text-sm text-green-600 mt-2">{explanationImageFile.name}</p>
-                    </div>
-                  )}
-                  
-                  {/* 업로드 버튼들 */}
-                  <div className="flex flex-col gap-2">
-                    <label htmlFor="explanation-image-upload" className="cursor-pointer">
-                      <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-                      <p className="text-sm text-muted-foreground">
-                        {explanationImageFile ? '다른 해설 이미지 선택' : '파일에서 해설 이미지 선택'}
-                      </p>
-                    </label>
-                    
-                    <div className="flex gap-2 justify-center">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={handleClipboardExplanationImage}
-                        disabled={clipboardLoading}
-                        className="flex items-center gap-2"
-                      >
-                        {clipboardLoading ? (
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
-                        ) : (
-                          <Clipboard className="h-4 w-4" />
-                        )}
-                        {clipboardLoading ? '읽는 중...' : '클립보드에서 가져오기'}
-                      </Button>
-                    </div>
-                    
-                    <p className="text-xs text-muted-foreground">
-                      💡 해설 이미지도 클립보드에서 바로 가져올 수 있습니다
-                    </p>
-                  </div>
-                  
-                  {/* 기존 해설 이미지가 있는 경우 미리보기 및 삭제 버튼 표시 */}
-                  {formData.explanation_image_url && (
-                    <div className="mt-4">
-                      <p className="text-sm text-green-600 mb-2">현재 해설 이미지:</p>
-                      <div className="mb-3">
-                        <img 
-                          src={formData.explanation_image_url} 
-                          alt="현재 해설 이미지" 
-                          className="max-w-full max-h-48 mx-auto rounded-lg border"
-                          onError={(e) => {
-                            console.error('해설 이미지 로드 실패:', formData.explanation_image_url);
-                            e.currentTarget.style.display = 'none';
-                          }}
-                        />
-                      </div>
-                      <p className="text-xs text-muted-foreground mb-2 break-all">
-                        {formData.explanation_image_url}
-                      </p>
-                      <Button 
-                        type="button"
-                        variant="destructive" 
-                        size="sm"
-                        onClick={() => setFormData(prev => ({ ...prev, explanation_image_url: '' }))}
-                      >
-                        해설 이미지 삭제
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </div>}
+              {/* 해설 이미지 — 등록 모드는 폼 안에 표시. 편집 모드는 아래 2열 왼쪽으로 이동. */}
+              {!isEditMode && solutionImageBlock}
             </CardContent>
         </Card>
+
+        {/* 편집 모드 — 해설 이미지(왼쪽) | 풀이 노드(오른쪽) 2열.
+            넓은 화면은 좌우, 좁으면 위아래로 접힘(lg:grid-cols-2). 노드 편집기는 자체 nodeApi 호출. */}
+        {isEditMode && editingProblemId && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6 items-start">
+            <div>{solutionImageBlock}</div>
+            <SolutionNodeEditorModal
+              problemId={editingProblemId}
+              problemTitle={formData.title}
+            />
+          </div>
+        )}
 
         {/* 등록 버튼 */}
         <Button
@@ -1088,6 +1121,7 @@ const AddProblemNew = () => {
           </Button>
       </div>
     </div>
+
     </>
   );
 };

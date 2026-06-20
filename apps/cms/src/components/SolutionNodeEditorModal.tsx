@@ -66,7 +66,8 @@ const EMPTY_NODE: SolutionNodeInput = {
 interface Props {
   problemId: string;
   problemTitle?: string;
-  onClose: () => void;
+  // onClose 가 있으면 모달(오버레이 + 닫기), 없으면 인라인(화면에 그대로 펼침).
+  onClose?: () => void;
 }
 
 export function SolutionNodeEditorModal({ problemId, problemTitle, onClose }: Props) {
@@ -161,73 +162,85 @@ export function SolutionNodeEditorModal({ problemId, problemTitle, onClose }: Pr
     }
   };
 
+  // 헤더 + 노드 목록 — 모달/인라인 공통 본문
+  const body = (
+    <>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold">풀이 노드 편집 {problemTitle ? `· ${problemTitle}` : ''}</h2>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={reExtract} disabled={busy || loading}>
+            AI 재추출
+          </Button>
+          {onClose && <Button variant="ghost" size="sm" onClick={onClose}>닫기</Button>}
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-muted-foreground py-8 text-center">불러오는 중…</p>
+      ) : (
+        <div className="space-y-3">
+          {nodes.length === 0 && (
+            <p className="text-sm text-muted-foreground py-6 text-center">
+              노드가 없습니다. AI 재추출로 생성하거나 아래에서 직접 추가하세요.
+            </p>
+          )}
+
+          {nodes.map((n) => (
+            <div key={n.node_index} className="border rounded-md p-3">
+              {editing === n.node_index ? (
+                <NodeForm draft={draft} setDraft={setDraft} onSave={saveDraft} onCancel={cancelEdit} busy={busy} maxUseIndex={n.node_index} />
+              ) : (
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-bold bg-muted rounded px-1.5 py-0.5">#{n.node_index}</span>
+                      <span className="text-xs text-muted-foreground">{ROLE_LABEL[n.role] || n.role}</span>
+                      {n.uses.length > 0 && (
+                        <span className="text-xs text-blue-600">uses [{n.uses.join(', ')}]</span>
+                      )}
+                    </div>
+                    <p className="text-sm font-medium">{n.key_concept}</p>
+                    <div className="text-sm mt-0.5" dangerouslySetInnerHTML={{ __html: renderMath(n.output_formula) }} />
+                    {n.whys.length > 0 && (
+                      <ul className="mt-1 text-xs text-muted-foreground list-disc list-inside">
+                        {n.whys.map((w, i) => <li key={i}>{w.question}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-1 flex-shrink-0">
+                    <Button variant="ghost" size="sm" onClick={() => startEdit(n)} disabled={busy}>수정</Button>
+                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => removeNode(n.node_index)} disabled={busy}>삭제</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {editing === -2 ? (
+            <div className="border rounded-md p-3 border-primary">
+              <p className="text-sm font-medium mb-2">새 노드 (맨 뒤에 추가)</p>
+              <NodeForm draft={draft} setDraft={setDraft} onSave={saveDraft} onCancel={cancelEdit} busy={busy} maxUseIndex={nodes.length} />
+            </div>
+          ) : (
+            <Button variant="outline" size="sm" onClick={startAdd} disabled={busy || editing !== null}>
+              + 노드 추가
+            </Button>
+          )}
+        </div>
+      )}
+    </>
+  );
+
+  // onClose 없음 → 인라인(화면에 그대로 펼침). 있음 → 모달 오버레이.
+  if (!onClose) {
+    return <div className="border rounded-lg p-4 bg-background">{body}</div>;
+  }
+
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center">
       <div className="fixed inset-0 bg-black/80" onClick={onClose} />
       <div className="relative z-[10000] bg-background border rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">풀이 노드 편집 {problemTitle ? `· ${problemTitle}` : ''}</h2>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={reExtract} disabled={busy || loading}>
-              AI 재추출
-            </Button>
-            <Button variant="ghost" size="sm" onClick={onClose}>닫기</Button>
-          </div>
-        </div>
-
-        {loading ? (
-          <p className="text-sm text-muted-foreground py-8 text-center">불러오는 중…</p>
-        ) : (
-          <div className="space-y-3">
-            {nodes.length === 0 && (
-              <p className="text-sm text-muted-foreground py-6 text-center">
-                노드가 없습니다. AI 재추출로 생성하거나 아래에서 직접 추가하세요.
-              </p>
-            )}
-
-            {nodes.map((n) => (
-              <div key={n.node_index} className="border rounded-md p-3">
-                {editing === n.node_index ? (
-                  <NodeForm draft={draft} setDraft={setDraft} onSave={saveDraft} onCancel={cancelEdit} busy={busy} maxUseIndex={n.node_index} />
-                ) : (
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-bold bg-muted rounded px-1.5 py-0.5">#{n.node_index}</span>
-                        <span className="text-xs text-muted-foreground">{ROLE_LABEL[n.role] || n.role}</span>
-                        {n.uses.length > 0 && (
-                          <span className="text-xs text-blue-600">uses [{n.uses.join(', ')}]</span>
-                        )}
-                      </div>
-                      <p className="text-sm font-medium">{n.key_concept}</p>
-                      <div className="text-sm mt-0.5" dangerouslySetInnerHTML={{ __html: renderMath(n.output_formula) }} />
-                      {n.whys.length > 0 && (
-                        <ul className="mt-1 text-xs text-muted-foreground list-disc list-inside">
-                          {n.whys.map((w, i) => <li key={i}>{w.question}</li>)}
-                        </ul>
-                      )}
-                    </div>
-                    <div className="flex flex-col gap-1 flex-shrink-0">
-                      <Button variant="ghost" size="sm" onClick={() => startEdit(n)} disabled={busy}>수정</Button>
-                      <Button variant="ghost" size="sm" className="text-destructive" onClick={() => removeNode(n.node_index)} disabled={busy}>삭제</Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {editing === -2 ? (
-              <div className="border rounded-md p-3 border-primary">
-                <p className="text-sm font-medium mb-2">새 노드 (맨 뒤에 추가)</p>
-                <NodeForm draft={draft} setDraft={setDraft} onSave={saveDraft} onCancel={cancelEdit} busy={busy} maxUseIndex={nodes.length} />
-              </div>
-            ) : (
-              <Button variant="outline" size="sm" onClick={startAdd} disabled={busy || editing !== null}>
-                + 노드 추가
-              </Button>
-            )}
-          </div>
-        )}
+        {body}
       </div>
     </div>
   );
