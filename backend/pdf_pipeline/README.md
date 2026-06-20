@@ -87,7 +87,7 @@ pdf_pipeline/
 │   ├── tutor.py               # POST /api/tutor/hint (학생, 막힌 지점 도우미)
 │   └── nodes.py               # 풀이 노드 CRUD (교사, CMS 노드 편집기)
 ├── handlers/
-│   └── stuck_helper.py        # localize → retrieve → generate
+│   └── stuck_helper.py        # 막힌 지점 찾기 → 유사 풀이 끌어오기 → 힌트 만들기
 └── storage/
     └── supabase_client.py     # problem_staging / solution_jobs CRUD
 ```
@@ -107,7 +107,7 @@ pdf_pipeline/
 풀이 그래프 (RAG 코퍼스, 별도 추출):
 해설 이미지 → rag_node_extractor (1회 통합 VL, uses/whys) → solution_nodes
            → CMS 노드 편집기(routers/nodes.py) 수동 보정
-           → 막힌 지점 도우미(routers/tutor.py) localize→retrieve→generate
+           → 막힌 지점 도우미(routers/tutor.py) 막힌 지점 찾기→유사 풀이 끌어오기→힌트 만들기
 ```
 
 상세는:
@@ -118,6 +118,6 @@ pdf_pipeline/
 
 별도 백엔드 없음 — 이 파이프라인(8001) 안에 통합됐다. _구 `backend/deeptutor/`(LangGraph 다중턴 대화)는 2026-06-18 폐기·삭제._
 
-- API: `POST /api/tutor/hint` (학생) — `routers/tutor.py`. 흐름 `handlers/stuck_helper.py` localize→retrieve→generate.
+- API: `POST /api/tutor/hint` (학생) — `routers/tutor.py`. 흐름 `handlers/stuck_helper.py` 막힌 지점 찾기→유사 풀이 끌어오기→힌트 만들기.
 - 데이터: `solution_nodes`(uses/whys, bge-m3 1024) + RPC `search_solution_nodes_for_hint`. 적재 `scripts/backfill_solution_nodes.py`.
 - 노드 편집(교사): `routers/nodes.py` — CMS 노드 편집기 CRUD. 수정 시 임베딩 자동 재생성.

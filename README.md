@@ -11,7 +11,7 @@
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Radix UI, TanStack Query v5, React Router v6
 - **Backend (DB/Auth)**: Supabase (PostgreSQL, Auth, Storage)
 - **Backend (PDF 파이프라인)**: Python 3.11, FastAPI, YOLO11 (ultralytics, OCR 레거시 제거), **VL=OpenAI 단일**(2026-06-19 gemma4 폐기), 임베딩=bge-m3(Ollama). 난이도는 해설 PDF 정답률 우선(없으면 GPT 추정).
-- **막힌 지점 도우미 (AI 튜터)**: 풀이 그래프 위치추적 RAG. `pdf_pipeline` 내 `POST /api/tutor/hint` (localize→retrieve→generate). 데이터: `solution_nodes` + RPC. _구 deeptutor(LangGraph 대화) 폐기 — 2026-06-18._
+- **막힌 지점 도우미 (AI 튜터)**: 풀이 그래프 위치추적 RAG. `pdf_pipeline` 내 `POST /api/tutor/hint` (막힌 지점 찾기 → 유사 풀이 끌어오기 → 힌트 만들기). 데이터: `solution_nodes` + RPC. _구 deeptutor(LangGraph 대화) 폐기 — 2026-06-18._
 - **개발 환경**: Windows 11, 로컬 RTX 4070 8GB / 서버 RTX 4090 24GB
 
 ---
@@ -78,7 +78,7 @@ uvicorn main:app --reload --port 8001
 
 ### 막힌 지점 도우미 (풀이 그래프 위치추적 RAG)
 1. 학생이 문제 풀다 막힘 → SolveProblem "막혔어요" → `POST /api/tutor/hint` (problem_id, 막힌 서술, revealed_node_index).
-2. **localize**: 학생 서술 + 문제 이미지 + 노드 목록으로 "이해한 마지막 노드" 추정 → **retrieve**: 다음 노드 + 유사 기출 노드를 `solution_nodes` pgvector 검색(RPC `search_solution_nodes_for_hint`) → **generate**: 답을 가린 채 다음 한 스텝만 힌트.
+2. **막힌 지점 찾기**: 학생 서술 + 문제 이미지 + 노드 목록으로 "이해한 마지막 노드" 추정 → **유사 풀이 끌어오기**: 다음 노드 + 유사 기출 노드를 `solution_nodes` pgvector 검색(RPC `search_solution_nodes_for_hint`) → **힌트 만들기**: 답을 가린 채 다음 한 스텝만 힌트.
 3. 서버 무상태 — 클라이언트가 `revealed_node_index` 를 들고 멀티턴("다음 힌트"). `solution_nodes` 는 `backfill_solution_nodes.py` 로 적재.
 
 ---

@@ -3,7 +3,7 @@
 ## 사전 조건
 
 - `solution_nodes` 에 노드가 1개 이상 있어야 함(없으면 먼저 `/solution-nodes-status` → 백필).
-- `OPENAI_API_KEY`(localize/generate VL) + ollama bge-m3(임베딩) 가동.
+- `OPENAI_API_KEY`(막힌 지점 찾기/힌트 만들기 VL) + ollama bge-m3(임베딩) 가동.
 - 서버 터널 `OLLAMA_URL=21434` 면 임베딩 위해 로컬 `11434` override.
 
 ## 절차
@@ -37,7 +37,7 @@ pid = client.table("solution_nodes").select("problem_id").limit(1).execute().dat
 title = client.table("problems").select("title").eq("id", pid).single().execute().data["title"]
 print(f"=== {title} (id={pid[:8]}) ===")
 
-# 턴1: 첫 호출(localize) — "아예 모르겠어요"
+# 턴1: 첫 호출(막힌 지점 찾기 = _localize) — "아예 모르겠어요"
 r1 = stuck_helper.generate_hint(pid, "아예 모르겠어요", revealed_node_index=-1)
 print("턴1 힌트:", r1["hint_text"])
 print("  개념:", r1["next_step_concept"], "| 다음idx:", r1["next_revealed_node_index"],
@@ -70,6 +70,6 @@ rm -f /tmp/tutor_smoke.py
 
 ## 참고
 
-- 핸들러: `backend/pdf_pipeline/handlers/stuck_helper.py` (localize→retrieve→generate)
+- 핸들러: `backend/pdf_pipeline/handlers/stuck_helper.py` (막힌 지점 찾기→유사 풀이 끌어오기→힌트 만들기)
 - API 라우터: `backend/pdf_pipeline/routers/tutor.py` (`POST /api/tutor/hint`)
 - 인증까지 포함한 실제 HTTP 검증은 `SUPABASE_ANON_KEY` + uvicorn 기동 + JWT 필요. 이 스모크는 인증 레이어를 건너뛰고 RAG 핵심만 본다.

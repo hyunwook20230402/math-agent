@@ -81,7 +81,7 @@
 |------|----------|------|
 | Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o). 해설 태깅은 이 한 번뿐(Call B 제거, 4차) |
 | 검증 Layer 2 | OpenAI | 난이도 무관 항상 OpenAI |
-| 막힌 지점 도우미 (튜터) | OpenAI | localize / generate / 노드추출(1회 통합) |
+| 막힌 지점 도우미 (튜터) | OpenAI | 막힌 지점 찾기 / 힌트 만들기 / 노드추출(1회 통합) |
 
 - `call_vl(...)` 은 항상 OpenAI 호출. `provider` 인자는 하위호환용으로 받기만 하고 무시.
 - 옛 `provider_selector.py`(시간대 분기), `_route_call_b_provider`(난이도 분기), gemma4 반복 폭주 방어 코드는 모두 제거됨.
@@ -276,7 +276,7 @@ AI 튜터 온톨로지의 기반. 이 파일을 기준으로 모든 태깅이 �
 > 구 deeptutor(LangGraph 다중턴 대화)는 **폐기됨 (2026-06-18)**. 막힌 지점 도우미만 이 파이프라인으로 이전·개선.
 
 API: `POST /api/tutor/hint` (학생, `routers/tutor.py`, `main.py include_router(prefix=/api/tutor)`)
-흐름: localize → retrieve → generate (`handlers/stuck_helper.py`). 서버 무상태.
+흐름: 막힌 지점 찾기 → 유사 풀이 끌어오기 → 힌트 만들기 (`handlers/stuck_helper.py`). 서버 무상태.
 노드 코퍼스: `solution_nodes` 테이블 (uses/whys 포함, baseline 에 반영) + RPC `search_solution_nodes_for_hint`
 노드 추출: `pipeline/rag_node_extractor.py` (해설 이미지 **1회 통합** VL 분해 — 전체 노드 배열 1회 structured output, 각 노드에 uses(전이 DAG)+whys(논리 근거) 포함 → `backfill_solution_nodes.py` 로 적재). VL=OpenAI 단일.
 노드 편집(교사): `routers/nodes.py` — CMS 노드 편집기 CRUD(조회·수정·추가·삭제·재추출). 수정 시 임베딩 자동 재생성, uses DAG acyclic 정제, node_index 순번 재매김.

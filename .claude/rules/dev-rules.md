@@ -48,7 +48,7 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 
 ## VL 모델 정책 (2026-06-19 갱신 — gemma4 폐기, OpenAI 단일화)
 
-- **VL 은 OpenAI 단일.** gemma4(ollama)·gemini 는 폐기. 모델은 `OPENAI_MODEL` (기본 gpt-4o). Call A(메타)·검증 Layer 2·튜터(localize/generate/노드추출) 모두 OpenAI.
+- **VL 은 OpenAI 단일.** gemma4(ollama)·gemini 는 폐기. 모델은 `OPENAI_MODEL` (기본 gpt-4o). Call A(메타)·검증 Layer 2·튜터(막힌 지점 찾기/힌트 만들기/노드추출) 모두 OpenAI.
   - 옛 시간대 분기(`provider_selector`)·난이도 분기(`_route_call_b_provider`, `CALL_B_HARD_THRESHOLD`)·gemma4 반복 폭주 방어 코드는 모두 제거됨.
 - **해설 태깅 = Call A(메타) 한 번** (2026-06-20, 4차). 옛 단계별풀이 Call B(2-Pass)와 4필드(solution_summary/pitfall/solution_steps/common_mistakes)는 추출·저장·검증·DB컬럼까지 전부 제거. 풀이 그래프는 별도 추출기 `rag_node_extractor.py` 가 담당.
 - **임베딩은 그대로** — bge-m3(ollama, 1024차원) 유지. OpenAI 임베딩(1536)으로 바꾸면 전체 재임베딩 필요라 안 바꿈. `EMBED_PROVIDER=openai` 로만 강제 전환 가능.
@@ -173,7 +173,7 @@ npm run dev                  # http://localhost:8081
 - **목적**: 학생이 풀다 막힌 "그 지점"을 풀이 노드 그래프 위에 위치추적하고 다음 한 노드만 끌어준다. 막힌 원인 4분류(독해/인출/전이/실행)를 한 흐름으로 흡수. 등록 대상은 수능/모의고사 2점·3점·쉬운 4점.
 - **위치**: `backend/pdf_pipeline` FastAPI(포트 8001)에 통합. 별도 서버 없음.
   - 라우터 `routers/tutor.py` → `POST /api/tutor/hint` (`main.py` 에 `include_router(prefix="/api/tutor")`)
-  - 핸들러 `handlers/stuck_helper.py` — localize → retrieve → generate 3단
+  - 핸들러 `handlers/stuck_helper.py` — 막힌 지점 찾기 → 유사 풀이 끌어오기 → 힌트 만들기 3단
   - 노드 추출 `pipeline/rag_node_extractor.py` — 해설 이미지 **1회 통합** VL 분해(전체 노드 배열 1회 structured output). 각 노드에 `uses`(이전 node_index 참조=전이 근거 DAG)+`whys`({question,reason}=논리 완결성) 포함. VL=OpenAI 단일. (`solution_tagger` 의 옛 단계별풀이 Call B 는 4차에서 통째 제거 — 이제 메타 Call A 한 번뿐. 풀이 그래프는 이 추출기만 담당.)
   - 노드 편집(교사) `routers/nodes.py` — CMS `SolutionNodeEditorModal` 용 CRUD(조회·수정·추가·삭제·재추출). 수정 시 `compose_embedding_text()` 재합성 + bge-m3 재임베딩, `uses` DAG acyclic 정제, `node_index` 순번 재매김. 인증 `get_teacher_id`(teacher role 강제).
   - **유형별 프롬프트 라우팅(2026-06-19)**: `_compose_extraction_prompt()` 가 베이스 프롬프트에 [과목 조각 또는 혼합형 패턴 조각] + (difficulty>=7 이면) 난이도 조각을 1개씩 덧붙인다. 거대 프롬프트도 과목별 서브에이전트도 아님 — `problem.unit`(첫 토큰=과목)·`difficulty_score` 가 이미 있어 분류 비용 0. 혼합형 판정은 1차 단순 규칙(difficulty>=8). unit 무매핑/패턴 없음이면 베이스만(graceful). few-shot 예시 주입은 검증 노드 표본이 쌓인 뒤(후속).
@@ -182,7 +182,7 @@ npm run dev                  # http://localhost:8081
   - 인증 `auth.py` — `get_student_id`(Bearer JWT → profiles.id, student role 강제). `SUPABASE_ANON_KEY` 필요
   - 모델 `models.py` — `HintRequest`/`HintResponse`/`NodeReference`
 - **DB**: `solution_nodes` 테이블(uses/whys 포함, baseline 에 반영) + RPC `search_solution_nodes_for_hint`. 임베딩 **bge-m3 1024차원**(problems.embedding 과 동일 — OpenAI 1536 혼입 금지).
-- **VL**: `call_vl()` 통일(localize/generate/노드추출 멀티모달). OpenAI 단일.
+- **VL**: `call_vl()` 통일(막힌 지점 찾기/힌트 만들기/노드추출 멀티모달). OpenAI 단일.
 - **백필**: `cd backend/pdf_pipeline && venv\Scripts\activate && python -m scripts.backfill_solution_nodes --limit 5` (`OLLAMA_URL` 이 서버 터널 21434 면 임베딩 위해 로컬 11434 로 override 필요. `OPENAI_API_KEY` 필수).
 - **도형/그래프 (2026-06-18 결정)**: 해설 도형 자동 crop 안 함. `rag_node_extractor` 는 `figure_image_crop_url=None` 으로 두고(해설 통째 폴백은 정답 노출 위험), `figure_description`(VL 언어화)만 검색·근거로 사용. 정확한 도형 영역은 **CMS 수동 bbox 로 채운다(후속)**. 1차는 도형 이미지 없이 텍스트 힌트만(graceful). stuck_helper 는 같은 문제(`is_same_problem`) crop 은 학생에게 안 보여줌(정답 노출 방어).
 - **프론트**: `apps/student` `SolveProblem.tsx` → `components/tutor/StuckHelperModal.tsx` → `shared/lib/api.ts:ragHintApi.getHint`. base URL env `VITE_TUTOR_API_URL`(구 `VITE_DEEPTUTOR_URL` 하위호환 fallback), 기본 `http://localhost:8001`.

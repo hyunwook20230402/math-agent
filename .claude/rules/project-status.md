@@ -27,7 +27,7 @@
 ### 막힌 지점 도우미 — 풀이 그래프 위치추적 RAG (`backend/pdf_pipeline`) ✅ 구현
 - **deeptutor(LangGraph 대화튜터) 폐기 (2026-06-18)** — `backend/deeptutor/` 삭제. 막힌 지점 도우미만 pdf_pipeline 으로 이전·개선.
 - API: `POST /api/tutor/hint` (`pdf_pipeline/routers/tutor.py`, `main.py include_router(prefix=/api/tutor)`)
-- 흐름: localize(현재 위치 추정) → retrieve(다음 노드+유사 기출 pgvector) → generate(다음 한 스텝 힌트). 서버 무상태(클라이언트가 `revealed_node_index` 보유).
+- 흐름: 막힌 지점 찾기(현재 위치 추정) → 유사 풀이 끌어오기(다음 노드+유사 기출 pgvector) → 힌트 만들기(다음 한 스텝 힌트). 서버 무상태(클라이언트가 `revealed_node_index` 보유).
 - 핸들러 `handlers/stuck_helper.py`, 노드 추출 `pipeline/rag_node_extractor.py`(해설 1회 통합 VL 분해 + uses/whys), 인증 `auth.py`(`get_student_id`/`get_teacher_id`), 모델 `models.py`
 - 노드 CRUD(교사 전용): `routers/nodes.py` — 조회·수정·추가·삭제·재추출. 수정 시 임베딩 자동 재생성, uses(DAG) acyclic 정제, node_index 순번 재매김.
 - 데이터: `solution_nodes` 테이블(role/key_concept/output_formula/uses INT[]/whys JSONB/figure_description/embedding 1024) + RPC `search_solution_nodes_for_hint`
@@ -57,7 +57,7 @@
 |------|----------|------|
 | Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o). 해설 태깅은 Call A 한 번뿐(Call B 제거, 4차) |
 | 검증 Layer 2 | OpenAI | 난이도 무관 항상 OpenAI |
-| 막힌 지점 도우미 (튜터) | OpenAI | localize / generate / 노드추출(1회 통합) |
+| 막힌 지점 도우미 (튜터) | OpenAI | 막힌 지점 찾기 / 힌트 만들기 / 노드추출(1회 통합) |
 | Embed | Ollama | bge-m3 (1024d 고정) |
 
 - VL 은 OpenAI 단일(2026-06-19 gemma4 폐기). 시간대·난이도 분기 모두 제거됨.

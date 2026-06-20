@@ -3,14 +3,14 @@
 학생이 풀다 막힌 "그 지점"을 풀이 노드 그래프 위에 위치추적하고, 다음 한 노드만
 근거 기반으로 끌어준다. 막힌 원인 4분류(독해/인출/전이/실행)를 한 흐름으로 흡수한다:
 
-  1. localize : 학생의 막힌 서술 + 문제 이미지 + 노드 목록을 VL 에 줘
+  1. 막힌 지점 찾기 (`_localize`) : 학생의 막힌 서술 + 문제 이미지 + 노드 목록을 VL 에 줘
                "학생이 이해한 마지막 노드 index" 추정.
-  2. retrieve : 그 다음 노드(같은 문제) + 같은 개념 타 기출 유사 노드를 pgvector 로 검색
-               (search_solution_nodes_for_hint RPC).
-  3. generate : 문제 원본 이미지 + retrieved 노드 근거 + (도형 crop 이미지) 를 VL 에 줘
-               "다음 한 스텝만" 힌트 1~2문장 생성. 해설 통째 노출 금지.
+  2. 유사 풀이 끌어오기 (`_retrieve`) : 그 다음 노드(같은 문제) + 같은 개념 타 기출 유사
+               노드를 pgvector 로 검색 (search_solution_nodes_for_hint RPC).
+  3. 힌트 만들기 (`_generate`) : 문제 원본 이미지 + 끌어온 노드 근거 + (도형 crop 이미지) 를
+               VL 에 줘 "다음 한 스텝만" 힌트 1~2문장 생성. 해설 통째 노출 금지.
 
-해설 노드가 없는 문제(미백필)는 retrieve 를 건너뛰고 문제 이미지만 보고 즉석 힌트(fallback).
+해설 노드가 없는 문제(미백필)는 "유사 풀이 끌어오기"를 건너뛰고 문제 이미지만 보고 즉석 힌트(fallback).
 
 - 임베딩: embedder.generate_embedding() 통일 (problems/solution_nodes.embedding 과 동일 차원).
 - VL: call_vl() 통일. OpenAI 단일(2026-06-19 gemma4 폐기).
@@ -52,7 +52,7 @@ def _download(url: str) -> Optional[str]:
   return path
 
 
-# ── 1) localize ──────────────────────────────────────────────────────────────
+# ── 1) 막힌 지점 찾기 (localize) ──────────────────────────────────────────────
 
 class _Localized(BaseModel):
   last_understood_index: int = Field(
@@ -86,11 +86,11 @@ def _localize(problem_image_path: Optional[str], blocked_desc: str, nodes: list[
     max_idx = max(n["node_index"] for n in nodes)
     return max(-1, min(idx, max_idx))
   except Exception as exc:
-    logger.warning(f"localize 실패 → -1 fallback: {exc}")
+    logger.warning(f"막힌 지점 찾기(_localize) 실패 → -1 fallback: {exc}")
     return -1
 
 
-# ── 2) retrieve ──────────────────────────────────────────────────────────────
+# ── 2) 유사 풀이 끌어오기 (retrieve) ──────────────────────────────────────────
 
 def _retrieve(problem_id: str, current_index: int, query_text: str, limit: int = 5) -> list[dict]:
   client = get_client()
@@ -112,7 +112,7 @@ def _retrieve(problem_id: str, current_index: int, query_text: str, limit: int =
   return res.data or []
 
 
-# ── 3) generate ──────────────────────────────────────────────────────────────
+# ── 3) 힌트 만들기 (generate) ─────────────────────────────────────────────────
 
 class _Hint(BaseModel):
   hint_text: str = Field(..., description="학생에게 줄 힌트 1~2문장 (한국어). 다음 한 단계만.")
@@ -219,7 +219,7 @@ def generate_hint(problem_id: str, blocked_description: str,
   prob_path = _download(prob["image_url"]) if prob.get("image_url") else None
   figure_paths: list[str] = []
   try:
-    # 위치 추적: 멀티턴이면 revealed_node_index 이후부터, 첫 호출이면 localize
+    # 막힌 지점 찾기: 멀티턴이면 revealed_node_index 이후부터, 첫 호출이면 _localize 로 추정
     if revealed_node_index >= 0:
       current_index = revealed_node_index
     else:
@@ -233,10 +233,10 @@ def generate_hint(problem_id: str, blocked_description: str,
 
     retrieved = _retrieve(problem_id, current_index, query_text) if nodes_all else []
 
-    # retrieve fallback — 노드는 있는데 임베딩/RPC 실패로 빈 결과면 "데이터 없음"이 아니라
+    # 유사 풀이 끌어오기 fallback — 노드는 있는데 임베딩/RPC 실패로 빈 결과면 "데이터 없음"이 아니라
     # 같은 문제의 다음 노드(node_index > current)를 raw 로 넘긴다(부실 힌트 방지).
     if not retrieved and nodes_all:
-      logger.error("retrieve 빈 결과(임베딩/RPC 실패 추정) → same-problem 다음 노드 fallback")
+      logger.error("유사 풀이 끌어오기(_retrieve) 빈 결과(임베딩/RPC 실패 추정) → same-problem 다음 노드 fallback")
       retrieved = [
         {**n, "is_same_problem": True}
         for n in nodes_all if n["node_index"] > current_index
