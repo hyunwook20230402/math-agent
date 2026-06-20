@@ -39,7 +39,7 @@
   - 009 `add_validation_columns`
   - 010 `add_difficulty_score` — `difficulty_score` INT 1~10 + 5단계 GENERATED 라벨
   - `add_solution_nodes` (20260618) — `solution_nodes` 테이블 + RPC `search_solution_nodes_for_hint` (튜터 RAG)
-- ⚠️ 로컬 `supabase/migrations/` 폴더에는 **008 까지만** 파일 존재. 009/010/011 은 원격 DB 에만 반영된 상태(드리프트). 011 은 로컬에 `011_add_solution_nodes.sql` 파일은 있으나 번호 동기화는 미정. 로컬 재생성 필요 시 Supabase MCP 로 조회
+- ✅ **마이그레이션 baseline 리셋(2026-06-20)** — 드리프트 해소. 엉킨 001~016 은 `_archive/` 로 치우고, 현재 원격 DB 구조를 `baseline_20260620.sql` 한 장으로 스냅샷. 이후 변경은 `017_` 부터. 상세 `supabase/migrations/README.md`
 - ℹ️ `student_conversations`/`student_attempts`/`search_similar_problems`(구 deeptutor) 는 **원격에 적용된 적 없음** (로컬 007 파일만 존재 → deeptutor 폐기로 무의미)
 - `problem_sets` 3지표 avg/p75/max, `recalc_set_difficulty` RPC 포함
 
@@ -48,7 +48,7 @@
 - **튜터 고도화** — CMS 해설 도형 수동 bbox 입력 UI(`solution_nodes.figure_image_crop_url` 채우기), 난이도 기반 VL provider 분기(비용), 대화 이력 저장 여부
 - **teacher 앱** 숙제 배포/분석 완성도 ↑ (현재 기초 구현 60~70%)
 - **student 앱** 오답노트 고도화 (막힌 지점 도우미 연계 UI 포함)
-- **로컬 migrations/ 폴더** 에 009/010 SQL 파일 역추출해 커밋 (드리프트 해소)
+- ~~로컬 migrations 드리프트 해소~~ ✅ 완료(2026-06-20 baseline 리셋)
 
 ## 파이프라인 운영 정보
 
