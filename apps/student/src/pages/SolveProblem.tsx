@@ -15,10 +15,12 @@ import {
   Clock, 
   BookOpen,
   Send,
-  AlertCircle
+  AlertCircle,
+  Lightbulb
 } from 'lucide-react';
 import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@shared/lib/api';
 import type { DistributionWithDetails } from '@shared/types/database';
+import StuckHelperModal from '@/components/tutor/StuckHelperModal';
 
 interface Problem {
   id: string;
@@ -48,6 +50,7 @@ const SolveProblem = () => {
   const [attemptCounts, setAttemptCounts] = useState<{ [key: string]: number }>({});
   const [timeSpent, setTimeSpent] = useState(0);
   const [isWrongAnswersOnly, setIsWrongAnswersOnly] = useState(false);
+  const [showStuckHelper, setShowStuckHelper] = useState(false);
 
   // 배포 날짜를 URL 파라미터로 변환하는 함수
   const getDistributionDateParam = () => {
@@ -518,6 +521,18 @@ const SolveProblem = () => {
             )}
           </div>
 
+          {/* 막힌 지점 도우미 */}
+          <div className="pt-2">
+            <Button
+              variant="outline"
+              className="w-full border-amber-300 text-amber-700 hover:bg-amber-50"
+              onClick={() => setShowStuckHelper(true)}
+            >
+              <Lightbulb className="h-4 w-4 mr-2" />
+              막혔어요 — 도움받기
+            </Button>
+          </div>
+
           {/* 네비게이션 */}
           <div className="flex justify-between pt-4">
             <Button
@@ -549,6 +564,14 @@ const SolveProblem = () => {
           </div>
         </CardContent>
       </Card>
+
+      {/* 막힌 지점 도우미 모달 */}
+      {showStuckHelper && currentProblem && (
+        <StuckHelperModal
+          problemId={currentProblem.id}
+          onClose={() => setShowStuckHelper(false)}
+        />
+      )}
     </div>
   );
 };
