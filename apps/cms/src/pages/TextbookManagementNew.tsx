@@ -22,6 +22,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
+import { formatDifficultyScore, getDifficultyColor } from '@shared/lib/utils';
 import { useTextbook } from '@/context/TextbookContext';
 import type { Textbook, Chapter, Subchapter } from '@shared/types/database';
 import PdfUploadDialog from '@/components/PdfUploadDialog';
@@ -56,20 +57,9 @@ interface Problem {
   created_at: string;
 }
 
-const difficultyLabel = (score: number) => {
-  if (score <= 2) return `아주 쉬움 · ${score}/10`;
-  if (score <= 4) return `쉬움 · ${score}/10`;
-  if (score <= 6) return `보통 · ${score}/10`;
-  if (score <= 8) return `어려움 · ${score}/10`;
-  return `최상위 · ${score}/10`;
-};
-const difficultyColor = (score: number) => {
-  if (score <= 2) return 'bg-green-100 text-green-800';
-  if (score <= 4) return 'bg-blue-100 text-blue-800';
-  if (score <= 6) return 'bg-yellow-100 text-yellow-800';
-  if (score <= 8) return 'bg-orange-100 text-orange-800';
-  return 'bg-red-100 text-red-800';
-};
+// 난이도 표기/색상은 공통 유틸(4단계 Lv1~4)로 통일. 옛 1~10 데이터는 Lv4 로 흡수됨.
+const difficultyLabel = formatDifficultyScore;
+const difficultyColor = getDifficultyColor;
 
 const TextbookManagementNew = () => {
   const navigate = useNavigate();
@@ -789,8 +779,8 @@ const TextbookManagementNew = () => {
                         <div className="min-w-0">
                           <p className="font-medium text-sm truncate">{problem.title}</p>
                           <div className="flex items-center gap-1.5 mt-1">
-                            <Badge variant="outline" className={`text-xs ${difficultyColor(problem.difficulty_score ?? 5)}`}>
-                              {difficultyLabel(problem.difficulty_score ?? 5)}
+                            <Badge variant="outline" className={`text-xs ${difficultyColor(problem.difficulty_score ?? 2)}`}>
+                              {difficultyLabel(problem.difficulty_score ?? 2)}
                             </Badge>
                             <Badge variant="outline" className="text-xs">
                               {problem.answer_type === 'multiple_choice' ? '객관식' : '주관식'}

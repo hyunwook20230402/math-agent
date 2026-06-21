@@ -20,7 +20,7 @@ const AddProblem = () => {
     title: '',
     answer: '',
     answerType: 'short_answer' as 'short_answer' | 'multiple_choice',
-    difficulty_score: 5,
+    difficulty_score: 2,
     category: ''
   });
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -252,15 +252,18 @@ const AddProblem = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="difficulty_score">난이도 (1-10)</Label>
-                  <Input
+                  <Label htmlFor="difficulty_score">난이도</Label>
+                  <select
                     id="difficulty_score"
-                    type="number"
-                    min="1"
-                    max="10"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                     value={formData.difficulty_score}
-                    onChange={(e) => setFormData(prev => ({ ...prev, difficulty_score: Math.min(10, Math.max(1, parseInt(e.target.value) || 5)) }))}
-                  />
+                    onChange={(e) => setFormData(prev => ({ ...prev, difficulty_score: parseInt(e.target.value) }))}
+                  >
+                    <option value={1}>Lv1 (쉬움)</option>
+                    <option value={2}>Lv2 (보통)</option>
+                    <option value={3}>Lv3 (어려움)</option>
+                    <option value={4}>Lv4 (최고난도)</option>
+                  </select>
                 </div>
               </div>
 

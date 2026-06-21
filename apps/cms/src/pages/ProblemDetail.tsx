@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '@shared/ui/button';
+import { scoreToLevel } from '@shared/lib/utils';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { toast } from '@shared/hooks/use-toast';
@@ -215,7 +216,7 @@ const ProblemDetail = () => {
   const selectProblem = async (p: StagingProblem) => {
     setSelectedId(p.id);
     setEditValues({
-      difficulty_score: p.difficulty_score ?? 5,
+      difficulty_score: p.difficulty_score ?? 2,
       answer_type: p.answer_type,
       correct_answer: p.correct_answer || '',
       explanation: p.explanation || '',
@@ -498,14 +499,16 @@ const ProblemDetail = () => {
 
               <div>
                 <Label className="text-sm">난이도</Label>
-                <Input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={editValues.difficulty_score ?? 5}
-                  onChange={e => setEditValues(prev => ({ ...prev, difficulty_score: Math.min(10, Math.max(1, parseInt(e.target.value) || 5)) }))}
-                  className="mt-1"
-                />
+                <select
+                  className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={scoreToLevel(editValues.difficulty_score ?? 2)}
+                  onChange={e => setEditValues(prev => ({ ...prev, difficulty_score: parseInt(e.target.value) }))}
+                >
+                  <option value={1}>Lv1 (쉬움)</option>
+                  <option value={2}>Lv2 (보통)</option>
+                  <option value={3}>Lv3 (어려움)</option>
+                  <option value={4}>Lv4 (최고난도)</option>
+                </select>
               </div>
 
               <div>

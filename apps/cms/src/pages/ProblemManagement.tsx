@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { formatDifficultyScore, getDifficultyColor as getDifficultyColorShared } from '@shared/lib/utils';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Badge } from '@shared/ui/badge';
@@ -288,21 +289,9 @@ const ProblemManagement = () => {
   // 필터링된 문제 목록 (클라이언트 사이드 필터링은 제거, 서버 사이드로 처리)
   const filteredProblems = problems;
 
-  const getDifficultyColor = (score: number) => {
-    if (score <= 2) return 'bg-green-100 text-green-800';
-    if (score <= 4) return 'bg-blue-100 text-blue-800';
-    if (score <= 6) return 'bg-yellow-100 text-yellow-800';
-    if (score <= 8) return 'bg-orange-100 text-orange-800';
-    return 'bg-red-100 text-red-800';
-  };
-
-  const getDifficultyLabel = (score: number) => {
-    if (score <= 2) return `아주 쉬움 · ${score}/10`;
-    if (score <= 4) return `쉬움 · ${score}/10`;
-    if (score <= 6) return `보통 · ${score}/10`;
-    if (score <= 8) return `어려움 · ${score}/10`;
-    return `최상위 · ${score}/10`;
-  };
+  // 난이도 표기/색상은 공통 유틸(4단계 Lv1~4)로 통일. 옛 1~10 데이터는 Lv4 로 흡수됨.
+  const getDifficultyColor = getDifficultyColorShared;
+  const getDifficultyLabel = formatDifficultyScore;
 
   const getAnswerTypeLabel = (answerType: string) => {
     switch (answerType) {
@@ -548,8 +537,8 @@ const ProblemManagement = () => {
                           문제 #{problem.problem_number}
                         </p>
                         <div className="flex gap-2 mt-2">
-                          <Badge variant="outline" className={getDifficultyColor(problem.difficulty_score ?? 5)}>
-                            {getDifficultyLabel(problem.difficulty_score ?? 5)}
+                          <Badge variant="outline" className={getDifficultyColor(problem.difficulty_score ?? 2)}>
+                            {getDifficultyLabel(problem.difficulty_score ?? 2)}
                           </Badge>
                           <Badge variant="outline">
                             {getAnswerTypeLabel(problem.answer_type)}

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { difficultyLabelKo } from '@shared/lib/utils';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
 import { Button } from '@shared/ui/button';
 import { Badge } from '@shared/ui/badge';
@@ -32,7 +33,7 @@ interface ProblemAnalysis {
   correct_count: number;
   wrong_count: number;
   accuracy: number;
-  difficulty: number;
+  difficulty: string;  // DB difficulty 파생 라벨(very_easy/easy/hard/very_hard)
   unit: string;
 }
 
@@ -404,7 +405,7 @@ const AnalysisPage = () => {
                     </h4>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span>{problem.unit}</span>
-                      <span>난이도: {problem.difficulty}/10</span>
+                      <span>난이도: {difficultyLabelKo(problem.difficulty)}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-4">

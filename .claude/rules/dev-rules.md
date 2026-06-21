@@ -147,6 +147,22 @@ npm run dev                  # http://localhost:8081
 - Node 앱이므로 venv activate 불필요. 브라우저 접속도 venv 와 무관
 - teacher=8082, student=8083 동일 원칙
 
+### ⚠️ 에이전트(Claude)가 서버 띄울 때 — 백그라운드 금지, 독립 창으로 (2026-06-21)
+
+**서버(uvicorn·vite)를 Bash `run_in_background` 로 띄우지 말 것.** 백그라운드 셸은 에이전트
+턴이 끝나거나 다음 명령을 시작할 때 harness 가 정리하며 **서버까지 같이 종료**시킨다 → 작업할
+때마다 서버가 죽어 "중지됨" 이 반복된다(2026-06-21 다회 발생). 에이전트가 죽인 게 아니라 실행
+방식 문제.
+
+**반드시 `Start-Process` 로 세션과 분리된 독립 창에 띄운다:**
+```powershell
+Start-Process cmd -ArgumentList '/k','cd /d C:\Users\user\workspaces\math\apps\cms && npm run dev' -WindowStyle Minimized
+Start-Process cmd -ArgumentList '/k','cd /d C:\Users\user\workspaces\math\backend\pdf_pipeline && call venv\Scripts\activate.bat && uvicorn main:app --reload --port 8001' -WindowStyle Minimized
+```
+- 이러면 에이전트가 다른 명령을 돌려도 안 죽는다. 작업표시줄 최소화 cmd 창 = 서버.
+- 끄려면 그 창을 닫는다. **`taskkill`·`Stop-Process` 등 강제 종료 금지**(사용자 명시 요청).
+- 기동 확인은 `netstat` 리스닝 + `Invoke-WebRequest` HTTP 200 으로.
+
 ## 비용 절감 규칙
 
 - 파일 탐색/검색 → Explore subagent 위임

@@ -33,10 +33,89 @@ _LATEX_SUBSCRIPT_ESCAPE = re.compile(r'(?<!\\)\\_(?=[0-9a-zA-Z])')
 
 
 def _fix_latex_subscript_escapes(s: str) -> str:
-  """LaTeX 문자열의 아래첨자 앞 잘못된 백슬래시(`\\_` → `_`) 보정. 최종 문자열용."""
+  """LaTeX 최종 문자열 보정 — 아래첨자 백슬래시(`\\_`→`_`) + 닫는 짝(중괄호/구분자) 누락 채우기.
+
+  추출·편집 양쪽이 저장 직전 이 함수를 거치므로, 여기서 닫는 짝까지 보정하면 두 경로 모두 커버.
+  """
   if not s:
     return s
-  return _LATEX_SUBSCRIPT_ESCAPE.sub('_', s)
+  s = _LATEX_SUBSCRIPT_ESCAPE.sub('_', s)
+  s = _balance_latex_delimiters(s)
+  return s
+
+
+# 인라인 수식 구분자 `\( ... \)` 패턴. 닫는 `\)` 가 없으면 못 잡힌다(그래서 별도 카운트로 보충).
+_INLINE_MATH = re.compile(r'\\\((.*?)\\\)', re.DOTALL)
+
+
+def _balance_braces(expr: str) -> tuple[str, bool]:
+  """수식 한 조각의 중괄호 균형을 맞춘다. 닫는 `}` 가 모자라면 끝에 채운다.
+
+  `\\text{...` 처럼 LLM 이 닫는 중괄호를 빠뜨린 케이스 대응(에스케이프된 `\\{`/`\\}` 는 제외).
+  반환: (보정된 식, 보정했는지 여부). 여는 게 더 적은(닫는 `}` 가 더 많은) 비정상은 손대지 않음.
+  """
+  depth = 0
+  i = 0
+  n = len(expr)
+  while i < n:
+    c = expr[i]
+    if c == '\\':       # 이스케이프된 문자(\{, \}, \\ 등)는 건너뜀
+      i += 2
+      continue
+    if c == '{':
+      depth += 1
+    elif c == '}':
+      depth = max(0, depth - 1)
+    i += 1
+  if depth > 0:
+    return expr + ('}' * depth), True
+  return expr, False
+
+
+def _balance_latex_delimiters(s: str) -> str:
+  """저장 직전 LaTeX 안전 보정 — 닫는 짝(중괄호 `}`, 인라인 구분자 `\\)`) 누락을 채운다.
+
+  명백히 안전한 '닫는 짝 채우기'만 한다(여는 쪽은 건드리지 않음). 두 가지 깨짐 케이스:
+    1) `\\text{...` 처럼 중괄호 안 닫힘 → 닫는 `}` 보충
+    2) `\\(...식...` 처럼 닫는 `\\)` 누락 → 끝에 `\\)` 보충
+  추출(rag_node_extractor)·편집(nodes.py) 양쪽이 공유하는 _fix_latex_subscript_escapes 에서 호출.
+  보정 후에도 구분자 수가 안 맞으면(비정상 구조) 원본 유지 + 경고 로그(잘못 고쳐 악화 방지).
+  """
+  if not s:
+    return s
+
+  open_cnt = s.count(r'\(')
+  close_cnt = s.count(r'\)')
+
+  # (A) 닫는 `\)` 가 부족: 각 인라인 조각의 중괄호를 닫고, 모자란 `\)` 만큼 끝에 보충.
+  if open_cnt > close_cnt:
+    # 닫힌 조각들은 정상 보정(중괄호만), 마지막 안 닫힌 조각은 중괄호 닫고 `\)` 추가.
+    last_open = s.rfind(r'\(')
+    head, tail = s[:last_open], s[last_open + 2:]  # tail = 마지막 `\(` 이후(닫힘 없음)
+    balanced_tail, _ = _balance_braces(tail)
+    fixed = head + r'\(' + balanced_tail + r'\)'
+    # head 안의 닫힌 조각들도 중괄호 보정
+    fixed = _INLINE_MATH.sub(lambda m: r'\(' + _balance_braces(m.group(1))[0] + r'\)', fixed)
+    logger.warning("[latex] 닫는 \\) 누락 보정: %r → %r", s[:60], fixed[:60])
+    return fixed
+
+  # (B) 구분자 균형은 맞음 → 각 인라인 조각의 중괄호만 점검/보충.
+  changed = {"v": False}
+
+  def _fix_seg(m):
+    bal, did = _balance_braces(m.group(1))
+    if did:
+      changed["v"] = True
+    return r'\(' + bal + r'\)'
+
+  fixed = _INLINE_MATH.sub(_fix_seg, s)
+  if changed["v"]:
+    logger.warning("[latex] \\text 등 중괄호 누락 보정: %r → %r", s[:60], fixed[:60])
+
+  # 보정 후에도 구분자 불균형이면(닫는 게 더 많은 비정상 등) 더 손대지 않고 경고만.
+  if fixed.count(r'\(') != fixed.count(r'\)'):
+    logger.warning("[latex] 구분자 불균형 — 자동보정 불가, 수동 확인 필요: %r", s[:80])
+  return fixed
 
 
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { formatDifficultyScore } from '@shared/lib/utils';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Badge } from '@shared/ui/badge';
@@ -553,7 +554,7 @@ const ProblemSetManagement = () => {
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-sm truncate">{problem.title}</div>
                           <div className="text-xs text-muted-foreground mt-1">
-                            {problem.category} | 난이도: {(problem as any).difficulty_score ?? '-'}/10
+                            {problem.category} | 난이도: {(problem as any).difficulty_score != null ? formatDifficultyScore((problem as any).difficulty_score) : '-'}
                           </div>
                           <div className="text-xs text-muted-foreground">
                             {problem.unit}
@@ -724,7 +725,7 @@ const ProblemSetManagement = () => {
                         <div className="flex-1 min-w-0">
                           <div className="font-medium text-sm truncate">{problem.title}</div>
                           <div className="text-xs text-muted-foreground mt-1">
-                            {problem.category} | 난이도: {(problem as any).difficulty_score ?? '-'}/10
+                            {problem.category} | 난이도: {(problem as any).difficulty_score != null ? formatDifficultyScore((problem as any).difficulty_score) : '-'}
                           </div>
                           <div className="text-xs text-muted-foreground">
                             {problem.unit}

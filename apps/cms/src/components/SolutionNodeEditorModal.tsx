@@ -29,16 +29,46 @@ const ROLE_LABEL: Record<string, string> = {
   conclusion: '결론',
 };
 
-// LaTeX 인라인/블록(\( \) / \[ \])을 KaTeX 로 렌더. 실패 시 원문 표시.
+const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string));
+
+// 수식 구분자(\( \)) 밖의 텍스트 조각 처리.
+// VL 출력 특성상 (1) 줄바꿈이 리터럴 "\n" 으로 박히거나 (2) \;, \text{...} 같은
+// LaTeX 명령이 구분자 밖에 떨어져 나온다. 리터럴 \n 으로 먼저 split → <br>(이렇게
+// 안 하면 \명령 정규식이 \n 의 n 을 명령으로 오인식). 각 조각의 흩어진 \명령
+// 토큰은 KaTeX 인라인으로 렌더 시도(실패 시 escape), 순수 텍스트는 escape.
+function renderTextSegment(text: string): string {
+  if (!text) return '';
+  const renderPiece = (piece: string): string => {
+    // \명령 토큰: \word(+선택 {중괄호 인자}) 또는 \;,\,,\! 같은 기호 명령.
+    const cmd = /\\(?:[a-zA-Z]+\s*(?:\{[^{}]*\})*|[;,!:])/g;
+    let out = '';
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = cmd.exec(piece)) !== null) {
+      out += esc(piece.slice(last, m.index));
+      try {
+        out += katex.renderToString(m[0], { displayMode: false, throwOnError: true });
+      } catch {
+        out += esc(m[0]);
+      }
+      last = cmd.lastIndex;
+    }
+    out += esc(piece.slice(last));
+    return out;
+  };
+  return text.split(/\\n/g).map(renderPiece).join('<br>');
+}
+
+// LaTeX 인라인/블록(\( \) / \[ \])을 KaTeX 로 렌더. 구분자 밖 텍스트는
+// renderTextSegment 로 (\n·흩어진 \명령) 처리. 실패 시 원문 표시.
 function renderMath(text: string): string {
   if (!text) return '';
   const pattern = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
   let out = '';
   let last = 0;
   let m: RegExpExecArray | null;
-  const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string));
   while ((m = pattern.exec(text)) !== null) {
-    out += esc(text.slice(last, m.index));
+    out += renderTextSegment(text.slice(last, m.index));
     const isBlock = m[1] !== undefined;
     const expr = (m[1] ?? m[2] ?? '').trim();
     try {
@@ -48,7 +78,7 @@ function renderMath(text: string): string {
     }
     last = pattern.lastIndex;
   }
-  out += esc(text.slice(last));
+  out += renderTextSegment(text.slice(last));
   return out;
 }
 

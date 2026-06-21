@@ -25,7 +25,11 @@ logger = logging.getLogger(__name__)
 
 class TagResultMeta(BaseModel):
   """Call A 전용 — 메타 정보."""
-  difficulty_score: int = Field(ge=1, le=10)
+  difficulty_score: int = Field(ge=1, le=4)
+  difficulty_level: Optional[str] = Field(
+    default=None,
+    description="해설에 인쇄된 난이도 라벨(Lv1~Lv4). 이미지에 'Lv1'~'Lv4' 표기가 보이면 그 문자열 그대로, 없으면 null. 추측 금지."
+  )
   correct_rate: Optional[float] = Field(
     default=None, ge=0, le=100,
     description="해설에 적힌 정답률(%). 이미지에 정답률이 보이면 그 숫자, 없으면 null."
@@ -36,6 +40,18 @@ class TagResultMeta(BaseModel):
 
 
 # ── 프롬프트 ──────────────────────────────────────────────────────────────────
+
+# 난이도 규칙(4단계 Lv1~4, 2026-06-21). 세 프롬프트가 공유한다.
+# 1순위: 해설에 인쇄된 Lv 라벨을 읽는다. 없으면 구조 신호로 1~4 추정.
+_DIFFICULTY_BLOCK = """- difficulty_level: 해설 이미지에 "Lv1"·"Lv2"·"Lv3"·"Lv4" 같은 난이도 라벨이 인쇄돼 있으면 그 문자열 그대로(예: "Lv3"). 없으면 null. 추측 금지 — 이미지에 명시된 경우만.
+- correct_rate: 해설 이미지에 "정답률"(예: "정답률 34.5%") 이 적혀 있으면 그 숫자(0~100). 없으면 null. 추측 금지.
+- difficulty_score: integer 1-4 (4단계). 해설에 Lv 라벨이 있으면 그 숫자와 일치시켜라(Lv1→1, Lv2→2, Lv3→3, Lv4→4). 라벨이 없을 때만 아래 구조 신호로 판단한다. 문제 번호는 참고만.
+    1 (Lv1, 쉬움): 공식 1개 직접 대입으로 즉시 답. 개념 1개 안에서 2~3단 계산.
+    2 (Lv2, 보통): 조건 2~3개 조합, 개념 1~2개. 중간 식 세움 필요.
+    3 (Lv3, 어려움): 아이디어 1개 필요. 다음 중 1개 → 경우 분리 2개 / 그래프 해석+대수 조작 / 합성·역·절댓값 1개 / 개념 2~3개 복합.
+    4 (Lv4, 최상위): 다음 중 2개 이상 → 경우 분리 3개 이상 / 합성·역·절댓값 중첩 2개 이상 / 미지수 2개 이상 동시 결정 / 그래프+경우분리+대수 모두 / 개념 3개 이상 복합. (옛 수능 22/30 급 킬러)
+    하한 규칙 (엄수): 경우 분리가 3개 이상이면 difficulty_score 는 무조건 4. 구조 신호 2개 이상 동시 해당이면 무조건 4."""
+
 
 _MATH_RULES_BLOCK = """MATH NOTATION (STRICT — violations make output invalid):
 1. NEVER use \\text{...}. Korean prose is plain text (no wrapper). Math goes in \\( ... \\).
@@ -78,15 +94,7 @@ PIECEWISE FUNCTIONS (구간별 함수):
 _TAGGING_PROMPT_WITH_SOLUTION = """You are analyzing a Korean high school math solution image.
 
 Rules:
-- correct_rate: 해설 이미지에 "정답률"(예: "정답률 34.5%", "정답률: 72%") 이 적혀 있으면 그 숫자(0~100)를 그대로. 없으면 null. 추측하지 말 것 — 이미지에 명시된 경우만.
-- difficulty_score: integer 1-10. 문제 번호는 참고만 할 것. 구조적 특징으로 판단한다.
-    1-2 (very_easy): 공식 1개 직접 대입으로 즉시 답. (예: 로그 성질 1번 적용, 이차함수 꼭짓점)
-    3-4 (easy): 2~3단 계산. 개념 1개 안에서 해결. (예: 인수분해 후 해, 미분 1회 후 극값)
-    5-6 (medium): 조건 2~3개 조합, 개념 1~2개. 중간 식 세움 필요.
-    7-8 (hard): 아이디어 1개 필요. 다음 중 1개 해당 → 경우 분리 2개 / 그래프 해석+대수 조작 동시 / 합성함수·역함수·절댓값 중 1개 / 개념 2~3개 복합.
-    9-10 (killer): 다음 중 2개 이상 해당 → 경우 분리 3개 이상 / 합성·역·절댓값 중첩 2개 이상 / 미지수 2개 이상을 여러 조건으로 동시 결정 / 그래프 해석+경우분리+대수 조작 모두 / 개념 3개 이상 복합.
-    시대 무관 (2012 수능 30번, 2021 수능 30번, 최근 평가원 22/30 급 모두 9-10).
-    하한 규칙 (엄수): 경우 분리가 3개 이상이면 difficulty_score 최소 8 (7 이하 절대 금지). 위 구조 신호 중 2개 이상 동시 해당이면 최소 9 (8 이하 절대 금지). 보수적으로 8 에 몰리지 말고, 신호 카운트가 2+ 면 망설이지 말고 9~10 을 줘라.
+""" + _DIFFICULTY_BLOCK + """
 - answer_type: "multiple_choice" if the problem has numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Use Korean high-school math unit-level terms (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
 - skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Techniques actually used in the solution (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
@@ -96,7 +104,8 @@ All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
 """ + _MATH_RULES_BLOCK + """
 Reference output (well-formed):
 {
-  "difficulty_score": 4,
+  "difficulty_score": 2,
+  "difficulty_level": "Lv2",
   "concept_tags": ["수열", "시그마"],
   "skill_tags": ["시그마 분배 법칙", "수열의 합 계산"],
   "answer_type": "short_answer"
@@ -113,15 +122,7 @@ You are given TWO images in order:
 Use BOTH images together: the problem tells you what is being asked and which given conditions matter; the solution tells you which techniques were actually used. Tags must reflect both the problem's intent and the solution's method.
 
 Rules:
-- correct_rate: 해설 이미지에 "정답률"(예: "정답률 34.5%", "정답률: 72%") 이 적혀 있으면 그 숫자(0~100)를 그대로. 없으면 null. 추측하지 말 것 — 이미지에 명시된 경우만.
-- difficulty_score: integer 1-10. 문제 번호는 참고만 할 것. 구조적 특징으로 판단한다.
-    1-2 (very_easy): 공식 1개 직접 대입으로 즉시 답. (예: 로그 성질 1번 적용, 이차함수 꼭짓점)
-    3-4 (easy): 2~3단 계산. 개념 1개 안에서 해결. (예: 인수분해 후 해, 미분 1회 후 극값)
-    5-6 (medium): 조건 2~3개 조합, 개념 1~2개. 중간 식 세움 필요.
-    7-8 (hard): 아이디어 1개 필요. 다음 중 1개 해당 → 경우 분리 2개 / 그래프 해석+대수 조작 동시 / 합성함수·역함수·절댓값 중 1개 / 개념 2~3개 복합.
-    9-10 (killer): 다음 중 2개 이상 해당 → 경우 분리 3개 이상 / 합성·역·절댓값 중첩 2개 이상 / 미지수 2개 이상을 여러 조건으로 동시 결정 / 그래프 해석+경우분리+대수 조작 모두 / 개념 3개 이상 복합.
-    시대 무관 (2012 수능 30번, 2021 수능 30번, 최근 평가원 22/30 급 모두 9-10).
-    하한 규칙 (엄수): 경우 분리가 3개 이상이면 difficulty_score 최소 8 (7 이하 절대 금지). 위 구조 신호 중 2개 이상 동시 해당이면 최소 9 (8 이하 절대 금지). 보수적으로 8 에 몰리지 말고, 신호 카운트가 2+ 면 망설이지 말고 9~10 을 줘라.
+""" + _DIFFICULTY_BLOCK + """
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Cross-check problem and solution (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
 - skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). Techniques actually used (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
@@ -131,7 +132,8 @@ All text fields MUST be in Korean (prose) with math isolated in \\( ... \\).
 """ + _MATH_RULES_BLOCK + """
 Reference output (well-formed):
 {
-  "difficulty_score": 4,
+  "difficulty_score": 2,
+  "difficulty_level": "Lv2",
   "concept_tags": ["수열", "시그마"],
   "skill_tags": ["시그마 분배 법칙", "수열의 합 계산"],
   "answer_type": "short_answer"
@@ -141,13 +143,12 @@ Output valid JSON only. No prose, no markdown fences."""
 _TAGGING_PROMPT_NO_SOLUTION = """You are analyzing a Korean high school math problem image (no solution shown).
 
 Rules:
-- difficulty_score: integer 1-10. 문제 번호는 참고만 할 것. 구조적 특징으로 판단한다.
-    1-2 (very_easy): 공식 1개 직접 대입으로 즉시 답.
-    3-4 (easy): 2~3단 계산. 개념 1개 안에서 해결.
-    5-6 (medium): 조건 2~3개 조합, 개념 1~2개.
-    7-8 (hard): 아이디어 1개 필요 (경우 분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개).
-    9-10 (killer): 경우 분리 3+ / 합성·역·절댓값 중첩 2+ / 미지수 2+ 동시 결정 / 그래프+경우분리+대수 모두 / 개념 3+ 복합 중 2개 이상 해당. 시대 무관.
-    하한 규칙 (엄수): 경우 분리 3+ 면 최소 8 (7 이하 금지). 구조 신호 2+ 면 최소 9 (8 이하 금지). 신호 카운트 2+ 면 망설이지 말고 9~10.
+- difficulty_score: integer 1-4 (4단계). 문제 번호는 참고만 할 것. 구조적 특징으로 판단한다. (해설 이미지가 없어 Lv 라벨은 읽을 수 없으니 difficulty_level 은 null.)
+    1 (Lv1, 쉬움): 공식 1개 직접 대입으로 즉시 답. 개념 1개 안에서 2~3단 계산.
+    2 (Lv2, 보통): 조건 2~3개 조합, 개념 1~2개.
+    3 (Lv3, 어려움): 아이디어 1개 필요 (경우 분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개).
+    4 (Lv4, 최상위): 경우 분리 3+ / 합성·역·절댓값 중첩 2+ / 미지수 2+ 동시 결정 / 그래프+경우분리+대수 모두 / 개념 3+ 복합 중 2개 이상 해당.
+    하한 규칙 (엄수): 경우 분리 3+ 면 무조건 4. 구조 신호 2+ 면 무조건 4.
 - answer_type: "multiple_choice" if the problem image shows numbered options (①②③④⑤), otherwise "short_answer"
 - concept_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). (e.g. "삼각함수", "이차방정식", "미분", "수열", "함수의 극한")
 - skill_tags: MUST contain 1~3 tags IN KOREAN (empty list forbidden). (e.g. "인수분해", "치환", "그래프 해석", "시그마 분배")
@@ -456,9 +457,9 @@ def _apply_suggested_fixes(
     else:
       for iss in diff_issues:
         reason = iss.get("reason", "")
-        m = _re.search(r'\b(10|[1-9])(?:~(10|[1-9]))?\s*점\s*(?:이|가|로|으로)?\s*(?:적절|조정|변경|평가|될\s*수\s*있)', reason)
+        m = _re.search(r'\b([1-4])(?:~[1-4])?\s*점?\s*(?:이|가|로|으로)?\s*(?:적절|조정|변경|평가|될\s*수\s*있)', reason)
         if m:
-          score = int(m.group(1))
+          score = max(1, min(4, int(m.group(1))))
           tag_result["difficulty_score"] = score
           applied_fields.add("difficulty_score")
           logger.info(f"difficulty_score 조정: {original['difficulty_score']} → {score} (reason 파싱)")
@@ -559,7 +560,7 @@ def extract_tags_from_image(
   fallback = {
     "unit": "",
     "unit_score": 0.0,
-    "difficulty_score": 5,
+    "difficulty_score": 2,
     "correct_rate": correct_rate,
     "concept_tags": [],
     "skill_tags": [],
@@ -587,9 +588,14 @@ def extract_tags_from_image(
     # (해설 PDF 에 정답률이 박혀 있으므로 보통 meta.correct_rate 로 채워진다.)
     effective_correct_rate = correct_rate if correct_rate is not None else meta.correct_rate
 
-    # 난이도: 정답률 있으면 구간매핑(GPT 추정 버림), 없으면 GPT 추정. (2026-06-19)
-    _d = difficulty_resolver.resolve_difficulty(effective_correct_rate, meta.difficulty_score)
-    if effective_correct_rate is not None:
+    # 난이도 근거 우선순위(2026-06-21, 4단계): Lv 라벨 > 정답률 구간매핑 > GPT 추정.
+    _d = difficulty_resolver.resolve_difficulty(
+      effective_correct_rate, meta.difficulty_score, meta.difficulty_level
+    )
+    if meta.difficulty_level:
+      logger.info(f"[난이도] 해설 라벨 {meta.difficulty_level} → difficulty_score={_d} "
+                  f"(GPT 추정 {meta.difficulty_score} 무시)")
+    elif effective_correct_rate is not None:
       logger.info(f"[난이도] correct_rate={effective_correct_rate}% → difficulty_score={_d} "
                   f"(GPT 추정 {meta.difficulty_score} 무시)")
 

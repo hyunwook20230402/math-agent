@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
+import { formatDifficultyScore } from '@shared/lib/utils';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Badge } from '@shared/ui/badge';
@@ -696,7 +697,7 @@ const ProblemSetManagement = () => {
                         {problem.title}
                       </Label>
                       <p className="text-sm text-muted-foreground">
-                        카테고리: {problem.unit || '기타'} | 난이도: {(problem as any).difficulty_score ?? '-'}/10
+                        카테고리: {problem.unit || '기타'} | 난이도: {(problem as any).difficulty_score != null ? formatDifficultyScore((problem as any).difficulty_score) : '-'}
                       </p>
                     </div>
                   </div>

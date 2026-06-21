@@ -10,6 +10,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@shared/hooks/useAuth';
+import { formatDifficultyScore } from '@shared/lib/utils';
 import { Button } from '@shared/ui/button';
 import { toast } from '@shared/hooks/use-toast';
 import {
@@ -1041,7 +1042,7 @@ export default function SolutionReview() {
                         </span>
                         {r?.difficulty_score != null && (
                           <span className="text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700">
-                            {r.difficulty_score}/10
+                            {formatDifficultyScore(r.difficulty_score)}
                           </span>
                         )}
                         {retagStatus[num] === 'pending' && <span className="text-xs text-yellow-600">대기 중…</span>}
@@ -1065,7 +1066,7 @@ export default function SolutionReview() {
                     {expanded && (
                       <div className="px-4 py-3 border-t bg-gray-50/50 text-sm space-y-2">
                         <div><strong className="text-xs text-muted-foreground">단원:</strong> {r?.unit || '-'}</div>
-                        <div><strong className="text-xs text-muted-foreground">난이도:</strong> {r?.difficulty_score != null ? `${r.difficulty_score}/10` : '-'}</div>
+                        <div><strong className="text-xs text-muted-foreground">난이도:</strong> {r?.difficulty_score != null ? formatDifficultyScore(r.difficulty_score) : '-'}</div>
                         <div>
                           <strong className="text-xs text-muted-foreground">개념:</strong>{' '}
                           {Array.isArray(r?.concept_tags) && r.concept_tags.length > 0

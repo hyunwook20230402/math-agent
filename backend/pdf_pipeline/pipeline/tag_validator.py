@@ -73,8 +73,8 @@ def _layer1_rule(tag_result: dict) -> list[ValidationIssue]:
     issues.append(ValidationIssue(field="skill_tags", reason="skill_tags 비어 있음", severity="medium"))
 
   difficulty_score = tag_result.get("difficulty_score")
-  if difficulty_score is not None and not (1 <= int(difficulty_score) <= 10):
-    issues.append(ValidationIssue(field="difficulty_score", reason=f"difficulty_score={difficulty_score} 범위 초과 (1~10)", severity="high"))
+  if difficulty_score is not None and not (1 <= int(difficulty_score) <= 4):
+    issues.append(ValidationIssue(field="difficulty_score", reason=f"difficulty_score={difficulty_score} 범위 초과 (1~4)", severity="high"))
 
   unit_score = tag_result.get("unit_score", 1.0)
   if unit_score < 0.5:
@@ -99,12 +99,11 @@ _VALIDATION_PROMPT_TEMPLATE = """\
 이미지와 태깅 결과를 비교해서 다음을 검사해라:
 1. concept_tags / skill_tags 중 명백히 누락된 개념이나 오태깅이 있는가?
 2. unit (단원 경로) 이 이미지 내용과 맞는가?
-3. difficulty_score (1~10 정수) 가 문제 난이도와 맞는가? 시대 무관 구조 신호 기반:
-   - 1-2 (very_easy): 공식 1개 직접 대입
-   - 3-4 (easy): 2~3단 계산, 개념 1개 안
-   - 5-6 (medium): 조건 2~3개 조합, 개념 1~2개
-   - 7-8 (hard): 아이디어 1개 — 경우분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개
-   - 9-10 (killer): 경우분리 3+ / 합성·역·절댓값 중첩 2+ / 미지수 2+ 동시결정 / 스텝 7+ / 그래프+경우분리+대수 모두 / 개념 3+ 복합 중 2개 이상 해당
+3. difficulty_score (1~4 정수, Lv1~Lv4) 가 문제 난이도와 맞는가? 해설에 Lv 라벨이 인쇄돼 있으면 그 숫자와 일치해야 한다. 라벨이 없으면 구조 신호 기반:
+   - 1 (Lv1, 쉬움): 공식 1개 직접 대입, 개념 1개 안 2~3단 계산
+   - 2 (Lv2, 보통): 조건 2~3개 조합, 개념 1~2개
+   - 3 (Lv3, 어려움): 아이디어 1개 — 경우분리 2개 / 그래프+대수 / 합성·역·절댓값 1개 / 개념 2~3개 복합 중 1개
+   - 4 (Lv4, 최상위): 경우분리 3+ / 합성·역·절댓값 중첩 2+ / 미지수 2+ 동시결정 / 그래프+경우분리+대수 모두 / 개념 3+ 복합 중 2개 이상 해당
    문제 번호는 참고만 — 시대별로 킬러 번호 다름.
 
 태깅 결과:
@@ -116,7 +115,7 @@ _VALIDATION_PROMPT_TEMPLATE = """\
 suggested_fixes 를 제안할 때:
 - concept_tags / skill_tags 는 반드시 위에 제시된 "사용 가능한 canonical 목록" 안에서만 골라라.
 - unit 은 반드시 "사용 가능한 unit 경로" 중 하나를 골라라.
-- difficulty_score 가 부적절하면 suggested_fixes.difficulty_score 에 1~10 정수로 직접 제시해라.
+- difficulty_score 가 부적절하면 suggested_fixes.difficulty_score 에 1~4 정수로 직접 제시해라.
 - 목록에 없는 용어는 제안하지 마라 (후처리에서 매칭 실패).
 
 문제 없으면 status=ok, 경미한 문제면 warning, 심각하면 reject 로 판단해라.
@@ -195,7 +194,7 @@ def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[Val
       canonical_section=_build_canonical_section(),
     )
 
-    d = int(tag_result.get("difficulty_score") or 5)
+    d = int(tag_result.get("difficulty_score") or 2)
     logger.info(f"[validator L2] difficulty={d} provider=openai")
 
     llm_result = call_vl(image_path, prompt, _LLMValidation)
