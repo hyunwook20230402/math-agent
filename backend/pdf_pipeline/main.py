@@ -407,11 +407,47 @@ async def update_staging(staging_id: str, body: StagingUpdate):
     return result
 
 
+def _extract_nodes_for_problems(problems: list[dict]):
+    """승인된 문제들의 풀이 노드를 추출·저장(백그라운드).
+
+    해설 이미지(solution_image_url)가 있는 문제만 대상. best-effort —
+    실패해도 로깅만 하고 넘어간다(문제 등록은 이미 끝났고 노드는 선택사항,
+    추후 노드 편집기에서 수동 재추출 가능).
+    """
+    from storage.supabase_client import get_client
+    from pipeline import rag_node_extractor
+
+    targets = [p for p in problems if p.get("solution_image_url")]
+    skipped = len(problems) - len(targets)
+    if not targets:
+        logger.info(f"[노드 자동추출] 대상 없음(해설 이미지 있는 문제 0개, 건너뜀 {skipped})")
+        return
+
+    logger.info(f"[노드 자동추출] 시작 — 대상 {len(targets)}개 (해설 없어 건너뜀 {skipped})")
+    client = get_client()
+    ok = 0
+    for prob in targets:
+        try:
+            result = rag_node_extractor.build_and_store(prob, client)
+            if result.status == "success":
+                ok += 1
+                logger.info(f"[노드 자동추출] ✓ problem_id={result.problem_id} nodes={len(result.nodes)}")
+            else:
+                logger.warning(f"[노드 자동추출] ⚠ problem_id={prob.get('id')} status={result.status} error={result.error}")
+        except Exception as e:
+            logger.warning(f"[노드 자동추출] ✗ problem_id={prob.get('id')} 예외: {e}")
+    logger.info(f"[노드 자동추출] 완료 — 성공 {ok}/{len(targets)}")
+
+
 @app.post("/api/staging/{job_id}/approve-all")
-async def approve_all(job_id: str, body: ApproveRequest):
-    """승인된 모든 문제를 problems 테이블로 이동"""
-    count = approve_to_problems(job_id, body.teacher_id)
-    return {"approved_count": count, "message": f"{count}개 문제가 등록되었습니다."}
+async def approve_all(job_id: str, body: ApproveRequest, background_tasks: BackgroundTasks):
+    """승인된 모든 문제를 problems 테이블로 이동 + 풀이 노드 백그라운드 자동 추출."""
+    inserted = approve_to_problems(job_id, body.teacher_id)
+    count = len(inserted)
+    # 노드 추출은 VL 호출이라 수십 초 — 승인 응답을 막지 않게 백그라운드로.
+    if inserted:
+        background_tasks.add_task(_extract_nodes_for_problems, inserted)
+    return {"approved_count": count, "message": f"{count}개 문제가 등록되었습니다. 풀이 노드는 자동 생성 중입니다."}
 
 
 @app.put("/api/staging/{job_id}/update-bboxes")

@@ -849,22 +849,22 @@ export default function SolutionReview() {
               <Button
                 variant="outline"
                 onClick={() => handleStartTagging('sample')}
-                title="앞 4개만 태깅해 결과 확인. 프롬프트/taxonomy 조정 후 재호출 가능."
+                title="앞 4개만 AI 분석해 결과 확인(난이도·단원·태그). 프롬프트/taxonomy 조정 후 재호출 가능."
               >
                 <Check className="h-4 w-4 mr-1" />
-                샘플 태깅 (앞 4개)
+                샘플 분석 (앞 4개)
               </Button>
               <Button
                 variant="outline"
                 onClick={() => handleStartTagging('continue')}
                 disabled={Object.keys(tagResults).length === 0}
-                title="tag_results에 아직 없는 번호만 이어서 태깅"
+                title="아직 분석 안 된 번호만 이어서 AI 분석"
               >
-                남은 문제 이어서 태깅
+                남은 문제 이어서 분석
               </Button>
               <Button onClick={() => handleStartTagging('full')}>
                 <Check className="h-4 w-4 mr-1" />
-                검수 완료 — 전체 AI 태깅
+                검수 완료 — 전체 AI 분석(난이도·단원·태그)
               </Button>
             </>
           )}
@@ -873,26 +873,26 @@ export default function SolutionReview() {
               <Button
                 variant="outline"
                 onClick={() => handleStartTagging('sample')}
-                title="샘플 재태깅"
+                title="샘플 재분석(앞 4개)"
               >
-                샘플 재태깅 (앞 4개)
+                샘플 재분석 (앞 4개)
               </Button>
               <Button
                 variant="outline"
                 onClick={() => handleStartTagging('continue')}
-                title="아직 안 된 번호만 이어서"
+                title="아직 안 된 번호만 이어서 AI 분석"
               >
-                남은 문제 이어서 태깅
+                남은 문제 이어서 분석
               </Button>
               <Button
                 variant="outline"
                 onClick={() => {
-                  if (!confirm('전체 재태깅: 기존 태그 전부 덮어쓰기됩니다. 계속?')) return;
+                  if (!confirm('전체 재분석: 기존 난이도·단원·태그 전부 덮어쓰기됩니다. 계속?')) return;
                   handleStartTagging('full');
                 }}
-                title="기존 tag_results 전체 덮어쓰기"
+                title="기존 AI 분석 결과 전체 덮어쓰기"
               >
-                전체 재태깅
+                전체 재분석
               </Button>
               <Button onClick={handleApply} disabled={applying}>
                 {applying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}

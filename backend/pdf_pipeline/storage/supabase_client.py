@@ -26,7 +26,7 @@ def insert_staging_problems(job_id: str, teacher_id: str, problems: list) -> lis
             "problem_number": p.get("problem_number"),
             "title": _build_title(p),
             "unit": p.get("unit", "미분류"),
-            "difficulty_score": p.get("difficulty_score", 5),
+            "difficulty_score": p.get("difficulty_score", 2),
             "answer_type": p.get("answer_type", "short_answer"),
             "correct_answer": p.get("correct_answer", ""),
             "choices": None,
@@ -126,8 +126,13 @@ def update_staging_image(staging_id: str, new_image_url: str) -> dict:
     return result.data[0] if result.data else {}
 
 
-def approve_to_problems(job_id: str, teacher_id: str) -> int:
-    """승인된 staging 문제를 problems 테이블로 이동"""
+def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
+    """승인된 staging 문제를 problems 테이블로 이동.
+
+    반환: INSERT 된 problems 행 리스트(id·solution_image_url 등 포함).
+      승인 직후 풀이 노드 자동 추출 등 후속 작업이 problem_id 를 쓸 수 있게 한다.
+      대상 없으면 빈 리스트.
+    """
     client = get_client()
     staged = (
         client.table("problem_staging")
@@ -139,7 +144,7 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
     ).data
 
     if not staged:
-        return 0
+        return []
 
     problems = []
     for p in staged:
@@ -147,7 +152,7 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
             "teacher_id": teacher_id,
             "title": p.get("title") or _build_title(p),
             "problem_number": p.get("problem_number", 1),
-            "difficulty_score": p.get("difficulty_score", 5),
+            "difficulty_score": p.get("difficulty_score", 2),
             "correct_rate": p.get("correct_rate"),
             "category": p.get("category", "기타"),
             "unit": p.get("unit", "미분류"),
@@ -172,14 +177,14 @@ def approve_to_problems(job_id: str, teacher_id: str) -> int:
             entry["chapter_id"] = p["chapter_id"]
         problems.append(entry)
 
-    client.table("problems").insert(problems).execute()
+    inserted = client.table("problems").insert(problems).execute().data or []
     # staging 상태 업데이트 — 'modified' 는 YOLO 학습 마킹 + 저장 ✓ UI 신호를 겸하므로 보존
     client.table("problem_staging") \
         .update({"status": "approved"}) \
         .eq("job_id", job_id) \
         .neq("status", "modified") \
         .execute()
-    return len(problems)
+    return inserted
 
 
 def _build_title(p: dict) -> str:
