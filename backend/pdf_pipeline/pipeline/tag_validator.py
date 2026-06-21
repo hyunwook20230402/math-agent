@@ -181,6 +181,7 @@ def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[Val
   """
   try:
     from .vl_providers import call_vl
+    from .solution_tagger import META_MODEL  # 검증도 메타 계열 → gpt-4o
 
     # LLM 검증용 경량 스키마 (suggested_fixes 없이 먼저 받음)
     class _LLMValidation(BaseModel):
@@ -195,9 +196,9 @@ def _layer2_llm(tag_result: dict, image_path: str | list[str]) -> tuple[list[Val
     )
 
     d = int(tag_result.get("difficulty_score") or 2)
-    logger.info(f"[validator L2] difficulty={d} provider=openai")
+    logger.info(f"[validator L2] difficulty={d} provider=openai model={META_MODEL}")
 
-    llm_result = call_vl(image_path, prompt, _LLMValidation)
+    llm_result = call_vl(image_path, prompt, _LLMValidation, model=META_MODEL)
     return llm_result.issues, llm_result.suggested_fixes
 
   except Exception as e:

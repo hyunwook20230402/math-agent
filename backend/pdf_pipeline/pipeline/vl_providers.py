@@ -144,18 +144,21 @@ def call_vl(
   *,
   provider: str | None = None,
   max_tokens: int | None = None,
+  model: str | None = None,
 ) -> T:
   """VL 모델(OpenAI) 호출. 반환값은 항상 schema 인스턴스 (Pydantic 검증 완료).
 
   image_path 에 리스트를 넘기면 멀티 이미지 모드로 호출된다.
   provider 인자는 하위호환용으로 받기만 하고 무시한다(항상 OpenAI).
   max_tokens 는 출력 잘림 방어용(list[Node] 1회 통합 등 긴 출력).
+  model 을 지정하면 그 모델로 호출(예: 메타 분석은 gpt-4o). 없으면 OPENAI_MODEL env.
   """
-  return _call_openai(image_path, prompt, schema, timeout, max_tokens=max_tokens)
+  return _call_openai(image_path, prompt, schema, timeout, max_tokens=max_tokens, model=model)
 
 
 def _call_openai(image_path: ImagePaths, prompt: str, schema: type[T],
-                 timeout: int | None = None, max_tokens: int | None = None) -> T:
+                 timeout: int | None = None, max_tokens: int | None = None,
+                 model: str | None = None) -> T:
   try:
     import openai
   except ImportError as e:
@@ -166,7 +169,7 @@ def _call_openai(image_path: ImagePaths, prompt: str, schema: type[T],
     raise ValueError("OPENAI_API_KEY 환경변수 없음")
 
   client = openai.OpenAI(api_key=api_key)
-  model = os.environ.get("OPENAI_MODEL", OPENAI_MODEL)
+  model = model or os.environ.get("OPENAI_MODEL", OPENAI_MODEL)
 
   paths = _normalize_paths(image_path)
   content: list[dict] = []

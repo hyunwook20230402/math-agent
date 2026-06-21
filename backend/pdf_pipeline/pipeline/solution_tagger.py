@@ -20,6 +20,11 @@ from .vl_providers import call_vl
 
 logger = logging.getLogger(__name__)
 
+# 메타 분석(난이도·단원·태그·검증)은 가벼운 작업이라 gpt-4o 로 고정.
+# 풀이 노드 추출(도형 언어화·논리 분해)만 OPENAI_MODEL env(기본 gpt-5.2)를 쓴다.
+# META_MODEL env 로 덮어쓸 수 있다.
+META_MODEL = os.environ.get("META_MODEL", "gpt-4o")
+
 
 # ── Pydantic 응답 스키마 ──────────────────────────────────────────────────────
 
@@ -569,7 +574,7 @@ def extract_tags_from_image(
 
   try:
     # ── Call A: 메타 추출 (difficulty_score/correct_rate/concept_tags/skill_tags/answer_type) ──
-    meta: TagResultMeta = call_vl(vl_image_arg, prompt, TagResultMeta, None)
+    meta: TagResultMeta = call_vl(vl_image_arg, prompt, TagResultMeta, None, model=META_MODEL)
 
     if not meta.concept_tags or not meta.skill_tags:
       logger.warning(
@@ -580,7 +585,7 @@ def extract_tags_from_image(
         "\n\nIMPORTANT: concept_tags 와 skill_tags 는 반드시 1개 이상 포함해야 한다. 빈 리스트 금지."
       )
       try:
-        meta = call_vl(vl_image_arg, retry_prompt, TagResultMeta, None)
+        meta = call_vl(vl_image_arg, retry_prompt, TagResultMeta, None, model=META_MODEL)
       except Exception as re_e:
         logger.warning(f"[Call A] 재시도 실패 (원본 결과 유지): {re_e}")
 
