@@ -9,9 +9,10 @@ import { scoreToLevel } from '@shared/lib/utils';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { toast } from '@shared/hooks/use-toast';
-import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap, Crop } from 'lucide-react';
+import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap, Crop, Workflow } from 'lucide-react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import { SolutionNodeEditorModal } from '@/components/SolutionNodeEditorModal';
 
 const PIPELINE_URL =
   (import.meta.env.VITE_TUTOR_API_URL as string | undefined) || 'http://localhost:8001';
@@ -79,6 +80,7 @@ interface StagingProblem {
   source_image_url: string | null;
   solution_image_url: string | null;
   solution_job_id: string | null;
+  promoted_problem_id: string | null;
   match_confidence: number | null;
   validation_status: 'ok' | 'warning' | 'reject' | null;
   validation_score: number | null;
@@ -186,6 +188,7 @@ const ProblemDetail = () => {
   const [saving, setSaving] = useState(false);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'problem' | 'solution'>('problem');
+  const [nodeEditTarget, setNodeEditTarget] = useState<{ id: string; title: string } | null>(null);
 
   const [taggingProblemId, setTaggingProblemId] = useState<string | null>(null);
 
@@ -364,28 +367,49 @@ const ProblemDetail = () => {
         <div className="w-48 border-r overflow-y-auto shrink-0 bg-gray-50">
           <div className="p-2 space-y-1">
             {problems.map(p => (
-              <button
+              <div
                 key={p.id}
-                onClick={() => selectProblem(p)}
-                className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
+                className={`flex items-center rounded text-sm transition-colors ${
                   selectedId === p.id
                     ? 'bg-primary text-primary-foreground'
                     : 'hover:bg-gray-200'
                 }`}
               >
-                <span className="font-medium">{p.problem_number}번</span>
-                {savedIds.has(p.id) && (
-                  <span className="ml-1 text-green-500">
-                    <Check className="inline h-3 w-3" />
-                  </span>
-                )}
-                {p.solution_image_url && (
-                  <span className="ml-1 text-blue-400 text-[10px]">해설</span>
-                )}
-                {!savedIds.has(p.id) && p.correct_answer && (
-                  <span className="ml-1 text-xs opacity-60">({p.correct_answer})</span>
-                )}
-              </button>
+                <button
+                  onClick={() => selectProblem(p)}
+                  className="flex-1 text-left px-3 py-2 min-w-0"
+                >
+                  <span className="font-medium">{p.problem_number}번</span>
+                  {savedIds.has(p.id) && (
+                    <span className="ml-1 text-green-500">
+                      <Check className="inline h-3 w-3" />
+                    </span>
+                  )}
+                  {p.solution_image_url && (
+                    <span className="ml-1 text-blue-400 text-[10px]">해설</span>
+                  )}
+                  {!savedIds.has(p.id) && p.correct_answer && (
+                    <span className="ml-1 text-xs opacity-60">({p.correct_answer})</span>
+                  )}
+                </button>
+                {/* 풀이 노드 편집: 승격(등록)된 문제만 활성. 미승격은 비활성+툴팁. */}
+                <button
+                  disabled={!p.promoted_problem_id}
+                  title={p.promoted_problem_id ? '풀이 노드 편집' : '등록 완료 후 노드가 생성됩니다'}
+                  onClick={() => {
+                    if (p.promoted_problem_id) {
+                      setNodeEditTarget({ id: p.promoted_problem_id, title: p.title || `${p.problem_number}번` });
+                    }
+                  }}
+                  className={`px-2 py-2 shrink-0 ${
+                    p.promoted_problem_id
+                      ? 'opacity-70 hover:opacity-100'
+                      : 'opacity-25 cursor-not-allowed'
+                  }`}
+                >
+                  <Workflow className="h-3.5 w-3.5" />
+                </button>
+              </div>
             ))}
           </div>
         </div>
@@ -625,6 +649,15 @@ const ProblemDetail = () => {
           </div>
         )}
       </div>
+
+      {/* 풀이 노드 편집 모달 (onClose 주면 컴포넌트가 자체 오버레이) */}
+      {nodeEditTarget && (
+        <SolutionNodeEditorModal
+          problemId={nodeEditTarget.id}
+          problemTitle={nodeEditTarget.title}
+          onClose={() => setNodeEditTarget(null)}
+        />
+      )}
     </div>
   );
 };

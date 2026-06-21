@@ -196,6 +196,16 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
             .in_("id", promoted_ids) \
             .neq("status", "modified") \
             .execute()
+        # 백링크: staging.promoted_problem_id 에 방금 만든 problems.id 저장(상세입력에서
+        # 노드 편집기를 그 id 로 연다). problem_number 로 매핑(INSERT 반환 순서에 비의존).
+        num_to_pid = {row.get("problem_number"): row.get("id") for row in inserted}
+        for p in staged:
+            pid = num_to_pid.get(p.get("problem_number"))
+            if pid:
+                client.table("problem_staging") \
+                    .update({"promoted_problem_id": pid}) \
+                    .eq("id", p["id"]) \
+                    .execute()
     return inserted
 
 
