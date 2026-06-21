@@ -134,12 +134,16 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
       대상 없으면 빈 리스트.
     """
     client = get_client()
+    # 멱등성: 아직 problems 로 승격 안 됨(promoted_to_problems=FALSE) + 해설 태깅 완료
+    # (solution_image_url 있음) 인 것만 대상. → 중복 INSERT 와 빈 메타 등록을 동시에 막는다.
     staged = (
         client.table("problem_staging")
         .select("*")
         .eq("job_id", job_id)
         .eq("teacher_id", teacher_id)
         .in_("status", ["approved", "modified", "pending"])
+        .eq("promoted_to_problems", False)
+        .not_.is_("solution_image_url", "null")
         .execute()
     ).data
 
@@ -147,7 +151,9 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
         return []
 
     problems = []
+    promoted_ids = []
     for p in staged:
+        promoted_ids.append(p["id"])
         entry = {
             "teacher_id": teacher_id,
             "title": p.get("title") or _build_title(p),
@@ -178,12 +184,18 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
         problems.append(entry)
 
     inserted = client.table("problems").insert(problems).execute().data or []
-    # staging 상태 업데이트 — 'modified' 는 YOLO 학습 마킹 + 저장 ✓ UI 신호를 겸하므로 보존
-    client.table("problem_staging") \
-        .update({"status": "approved"}) \
-        .eq("job_id", job_id) \
-        .neq("status", "modified") \
-        .execute()
+    # 승격된 staging 만 promoted_to_problems=TRUE 로 마킹 → 재호출해도 중복 INSERT 안 됨.
+    # status 도 'approved' 로(modified 는 YOLO 학습 마킹 겸용이라 보존).
+    if promoted_ids:
+        client.table("problem_staging") \
+            .update({"promoted_to_problems": True}) \
+            .in_("id", promoted_ids) \
+            .execute()
+        client.table("problem_staging") \
+            .update({"status": "approved"}) \
+            .in_("id", promoted_ids) \
+            .neq("status", "modified") \
+            .execute()
     return inserted
 
 
