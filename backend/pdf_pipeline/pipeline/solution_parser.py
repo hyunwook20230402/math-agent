@@ -253,6 +253,7 @@ def merge_cross_page_solutions(
     output_dir: str,
     gap_px: int = 10,
     pdf_path_hint: str | None = None,
+    page_bboxes: dict | None = None,
 ) -> dict:
     """페이지 걸침 해설 조각들을 세로 병합
 
@@ -264,6 +265,9 @@ def merge_cross_page_solutions(
       output_dir: 병합 이미지 저장 디렉토리
       gap_px: 조각 사이 여백 (px)
       pdf_path_hint: 경로 resolver 힌트 (legacy 절대경로 재매핑용)
+      page_bboxes: {페이지: {page_width, items:[{cropped_path, bbox:{x1,y1..}}]}}.
+        주어지면 조각을 2단 조판 읽기순서(페이지→컬럼(왼쪽단먼저)→y1) 로 정렬한다.
+        없으면 파일명 page_{NNN} 정렬로 폴백(하위호환).
 
     Returns:
       {번호: 병합된_이미지경로(절대)}
@@ -281,6 +285,29 @@ def merge_cross_page_solutions(
 
     merged: dict[int, str] = {}
 
+    # 좌표 인덱스: cropped_path(상대경로) → (페이지, x1, y1, page_width).
+    # page_bboxes 가 있으면 2단 조판 읽기순서 정렬에 쓴다. fragments 경로와 cropped_path 는
+    # 같은 상대경로 문자열이라 그대로 매칭된다.
+    path_coord: dict[str, tuple] = {}
+    if page_bboxes:
+        for pg_key, pb in (page_bboxes or {}).items():
+            try:
+                pg = int(pg_key)
+            except (ValueError, TypeError):
+                pg = 10 ** 9
+            pw = pb.get("page_width") or 0
+            for it in pb.get("items", []):
+                cp = it.get("cropped_path")
+                b = it.get("bbox") or {}
+                if cp:
+                    path_coord[cp] = (pg, b.get("x1", 0) or 0, b.get("y1", 0) or 0, pw)
+
+    def _col_index(x1, page_width, ncols: int = 2) -> int:
+        """x1 → 컬럼 인덱스(0=왼쪽단). 2단 조판 기준. page_width 없으면 0."""
+        if not page_width or page_width <= 0:
+            return 0
+        return min(int(x1 / (page_width / ncols)), ncols - 1)
+
     for num, paths in crops.items():
         if not paths:
             continue
@@ -289,7 +316,22 @@ def merge_cross_page_solutions(
             logger.warning(f"merge_cross_page_solutions: non-int key skip: {num}")
             continue
 
-        resolved_paths = [str(resolve_upload_path(p, pdf_path_hint)) for p in paths]
+        # 조각 정렬: 읽기순서대로 위→아래로 합쳐야 한다.
+        # - page_bboxes 좌표가 있으면 2단 조판 읽기순서 (페이지 → 컬럼(왼쪽단 먼저) → y1).
+        # - 없거나 좌표 결측이면 파일명 page_{NNN} 으로 폴백(맨 뒤로).
+        def _page_no(p) -> int:
+            m = re.search(r'page_(\d+)', str(p))
+            return int(m.group(1)) if m else 10**9
+
+        def _sort_key(p):
+            coord = path_coord.get(p)
+            if coord:
+                pg, x1, y1, pw = coord
+                return (pg, _col_index(x1, pw), y1)
+            return (_page_no(p), 10 ** 9, 0)
+
+        sorted_src = sorted(paths, key=_sort_key)
+        resolved_paths = [str(resolve_upload_path(p, pdf_path_hint)) for p in sorted_src]
 
         if len(resolved_paths) == 1:
             # 조각 1개 — 그대로

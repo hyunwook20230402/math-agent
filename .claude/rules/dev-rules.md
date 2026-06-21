@@ -163,6 +163,16 @@ Start-Process cmd -ArgumentList '/k','cd /d C:\Users\user\workspaces\math\backen
 - 끄려면 그 창을 닫는다. **`taskkill`·`Stop-Process` 등 강제 종료 금지**(사용자 명시 요청).
 - 기동 확인은 `netstat` 리스닝 + `Invoke-WebRequest` HTTP 200 으로.
 
+### ⚠️ 에이전트(Claude) 도구 호출 형식 — `antml:` 접두어 필수 (2026-06-21)
+
+**도구 호출 태그는 반드시 `antml:invoke`/`antml:parameter` 정식 형식으로 써야 한다.**
+접두어 없이 `<invoke ...>` 로 쓰면 harness 가 파싱 못 해 `malformed and could not be
+parsed` 에러가 나고 그 턴이 멈춘다("또 멈췄다" 의 진짜 원인). 서버·환경 문제가 아니라 순전히
+출력 형식 실수다(2026-06-21 다회 발생).
+
+재발 방지: 도구를 부를 때 한 호출씩, 접두어를 눈으로 확인하고 보낸다. 여러 도구를 빠르게
+연속으로 칠 때 접두어를 빠뜨리기 쉬우니 속도를 줄인다.
+
 ## 비용 절감 규칙
 
 - 파일 탐색/검색 → Explore subagent 위임

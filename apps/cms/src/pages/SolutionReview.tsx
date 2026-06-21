@@ -18,7 +18,9 @@ import {
 } from 'lucide-react';
 import BboxEditor, { type BboxItem } from '@/components/BboxEditor';
 
-const PIPELINE_URL = 'http://localhost:8001';
+// 백엔드 주소. 8001 좀비 우회 등으로 포트가 바뀔 수 있어 env(VITE_TUTOR_API_URL)를 따른다.
+const PIPELINE_URL =
+  (import.meta.env.VITE_TUTOR_API_URL as string | undefined) || 'http://localhost:8001';
 
 interface SolutionItem {
   number: number | null;
@@ -856,27 +858,11 @@ export default function SolutionReview() {
             <>
               <Button
                 variant="outline"
-                onClick={() => handleStartTagging('sample')}
-                title="샘플 재분석(앞 4개)"
+                onClick={() => setStage('reviewing')}
+                title="해설지 크롭 편집 화면으로 돌아가기(분석 결과는 유지됨)"
               >
-                샘플 재분석 (앞 4개)
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => handleStartTagging('continue')}
-                title="아직 안 된 번호만 이어서 AI 분석"
-              >
-                남은 문제 이어서 분석
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (!confirm('전체 재분석: 기존 난이도·단원·태그 전부 덮어쓰기됩니다. 계속?')) return;
-                  handleStartTagging('full');
-                }}
-                title="기존 AI 분석 결과 전체 덮어쓰기"
-              >
-                전체 재분석
+                <ArrowLeft className="h-4 w-4 mr-1" />
+                크롭 검수로
               </Button>
               <Button onClick={handleApply} disabled={applying}>
                 {applying ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Check className="h-4 w-4 mr-1" />}
@@ -986,9 +972,7 @@ export default function SolutionReview() {
               </p>
             )}
             <p className="text-xs text-muted-foreground">
-              VL 모델이 문제+해설 이미지를 분석하고 있습니다.
-              <br />
-              시간대에 따라 Gemini / OpenAI / Ollama 자동 선택됩니다.
+              GPT-4o 가 문제+해설 이미지를 분석하고 있습니다.
             </p>
           </div>
         </div>

@@ -1001,10 +1001,11 @@ async def _run_solution_upload_and_tag(
         loop = asyncio.get_event_loop()
         from concurrent.futures import ThreadPoolExecutor
 
-        # 1. 페이지 걸침 병합 (전체 번호 대상)
+        # 1. 페이지 걸침 병합 (전체 번호 대상). page_bboxes 좌표로 2단 조판 읽기순서 정렬.
         merged_dir = str(Path(pdf_path).parent / "solution_merged")
         merged_images = await loop.run_in_executor(
-            None, merge_cross_page_solutions, fragments, merged_dir, 10, pdf_path
+            None, merge_cross_page_solutions, fragments, merged_dir, 10, pdf_path,
+            job.get("page_bboxes")
         )
 
         # 1-1. 타겟 번호 결정 (mode + sample_count)
@@ -1213,10 +1214,11 @@ async def _run_retag(solution_job_id: str, numbers: list[int]):
     try:
         loop = asyncio.get_event_loop()
 
-        # 병합 이미지 생성
+        # 병합 이미지 생성. page_bboxes 좌표로 2단 조판 읽기순서 정렬.
         merged_dir = str(Path(pdf_path).parent / "solution_merged")
         merged_images = await loop.run_in_executor(
-            None, merge_cross_page_solutions, fragments, merged_dir, 10, pdf_path
+            None, merge_cross_page_solutions, fragments, merged_dir, 10, pdf_path,
+            job.get("page_bboxes")
         )
 
         # 문제 이미지 로컬 경로

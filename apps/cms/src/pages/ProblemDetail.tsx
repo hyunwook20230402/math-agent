@@ -9,11 +9,12 @@ import { scoreToLevel } from '@shared/lib/utils';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { toast } from '@shared/hooks/use-toast';
-import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap } from 'lucide-react';
+import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap, Crop } from 'lucide-react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
-const PIPELINE_URL = 'http://localhost:8001';
+const PIPELINE_URL =
+  (import.meta.env.VITE_TUTOR_API_URL as string | undefined) || 'http://localhost:8001';
 
 function tryRenderKatex(expr: string, display = false): string | null {
   try {
@@ -77,6 +78,7 @@ interface StagingProblem {
   unit: string;
   source_image_url: string | null;
   solution_image_url: string | null;
+  solution_job_id: string | null;
   match_confidence: number | null;
   validation_status: 'ok' | 'warning' | 'reject' | null;
   validation_score: number | null;
@@ -322,6 +324,24 @@ const ProblemDetail = () => {
             <ArrowLeft className="h-4 w-4 mr-1" />
             크롭 검수로
           </Button>
+          {selectedProblem?.solution_image_url && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const sj = selectedProblem.solution_job_id;
+                if (sj) {
+                  navigate(`/cms/solution/${jobId}?sj=${sj}`);
+                } else {
+                  toast({ title: '해설 크롭 작업을 찾을 수 없습니다', variant: 'destructive' });
+                }
+              }}
+              title="이 문제의 해설 크롭 화면으로 돌아가 영역을 다시 잡습니다"
+            >
+              <Crop className="h-4 w-4 mr-1" />
+              해설 다시 크롭
+            </Button>
+          )}
           <div>
             <h1 className="text-xl font-bold">문제 상세 입력</h1>
             <p className="text-xs text-muted-foreground">

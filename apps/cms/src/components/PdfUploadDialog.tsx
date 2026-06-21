@@ -8,7 +8,8 @@ import { toast } from '@shared/hooks/use-toast';
 import { Upload, FileText, Loader2, AlertTriangle } from 'lucide-react';
 import type { Textbook, Chapter } from '@shared/types/database';
 
-const PIPELINE_URL = 'http://localhost:8001';
+const PIPELINE_URL =
+  (import.meta.env.VITE_TUTOR_API_URL as string | undefined) || 'http://localhost:8001';
 
 interface PdfUploadDialogProps {
   open: boolean;
