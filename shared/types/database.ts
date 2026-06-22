@@ -307,6 +307,7 @@ export interface Database {
           title: string;
           description: string | null;
           distribution_date: string;
+          due_at: string | null;
           is_active: boolean;
           created_at: string;
           updated_at: string;
@@ -318,6 +319,7 @@ export interface Database {
           title: string;
           description?: string | null;
           distribution_date: string;
+          due_at?: string | null;
           is_active?: boolean;
           created_at?: string;
           updated_at?: string;
@@ -329,6 +331,7 @@ export interface Database {
           title?: string;
           description?: string | null;
           distribution_date?: string;
+          due_at?: string | null;
           is_active?: boolean;
           created_at?: string;
           updated_at?: string;

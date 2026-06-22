@@ -201,9 +201,9 @@ const DistributionManagement = () => {
             <div className="text-2xl font-bold">
               {distributions.filter(d => {
                 const now = new Date();
-                const startDate = new Date(d.start_date);
-                const endDate = new Date(d.end_date);
-                return now >= startDate && now <= endDate;
+                const startDate = new Date(d.distribution_date);
+                const endDate = d.due_at ? new Date(d.due_at) : null;
+                return now >= startDate && (!endDate || now <= endDate);
               }).length}
             </div>
           </CardContent>
@@ -217,7 +217,7 @@ const DistributionManagement = () => {
             <div className="text-2xl font-bold">
               {distributions.filter(d => {
                 const now = new Date();
-                const startDate = new Date(d.start_date);
+                const startDate = new Date(d.distribution_date);
                 return now < startDate;
               }).length}
             </div>
@@ -232,8 +232,8 @@ const DistributionManagement = () => {
             <div className="text-2xl font-bold">
               {distributions.filter(d => {
                 const now = new Date();
-                const endDate = new Date(d.end_date);
-                return now > endDate;
+                const endDate = d.due_at ? new Date(d.due_at) : null;
+                return endDate ? now > endDate : false;
               }).length}
             </div>
           </CardContent>

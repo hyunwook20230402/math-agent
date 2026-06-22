@@ -615,6 +615,37 @@ export const distributionApi = {
     }
   },
 
+  // 특정 학생이 특정 달(year, month: 1~12)에 받은 배포 목록 (달력 셀 메모용 경량 조회)
+  getDistributionsByStudentAndMonth: async (studentId, year, month) => {
+    // 1) 이 학생에게 연결된 distribution_id 수집
+    const { data: distributionStudents, error: dsError } = await supabase
+      .from('distribution_students')
+      .select('distribution_id')
+      .eq('student_id', studentId);
+    if (dsError) throw dsError;
+    if (!distributionStudents || distributionStudents.length === 0) return [];
+
+    const distributionIds = distributionStudents.map(ds => ds.distribution_id);
+
+    // 2) 그 중 distribution_date 가 해당 달 범위인 것만 select (경량 컬럼)
+    const start = new Date(year, month - 1, 1);
+    const end = new Date(year, month, 1); // 다음 달 1일 (미포함)
+    const { data, error } = await supabase
+      .from('distributions')
+      .select('id, title, distribution_date')
+      .in('id', distributionIds)
+      .gte('distribution_date', start.toISOString())
+      .lt('distribution_date', end.toISOString())
+      .order('distribution_date', { ascending: true });
+    if (error) throw error;
+
+    return (data || []).map(d => ({
+      distribution_id: d.id,
+      title: d.title,
+      distribution_date: d.distribution_date,
+    }));
+  },
+
   // 배포 생성
   createDistribution: async (data) => {
     const { data: result, error } = await supabase
@@ -1144,6 +1175,17 @@ export interface ClassSummaryRow {
   distributions_count: number;
 }
 
+// 반 전체 진행률(배포 합산) + 정답률. RPC get_teacher_class_progress 반환.
+export interface ProgressRow {
+  student_id: string;
+  student_name: string;
+  total_assigned: number;   // 받은 총 문항
+  total_attempted: number;  // 푼 총 문항
+  progress_pct: number;     // 0~100
+  correct: number;
+  accuracy: number;
+}
+
 export const analyticsApi = {
   // 학생의 배포별 성취도 (전체 합산은 프론트에서 계산)
   getStudentAchievement: async (studentId: string): Promise<AchievementRow[]> => {
@@ -1171,5 +1213,23 @@ export const analyticsApi = {
     });
     if (error) throw error;
     return data || [];
+  },
+
+  // 선생님 반 전체 학생 진행률(전체 배포 합산) + 정답률.
+  // Postgres numeric 은 문자열로 직렬화될 수 있어 숫자 필드를 명시적으로 Number 변환.
+  getClassProgress: async (teacherId: string): Promise<ProgressRow[]> => {
+    const { data, error } = await supabase.rpc('get_teacher_class_progress', {
+      p_teacher_id: teacherId,
+    });
+    if (error) throw error;
+    return (data || []).map((r) => ({
+      student_id: r.student_id,
+      student_name: r.student_name,
+      total_assigned: Number(r.total_assigned) || 0,
+      total_attempted: Number(r.total_attempted) || 0,
+      progress_pct: Number(r.progress_pct) || 0,
+      correct: Number(r.correct) || 0,
+      accuracy: Number(r.accuracy) || 0,
+    }));
   },
 };
