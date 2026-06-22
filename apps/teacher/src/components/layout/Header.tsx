@@ -1,8 +1,11 @@
 import { useAuth } from '@shared/hooks/useAuth';
 import { Button } from '@shared/ui/button';
-import { LogOut, User, Library } from 'lucide-react';
+import { LogOut, User, Library, Send } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@shared/ui/avatar';
 import { useNavigate, useLocation } from 'react-router-dom';
+
+// CMS 는 별개 앱(기본 8081). env 로 URL 분리, 없으면 개발 기본값.
+const CMS_URL = import.meta.env.VITE_CMS_URL || 'http://localhost:8081/cms';
 
 const Header = () => {
   const { profile, signOut } = useAuth();
@@ -24,17 +27,25 @@ const Header = () => {
         <div className="flex items-center space-x-4">
           {profile.role === 'teacher' && (
             <div className="flex items-center space-x-2">
-              <Button 
-                variant={location.pathname.startsWith('/teacher') ? "default" : "ghost"} 
+              <Button
+                variant={location.pathname.startsWith('/teacher') && !location.pathname.startsWith('/teacher/distribute') ? "default" : "ghost"}
                 size="sm"
                 onClick={() => navigate('/teacher')}
               >
                 선생님 대시보드
               </Button>
-              <Button 
-                variant={location.pathname.startsWith('/cms') ? "default" : "ghost"} 
+              <Button
+                variant={location.pathname.startsWith('/teacher/distribute') ? "default" : "ghost"}
                 size="sm"
-                onClick={() => navigate('/cms')}
+                onClick={() => navigate('/teacher/distribute')}
+              >
+                <Send className="h-4 w-4 mr-2" />
+                배포하기
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => { window.location.href = CMS_URL; }}
               >
                 <Library className="h-4 w-4 mr-2" />
                 CMS
