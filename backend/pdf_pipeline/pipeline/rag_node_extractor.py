@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 MAX_NODES = int(os.environ.get("RAG_MAX_NODES", "15"))
 # 1회 통합 출력 토큰 상한 (15노드×필드+uses/whys ≈ 1500tok 여유). 잘리면 _call_openai 가 loud fail.
 RAG_MAX_OUTPUT_TOKENS = int(os.environ.get("VL_OPENAI_MAX_TOKENS", "4000"))
+# 노드 추출은 도형 언어화·논리 분해라 무거운 작업 → gpt-5.2 로 고정(메타 Call A 의 gpt-4o 와 분리).
+# call_vl 에 model 을 명시 주입하므로 OPENAI_MODEL env 와 무관하게 항상 이 모델을 쓴다.
+# NODE_MODEL env 로 덮어쓸 수 있다.
+NODE_MODEL = os.environ.get("NODE_MODEL", "gpt-5.2")
 
 _VALID_ROLES = (
   "condition_analysis",
@@ -399,8 +403,10 @@ def extract_nodes(problem: dict) -> NodeExtractionResult:
                 f"difficulty={problem.get('difficulty_score')} prompt_len={len(prompt)}")
 
     # 1회 통합 호출 — 전체 노드 배열을 한 번에. 잘리면 _call_openai 가 loud fail.
+    # model=NODE_MODEL(gpt-5.2) 명시 — 메타 Call A(gpt-4o)와 분리, OPENAI_MODEL env 무관.
     payload = call_vl(images, prompt, _NodeExtractionPayload,
-                      provider="openai", max_tokens=RAG_MAX_OUTPUT_TOKENS)
+                      provider="openai", max_tokens=RAG_MAX_OUTPUT_TOKENS,
+                      model=NODE_MODEL)
 
     nodes = sorted(payload.nodes, key=lambda n: n.node_index)
     if len(nodes) > MAX_NODES:
