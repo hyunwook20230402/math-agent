@@ -73,12 +73,13 @@
 
 | 호출 | Provider | 비고 |
 |------|----------|------|
-| Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o). 해설 태깅은 이 한 번뿐(Call B 제거, 4차) |
-| 검증 Layer 2 | OpenAI | 난이도 무관 항상 OpenAI |
-| 막힌 지점 도우미 (튜터) | OpenAI | 막힌 지점 찾기 / 힌트 만들기 / 노드추출(1회 통합) |
+| Call A (메타) | OpenAI | `META_MODEL` (기본 gpt-4o). 해설 태깅은 이 한 번뿐(Call B 제거, 4차) |
+| 노드 추출 (풀이 그래프) | OpenAI | **난이도 분기**: Lv1~2→gpt-4o(`NODE_MODEL_EASY`) / Lv3~4·불명→gpt-5.2(`NODE_MODEL_HARD`). 1회 통합 structured output |
+| 막힌 지점 도우미 (튜터) | OpenAI | 막힌 지점 찾기 / 힌트 만들기 |
 
-- `call_vl(...)` 은 항상 OpenAI 호출. `provider` 인자는 하위호환용으로 받기만 하고 무시.
-- 옛 `provider_selector.py`(시간대 분기), `_route_call_b_provider`(난이도 분기), gemma4 반복 폭주 방어 코드는 모두 제거됨.
+- `call_vl(...)` 은 항상 OpenAI 호출. `provider` 인자는 하위호환용으로 받기만 하고 무시. 노드 추출은 `model=` 으로 분기 결과 모델을 명시 주입(`OPENAI_MODEL` env 무관).
+- 옛 `provider_selector.py`(시간대 분기), `_route_call_b_provider`(Call B 난이도 provider 분기), gemma4 반복 폭주 방어 코드는 모두 제거됨.
+- 옛 2-layer 태깅 검증(`tag_validator.py`)은 2026-06-22 폐기 — §4 참조.
 
 ### 2.2 임베딩은 그대로 (bge-m3 / Ollama)
 
@@ -107,7 +108,7 @@ VL 과 달리 임베딩은 bge-m3(Ollama, 1024차원) 유지.
 | `embedder.py` | 텍스트 → 벡터 (bge-m3 1024d, Ollama 고정) |
 | `solution_tagger.py` | Call A(메타) VL 호출 → TagResultMeta → tag_normalizer/unit_matcher 후처리 → DB 저장 |
 | `difficulty_resolver.py` | correct_rate → 난이도 구간매핑 (있으면 GPT 추정보다 우선) |
-| `rag_node_extractor.py` | 풀이 그래프 노드 1회 통합 추출(uses/whys) → solution_nodes (RAG 코퍼스) |
+| `rag_node_extractor.py` | 풀이 그래프 노드 1회 통합 추출(uses/whys, 난이도분기 Lv1~2 gpt-4o/Lv3~4 gpt-5.2) → solution_nodes (RAG 코퍼스) |
 | `tag_normalizer.py` | 태그 문자열 → concepts/skills canonical 매칭 (cosine ≥ 0.65) |
 | `unit_matcher.py` | 태그 문자열 → units leaf 경로 매칭 (cosine, 캐시 pkl) |
 | `solution_matcher.py` | 문제 ↔ 해설 번호 매칭 + match_confidence |
@@ -121,16 +122,19 @@ VL 과 달리 임베딩은 bge-m3(Ollama, 1024차원) 유지.
 
 ```python
 class TagResultMeta(BaseModel):
-    difficulty_score: int                 # 1~10 정수 (정답률 우선, 없으면 구조 신호)
+    difficulty_score: int                 # 1~4 정수(Lv1~4). 해설 Lv 라벨 우선 → 정답률 구간매핑 → 추정
     correct_rate: float | None            # 해설 이미지에 "정답률 N%" 명시 시 0~100, 없으면 null(추측 금지)
     concept_tags: list[str]               # 1~3개 (빈 리스트 금지), 한국어 canonical
     skill_tags: list[str]                 # 1~3개 (빈 리스트 금지), 한국어 canonical
     answer_type: str | None               # "multiple_choice" | "short_answer"
 ```
 
-**난이도 (difficulty_score)** — 정답률 우선, 없으면 구조 신호:
-- 정답률 있으면 `difficulty_resolver` 구간매핑(80%↑=2 / 60~80=4 / 40~60=6 / 20~40=8 / 20%↓=10).
-- 정답률 없으면 구조 신호(경우분리 개수·중첩 깊이·개념 복합도)로 1~10. 하한 규칙: 경우분리 3+ → 최소 8, 신호 2+ → 최소 9. 문제 번호는 참고만(시대 무관).
+**난이도 (difficulty_score)** — 1~4(Lv1~4) 4단계 체계(2026-06-21 전환). 근거 우선순위:
+1. 해설에 인쇄된 **Lv 라벨**(Lv1~Lv4) — 가장 신뢰도 높은 실측(`Lv1→1 … Lv4→4`).
+2. **정답률(%)** — Lv 라벨 없고 정답률만 있으면 `difficulty_resolver` 구간매핑(80%↑→1 / 50~80→2 / 30~50→3 / 30%↓→4).
+3. 둘 다 없으면 **구조 신호**(경우분리 개수·중첩 깊이·개념 복합도)로 1~4 추정. 문제 번호는 참고만(시대 무관).
+
+> 상세 표(Lv별 라벨·구조신호)는 `.claude/rules/problem-registration.md`. 옛 1~10 데이터는 미변환이나 파생 라벨에서 5~10 을 Lv4 로 흡수.
 
 후처리:
 - `tag_normalizer` 가 concept/skill 을 `concept_taxonomy.json` canonical 로 정규화 (cosine ≥ 0.65)

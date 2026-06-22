@@ -39,7 +39,7 @@ import type { Database } from '@shared/types/database';
 ## 규칙·문서 (상세는 각 파일)
 
 - `.claude/rules/`: dev-rules(규칙·서버·격리) · project-status(현황) · db-conventions(ID·RLS) · problem-registration(필드·난이도) · code-style
-- `backend/pdf_pipeline/`: ARCHITECTURE.md(데이터흐름·VL정책) · docs/TAG_VALIDATOR.md(검증)
+- `backend/pdf_pipeline/`: ARCHITECTURE.md(데이터흐름·VL정책)
 
 ## 슬래시 커맨드
 
