@@ -156,7 +156,9 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
         promoted_ids.append(p["id"])
         entry = {
             "teacher_id": teacher_id,
-            "title": p.get("title") or _build_title(p),
+            # 제목은 항상 source_pdf 기반(_build_title)으로. staging.title 에는 단원경로가
+            # 박혀 있어 화면이 길어지므로 무시한다. 예: "평가원 6월 26년 1번".
+            "title": _build_title(p),
             "problem_number": p.get("problem_number", 1),
             "difficulty_score": p.get("difficulty_score", 2),
             "correct_rate": p.get("correct_rate"),

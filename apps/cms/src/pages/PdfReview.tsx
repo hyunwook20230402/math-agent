@@ -31,6 +31,8 @@ interface StagingProblem {
   status: 'pending' | 'approved' | 'rejected' | 'modified';
   page_number: number | null;
   bbox: { x1: number; y1: number; x2: number; y2: number; page_width?: number; page_height?: number } | null;
+  textbook_id: string | null;
+  chapter_id: string | null;
 }
 
 function toBboxItems(problems: StagingProblem[], startNumber: number): BboxItem[] {
@@ -427,7 +429,15 @@ const PdfReview = () => {
       {/* 상단 헤더 */}
       <div className="flex items-center justify-between px-4 py-3 border-b bg-white shrink-0">
         <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={() => navigate('/cms/textbooks')}>
+          <Button variant="outline" size="sm" onClick={() => {
+            // 방금 작업한 교재·폴더를 쿼리로 넘겨 교재화면이 자동 선택하게.
+            const first = problems[0];
+            const params = new URLSearchParams();
+            if (first?.textbook_id) params.set('textbook_id', first.textbook_id);
+            if (first?.chapter_id) params.set('chapter_id', first.chapter_id);
+            const qs = params.toString();
+            navigate(qs ? `/cms/textbooks?${qs}` : '/cms/textbooks');
+          }}>
             <ArrowLeft className="h-4 w-4 mr-1" />
             돌아가기
           </Button>

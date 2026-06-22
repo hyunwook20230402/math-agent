@@ -4,6 +4,7 @@
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { supabase } from '@shared/supabase/client';
 import { Button } from '@shared/ui/button';
 import { scoreToLevel } from '@shared/lib/utils';
 import { Input } from '@shared/ui/input';
@@ -353,7 +354,25 @@ const ProblemDetail = () => {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => navigate('/cms/textbooks')}
+          onClick={async () => {
+            // 승격된 문제의 현재 폴더(textbook/chapter)를 조회해 교재화면이 그 폴더를
+            // 자동 선택하게 한다. (staging.chapter_id 는 옛 폴더일 수 있어 problems 우선)
+            const pid = (selectedProblem?.promoted_problem_id)
+              || problems.find(p => p.promoted_problem_id)?.promoted_problem_id;
+            if (pid) {
+              const { data } = await supabase
+                .from('problems')
+                .select('textbook_id, chapter_id')
+                .eq('id', pid)
+                .single();
+              const params = new URLSearchParams();
+              if (data?.textbook_id) params.set('textbook_id', data.textbook_id);
+              if (data?.chapter_id) params.set('chapter_id', data.chapter_id);
+              navigate(`/cms/textbooks?${params.toString()}`);
+              return;
+            }
+            navigate('/cms/textbooks');
+          }}
         >
           교재 목록으로
         </Button>

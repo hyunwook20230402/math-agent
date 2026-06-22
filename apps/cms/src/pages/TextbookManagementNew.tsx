@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@shared/hooks/useAuth';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
@@ -63,6 +63,7 @@ const difficultyColor = getDifficultyColor;
 
 const TextbookManagementNew = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { profile } = useAuth();
   const {
     selectedTextbook: ctxTextbook,
@@ -181,6 +182,31 @@ const TextbookManagementNew = () => {
     }
     setSelectedProblemIds(new Set());
   }, [selectedTextbook, selectedChapter, selectedSubchapter]);
+
+  // URL 쿼리(?textbook_id=&chapter_id=)로 들어오면 그 교재·폴더를 자동 선택.
+  useEffect(() => {
+    const tbId = searchParams.get('textbook_id');
+    const chId = searchParams.get('chapter_id');
+    if (!tbId || textbooks.length === 0) return;
+    if (selectedTextbook?.id !== tbId) {
+      const tb = textbooks.find(t => t.id === tbId);
+      if (tb) {
+        setSelectedTextbook(tb);
+        ctxSetTextbook(tb);
+        setExpandedTextbooks(prev => new Set([...prev, tb.id]));
+        if (!chapters[tbId]) fetchChapters(tbId);
+      }
+      return;
+    }
+    if (chId && chapters[tbId] && selectedChapter?.id !== chId) {
+      const ch = chapters[tbId].find(c => c.id === chId);
+      if (ch) {
+        setSelectedChapter(ch);
+        ctxSetChapter(ch);
+        setExpandedChapters(prev => new Set([...prev, ch.id]));
+      }
+    }
+  }, [searchParams, textbooks, chapters, selectedTextbook, selectedChapter]);
 
   const fetchTextbooks = async () => {
     const { data, error } = await supabase
