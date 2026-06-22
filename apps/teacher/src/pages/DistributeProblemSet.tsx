@@ -17,6 +17,12 @@ interface Textbook {
   grade?: string;
 }
 
+interface Chapter {
+  id: string;
+  name: string;
+  sort_order: number;
+}
+
 interface ProblemRow {
   id: string;
   title: string;
@@ -47,6 +53,8 @@ const DistributeProblemSet = () => {
 
   const [textbooks, setTextbooks] = useState<Textbook[]>([]);
   const [selectedTextbookId, setSelectedTextbookId] = useState<string>('');
+  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [problems, setProblems] = useState<ProblemRow[]>([]);
   const [problemsLoading, setProblemsLoading] = useState(false);
   const [selectedProblemIds, setSelectedProblemIds] = useState<string[]>([]);
@@ -87,9 +95,34 @@ const DistributeProblemSet = () => {
     }
   }, [studentIdFromUrl, students]);
 
-  // 교재 선택 시 문제 목록 로딩
+  // 교재 선택 시 회차(chapter) 목록 로딩
   useEffect(() => {
-    if (!selectedTextbookId || !profile?.id) {
+    setSelectedChapterId('');
+    setProblems([]);
+    setSelectedProblemIds([]);
+    if (!selectedTextbookId) {
+      setChapters([]);
+      return;
+    }
+    const loadChapters = async () => {
+      try {
+        const data = await textbookApi.getChaptersByTextbook(selectedTextbookId);
+        setChapters(data as Chapter[]);
+        // 회차가 하나뿐이면 자동 선택해 한 단계 줄임
+        if (data.length === 1) {
+          setSelectedChapterId(data[0].id);
+        }
+      } catch (e) {
+        console.error('회차 목록 조회 오류:', e);
+        toast({ title: '오류', description: '회차 목록을 불러오지 못했습니다.', variant: 'destructive' });
+      }
+    };
+    loadChapters();
+  }, [selectedTextbookId]);
+
+  // 회차 선택 시 그 회차 문제 목록 로딩
+  useEffect(() => {
+    if (!selectedChapterId || !profile?.id) {
       setProblems([]);
       setSelectedProblemIds([]);
       return;
@@ -97,13 +130,16 @@ const DistributeProblemSet = () => {
     const loadProblems = async () => {
       try {
         setProblemsLoading(true);
-        const data = await problemApi.getProblems(profile.id, { textbookId: selectedTextbookId });
+        const data = await problemApi.getProblems(profile.id, {
+          textbookId: selectedTextbookId,
+          chapterId: selectedChapterId,
+        });
         setProblems(data as ProblemRow[]);
         setSelectedProblemIds([]);
-        // 배포 제목 기본값: "{교재명}" (비어 있을 때만)
-        const tb = textbooks.find(t => t.id === selectedTextbookId);
-        if (tb && !formData.title.trim()) {
-          setFormData(prev => ({ ...prev, title: `${tb.name} 배포` }));
+        // 배포 제목 기본값: "{회차명}" (비어 있을 때만)
+        const ch = chapters.find(c => c.id === selectedChapterId);
+        if (ch && !formData.title.trim()) {
+          setFormData(prev => ({ ...prev, title: `${ch.name}` }));
         }
       } catch (e) {
         console.error('문제 목록 조회 오류:', e);
@@ -114,7 +150,7 @@ const DistributeProblemSet = () => {
     };
     loadProblems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTextbookId, profile]);
+  }, [selectedChapterId, profile]);
 
   const fetchTextbooks = async () => {
     const data = await textbookApi.getTextbooks();
@@ -177,13 +213,13 @@ const DistributeProblemSet = () => {
 
     setLoading(true);
     try {
-      const textbook = textbooks.find(t => t.id === selectedTextbookId);
-      const setName = formData.title.trim() || `${textbook?.name ?? '문제'} - ${formData.distributionDate}`;
+      const chapter = chapters.find(c => c.id === selectedChapterId);
+      const setName = formData.title.trim() || `${chapter?.name ?? '문제'} - ${formData.distributionDate}`;
 
       // 1. 배포용 문제세트 자동 생성 (사용자에게 노출 안 함, folder_id=null)
       const problemSet = await problemSetApi.createProblemSet({
         name: setName,
-        description: formData.description || `${textbook?.name ?? ''} 문제`,
+        description: formData.description || `${chapter?.name ?? ''} 문제`,
         folder_id: null,
         set_type: 'quiz',
       });
@@ -299,11 +335,34 @@ const DistributeProblemSet = () => {
                 </select>
               </div>
 
+              {/* 회차 선택 (교재 안의 chapter — 예: 고3 평가원 6월 26년) */}
+              {selectedTextbookId && chapters.length > 0 && (
+                <div className="mb-4">
+                  <Label htmlFor="chapter" className="mb-1.5 block">회차</Label>
+                  <select
+                    id="chapter"
+                    value={selectedChapterId}
+                    onChange={(e) => setSelectedChapterId(e.target.value)}
+                    className="w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  >
+                    <option value="">회차를 선택하세요</option>
+                    {chapters.map((ch) => (
+                      <option key={ch.id} value={ch.id}>{ch.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* 문제 목록 */}
               {!selectedTextbookId ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <BookOpen className="h-12 w-12 mx-auto mb-3" />
                   <p>교재를 먼저 선택하세요</p>
+                </div>
+              ) : !selectedChapterId ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <BookOpen className="h-12 w-12 mx-auto mb-3" />
+                  <p>회차를 선택하세요</p>
                 </div>
               ) : problemsLoading ? (
                 <div className="flex justify-center py-8">
@@ -311,7 +370,7 @@ const DistributeProblemSet = () => {
                 </div>
               ) : problems.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
-                  <p>이 교재에 등록된 문제가 없습니다</p>
+                  <p>이 회차에 등록된 문제가 없습니다</p>
                 </div>
               ) : (
                 <>
