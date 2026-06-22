@@ -62,8 +62,6 @@ pdf_pipeline/
 ├── main.py                    # FastAPI 서버 (포트 8001)
 ├── config.py                  # 환경변수
 ├── ARCHITECTURE.md            # AI 튜터 데이터 파이프라인 전체 구조 ← 읽어볼 것
-├── docs/
-│   └── TAG_VALIDATOR.md       # 2-layer 검증 에이전트 상세 (Layer 1 rule / Layer 2 OpenAI)
 ├── requirements.txt
 ├── data/
 │   └── concept_taxonomy.json  # concepts 375 / skills 359 / units 15 / bugs 14
@@ -75,12 +73,11 @@ pdf_pipeline/
 │   ├── yolo_solution_detector.py # 해설 박스 YOLO 추론
 │   ├── solution_parser.py       # 해설 크롭 + 정답·정답률 파싱 + 페이지 걸침 병합
 │   ├── vl_providers.py          # VL 호출 (OpenAI 단일) — call_vl(image, prompt, schema)
-│   ├── solution_tagger.py       # Call A(메타) + 정답률 난이도(difficulty_resolver) + _apply_suggested_fixes
+│   ├── solution_tagger.py       # Call A(메타, gpt-4o) + 정답률 난이도(difficulty_resolver)
 │   ├── difficulty_resolver.py   # 정답률 → 난이도 구간매핑
-│   ├── rag_node_extractor.py    # 풀이 그래프 노드 1회 통합 추출(uses/whys) — 막힌 지점 도우미 코퍼스
+│   ├── rag_node_extractor.py    # 풀이 그래프 노드 1회 통합 추출(uses/whys, gpt-5.2) — 막힌 지점 도우미 코퍼스
 │   ├── tag_normalizer.py        # 태그 → canonical 매칭 (bge-m3 cosine ≥ 0.65)
 │   ├── unit_matcher.py          # 태그 → units leaf 경로 매핑 (bge-m3)
-│   ├── tag_validator.py         # 2-layer 태깅 검증 에이전트 → docs/TAG_VALIDATOR.md
 │   ├── embedder.py              # 임베딩 (bge-m3, Ollama 고정)
 │   └── solution_matcher.py      # 문제 ↔ 해설 번호 매칭
 ├── routers/
@@ -97,10 +94,9 @@ pdf_pipeline/
 ```
 문제 PDF → YOLO11 크롭 → problem_staging → CMS 검수 → problems 테이블
 
-해설 PDF → 페이지 이미지 → 걸침 병합 → 메타 태깅 (Call A, OpenAI 단일)
+해설 PDF → 페이지 이미지 → 걸침 병합 → 메타 태깅 (Call A, gpt-4o)
            ├─ Call A (메타: 정답률/concept/skill/난이도/단원) — 정답률 있으면 난이도 구간매핑
-           ├─ tag_normalizer (canonical) + unit_matcher (단원)
-           └─ tag_validator (2-layer; Layer 2 OpenAI)
+           └─ tag_normalizer (canonical) + unit_matcher (단원)
          → problem_staging → problem_tags
          → CMS 검수 (재태깅 / 전체 재태깅 버튼) → problems 테이블
 
@@ -112,7 +108,8 @@ pdf_pipeline/
 
 상세는:
 - 데이터 흐름 / DB 스키마: `ARCHITECTURE.md`
-- 검증 에이전트 동작: `docs/TAG_VALIDATOR.md`
+
+> ℹ️ 옛 2-layer 태깅 검증(`tag_validator.py`)은 2026-06-22 폐기. 메타는 Call A(gpt-4o) 결과를 그대로 쓴다.
 
 ## 막힌 지점 도우미 (AI 튜터, 통합)
 

@@ -19,9 +19,10 @@
 - 단원 계통도 (공통수학1/2, 대수, 미적분I, 확률과 통계 — concepts 375 / skills 359 / units 15)
 - unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty_score AI 추출 (정답률 있으면 구간매핑 우선)
 - **난이도 (difficulty_score) 정답률 우선 / 구조 신호 보조** (2026-06-19) — 해설 PDF 정답률(`problems.correct_rate`) 있으면 `difficulty_resolver.py` 구간매핑. 없으면 구조 신호(경우분리 개수·중첩 깊이·개념 복합도)로 1~10 스코어링. 둘 다 "수능 21/29/30번류" 번호 고정 안 함 — 시대 무관.
-- **VL = OpenAI 단일** (2026-06-19) — gemma4(ollama)/gemini 폐기. Call A(메타)·검증 Layer 2·튜터 모두 OpenAI. 옛 시간대 분기(`provider_selector`)·난이도 분기(`_route_call_b_provider`)·gemma4 폭주 방어 코드 제거. 임베딩만 bge-m3(ollama) 유지.
+- **VL = OpenAI** (2026-06-19) — gemma4(ollama)/gemini 폐기. 메타 Call A 와 튜터는 OpenAI. 옛 시간대 분기(`provider_selector`)·난이도 분기(`_route_call_b_provider`)·gemma4 폭주 방어 코드 제거. 임베딩만 bge-m3(ollama) 유지.
+- **모델 분리 (2026-06-22)** — 메타 Call A 는 `META_MODEL`(기본 **gpt-4o**), 풀이 노드 추출은 `NODE_MODEL`(기본 **gpt-5.2**)로 분리. `rag_node_extractor.py` 가 `call_vl(model=NODE_MODEL)` 로 명시 주입하므로 `OPENAI_MODEL` env 와 무관하게 노드는 항상 gpt-5.2.
 - **해설 태깅 = Call A(메타)만** (2026-06-20, 4차) — 옛 단계별풀이(Call B 2-Pass)와 4필드(solution_summary/pitfall/solution_steps/common_mistakes)는 추출·저장·검증·DB컬럼까지 전부 제거. `solution_tagger.py` 는 Call A 한 번으로 메타(unit/difficulty/concept_tags/skill_tags/correct_rate)만 뽑는다. 풀이 그래프는 별도 추출기 `rag_node_extractor.py`(노드 1회 통합)가 담당.
-- 2-layer 태깅 검증 (`tag_validator.py` — Layer 1 rule(concept_tags/skill_tags/difficulty_score/unit_score) + Layer 2 LLM cross-check). Layer 2 OpenAI. (4차에서 solution_steps 검증 규칙 제거 → 3-layer→2-layer 축소.) 상세: `backend/pdf_pipeline/docs/TAG_VALIDATOR.md`
+- **태깅 검증 폐기 (2026-06-22)** — 옛 2-layer 검증(`tag_validator.py` + `_apply_suggested_fixes`)은 제거. 파일·호출부·CMS 검증 배너 삭제. `problem_staging` 의 `validation_status/score/issues` 컬럼은 DB 보존이나 항상 NULL. 메타는 Call A 결과를 그대로 저장. ("검수완료 - 전체 AI" → 메타 gpt-4o + 백그라운드 노드 추출 gpt-5.2 만 수행.)
 - YOLO11n 기본 가중치 (`promote_model` 의존 제거 — 커밋 `56ecdd0`). 재학습은 11m + Optuna (`dev-rules.md` 참조)
 
 ### 막힌 지점 도우미 — 풀이 그래프 위치추적 RAG (`backend/pdf_pipeline`) ✅ 구현
@@ -55,12 +56,13 @@
 
 | 호출 | Provider | 모델 |
 |------|----------|------|
-| Call A (메타) | OpenAI | `OPENAI_MODEL` (기본 gpt-4o). 해설 태깅은 Call A 한 번뿐(Call B 제거, 4차) |
-| 검증 Layer 2 | OpenAI | 난이도 무관 항상 OpenAI |
-| 막힌 지점 도우미 (튜터) | OpenAI | 막힌 지점 찾기 / 힌트 만들기 / 노드추출(1회 통합) |
+| Call A (메타) | OpenAI | `META_MODEL` (기본 gpt-4o). 해설 태깅은 Call A 한 번뿐(Call B 제거, 4차) |
+| 노드 추출 (풀이 그래프) | OpenAI | `NODE_MODEL` (기본 gpt-5.2). `call_vl(model=NODE_MODEL)` 명시 주입 — OPENAI_MODEL env 무관 |
+| 막힌 지점 도우미 (튜터) | OpenAI | 막힌 지점 찾기 / 힌트 만들기 |
 | Embed | Ollama | bge-m3 (1024d 고정) |
 
-- VL 은 OpenAI 단일(2026-06-19 gemma4 폐기). 시간대·난이도 분기 모두 제거됨.
+- VL 은 OpenAI(2026-06-19 gemma4 폐기). 시간대·난이도 분기 모두 제거됨.
+- 모델 분리(2026-06-22): 메타=gpt-4o(`META_MODEL`), 노드 추출=gpt-5.2(`NODE_MODEL`). 옛 검증 Layer 2 는 폐기.
 - 임베딩만 bge-m3(ollama) 유지 — `EMBED_PROVIDER=openai` 로만 강제 전환 가능(차원 1024→1536 주의).
 
 ### UPLOAD_DIR

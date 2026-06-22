@@ -46,10 +46,12 @@ Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 - 실행 시 반드시 `cd backend/pdf_pipeline/yolo_training` — yaml 내 `../uploads/...` 가 CWD 기준으로 해석됨
 - 학습 후 `models/problem_detector.pt` / `solution_detector.pt` **자동 덮어쓰기 금지** — metric 확인 후 수동 `cp`
 
-## VL 모델 정책 (2026-06-19 갱신 — gemma4 폐기, OpenAI 단일화)
+## VL 모델 정책 (2026-06-22 갱신 — 모델 분리, 검증 폐기 / 2026-06-19 gemma4 폐기·OpenAI화)
 
-- **VL 은 OpenAI 단일.** gemma4(ollama)·gemini 는 폐기. 모델은 `OPENAI_MODEL` (기본 gpt-4o). Call A(메타)·검증 Layer 2·튜터(막힌 지점 찾기/힌트 만들기/노드추출) 모두 OpenAI.
+- **VL 은 OpenAI.** gemma4(ollama)·gemini 는 폐기. Call A(메타)·튜터(막힌 지점 찾기/힌트 만들기/노드추출) 모두 OpenAI.
   - 옛 시간대 분기(`provider_selector`)·난이도 분기(`_route_call_b_provider`, `CALL_B_HARD_THRESHOLD`)·gemma4 반복 폭주 방어 코드는 모두 제거됨.
+- **모델 분리 (2026-06-22).** 메타 Call A 는 `META_MODEL`(기본 **gpt-4o**, `solution_tagger.py`), 풀이 노드 추출은 `NODE_MODEL`(기본 **gpt-5.2**, `rag_node_extractor.py`). 노드 추출은 `call_vl(model=NODE_MODEL)` 로 모델을 명시 주입하므로 `OPENAI_MODEL` env 가 무엇이든/없든 항상 gpt-5.2. env(`META_MODEL`/`NODE_MODEL`)로 각각 덮어쓸 수 있다.
+- **태깅 검증 폐기 (2026-06-22).** 옛 2-layer 검증(`tag_validator.py` + `solution_tagger._apply_suggested_fixes`)은 통째 제거. 파일 삭제 + 호출부 제거(`solution_tagger`/`solution_matcher`) + CMS 검증 배너 제거(`ProblemDetail.tsx`). `problem_staging` 의 `validation_status/score/issues` 컬럼은 **DB 보존이나 항상 NULL**(되돌리기 쉽게 DROP 안 함). 메타는 Call A 결과를 그대로 저장. "검수완료 - 전체 AI" 한 번에 메타(gpt-4o) + 백그라운드 노드 추출(gpt-5.2)이 같이 돈다(노드 자동추출은 이미 `approve_all` 에 묶여 있음).
 - **해설 태깅 = Call A(메타) 한 번** (2026-06-20, 4차). 옛 단계별풀이 Call B(2-Pass)와 4필드(solution_summary/pitfall/solution_steps/common_mistakes)는 추출·저장·검증·DB컬럼까지 전부 제거. 풀이 그래프는 별도 추출기 `rag_node_extractor.py` 가 담당.
 - **임베딩은 그대로** — bge-m3(ollama, 1024차원) 유지. OpenAI 임베딩(1536)으로 바꾸면 전체 재임베딩 필요라 안 바꿈. `EMBED_PROVIDER=openai` 로만 강제 전환 가능.
 - 그 외 유료 API (Gemini / Anthropic / 다른 모델) 도입은 금지.

@@ -44,18 +44,12 @@
 │    - tag_normalizer 로 concept/skill canonical 매칭               │
 │    - unit_matcher 로 bge-m3 cosine → units leaf 매핑             │
 │    - difficulty_resolver: correct_rate 있으면 난이도 구간매핑     │
-│    │   (옛 Call B 단계별풀이·4필드는 4차에서 제거)               │
-│    ▼                                                              │
-│  tag_validator (2-layer 검증)                                     │
-│    - Layer 1: Rule 기반 (필드 누락, 영어 혼입, 범위 검사)         │
-│    - Layer 2: LLM 재검증 (이미지 + 태깅 결과 cross-check) → OpenAI│
-│    → 상세: docs/TAG_VALIDATOR.md                                  │
-│    │                                                              │
+│    │   (옛 Call B 단계별풀이·4필드는 4차에서 제거,                │
+│    │    옛 tag_validator 2-layer 검증은 2026-06-22 폐기)          │
 │    ▼                                                              │
 │  problem_staging 저장                                             │
-│    (unit, difficulty, difficulty_score, correct_rate,             │
-│     validation_status, validation_score, validation_issues)       │
-│    │                                                              │
+│    (unit, difficulty, difficulty_score, correct_rate)             │
+│    │   (validation_* 컬럼은 DB 보존이나 항상 NULL)               │
 │    ▼                                                              │
 │  problem_tags 저장 (concept/skill 정규화 레코드)                  │
 │    │                                                              │
@@ -116,7 +110,6 @@ VL 과 달리 임베딩은 bge-m3(Ollama, 1024차원) 유지.
 | `rag_node_extractor.py` | 풀이 그래프 노드 1회 통합 추출(uses/whys) → solution_nodes (RAG 코퍼스) |
 | `tag_normalizer.py` | 태그 문자열 → concepts/skills canonical 매칭 (cosine ≥ 0.65) |
 | `unit_matcher.py` | 태그 문자열 → units leaf 경로 매칭 (cosine, 캐시 pkl) |
-| `tag_validator.py` | 2-layer 검증 에이전트 → ValidationResult |
 | `solution_matcher.py` | 문제 ↔ 해설 번호 매칭 + match_confidence |
 | `ocr_engine.py` | EasyOCR 래퍼 (레거시 — 현재 흐름 미사용) |
 
@@ -143,8 +136,8 @@ class TagResultMeta(BaseModel):
 - `tag_normalizer` 가 concept/skill 을 `concept_taxonomy.json` canonical 로 정규화 (cosine ≥ 0.65)
 - `unit_matcher` 가 태그 조합으로 단원 경로 결정 (예: `"대수 > 삼각함수"`)
 - `difficulty_resolver` 가 correct_rate 있으면 난이도를 구간매핑으로 덮어씀
-- `tag_validator` 2-layer 검증 → `validation_status` (ok/warning/reject) + `validation_score` — `docs/TAG_VALIDATOR.md`
-- `suggested_fixes` 가 있으면 canonical 매칭 성공 시 자동 반영 (`applied: true` 플래그)
+
+> ℹ️ 옛 2-layer 태깅 검증(`tag_validator.py`, suggested_fixes 자동 반영)은 2026-06-22 폐기. Call A 결과를 그대로 저장한다. `validation_*` 컬럼은 DB 보존이나 항상 NULL.
 
 ---
 

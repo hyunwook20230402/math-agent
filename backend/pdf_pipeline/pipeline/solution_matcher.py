@@ -90,7 +90,7 @@ def match_solutions_to_problems(
             has_image=bool(img_path),
         )
 
-        validation = tags.get("validation") or {}
+        # 태깅 검증(Layer 2) 폐기(2026-06-22) — validation_* 컬럼은 DB 보존이라 None 으로 남긴다.
         results[sid] = {
             "problem_number": num,
             "solution_image_local_path": img_path,
@@ -102,9 +102,9 @@ def match_solutions_to_problems(
             "difficulty_score": tags.get("difficulty_score"),
             "correct_rate": tags.get("correct_rate"),
             "match_confidence": confidence,
-            "validation_status": validation.get("status"),
-            "validation_score": validation.get("score"),
-            "validation_issues": validation.get("issues"),
+            "validation_status": None,
+            "validation_score": None,
+            "validation_issues": None,
         }
 
     return results

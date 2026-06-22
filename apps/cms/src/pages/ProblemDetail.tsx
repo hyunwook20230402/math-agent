@@ -82,9 +82,6 @@ interface StagingProblem {
   solution_job_id: string | null;
   promoted_problem_id: string | null;
   match_confidence: number | null;
-  validation_status: 'ok' | 'warning' | 'reject' | null;
-  validation_score: number | null;
-  validation_issues: { field: string; reason: string; severity: string; applied?: boolean }[] | null;
   status: string;
 }
 
@@ -490,25 +487,6 @@ const ProblemDetail = () => {
                   )
                 )}
               </div>
-
-              {/* 검증 결과 */}
-              {selectedProblem.validation_issues && selectedProblem.validation_issues.length > 0 && (
-                <div className="px-3 py-2 border-t text-xs space-y-1">
-                  <p className="font-medium text-muted-foreground mb-1">
-                    검증 결과 {selectedProblem.validation_status === 'reject' ? '🔴' : '🟡'}
-                    {selectedProblem.validation_score != null && ` (점수 ${Math.round(selectedProblem.validation_score * 100)}점)`}
-                  </p>
-                  {selectedProblem.validation_issues.map((iss, i) => (
-                    <div key={i} className={`flex items-start gap-1 ${iss.applied ? 'text-green-600' : 'text-yellow-700'}`}>
-                      <span>{iss.applied ? '✅' : '⚠️'}</span>
-                      <span>
-                        <span className="font-medium">[{iss.severity}] {iss.field}:</span> {iss.reason}
-                        {iss.applied && <span className="ml-1 text-green-500">→ 자동수정됨</span>}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* 입력 폼 */}

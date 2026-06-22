@@ -389,126 +389,6 @@ def normalize_tags(
   return normalized
 
 
-def _apply_suggested_fixes(
-  tag_result: dict,
-  validation: dict,
-  concept_embeddings: dict,
-  skill_embeddings: dict,
-  leaf_embeddings: dict | None,
-) -> None:
-  """validator 의 suggested_fixes 를 조건부로 tag_result 에 반영.
-
-  - concept_tags / skill_tags: suggested_fixes 있으면 severity 무관 교체 (low 포함)
-  - unit: match_unit 재매칭 후 신규 score 가 기존보다 높을 때만 덮어쓰기
-  - difficulty_score: medium/high 이슈 + suggested_fixes 있을 때 반영
-  - 원본은 validation["original_values"] 에 보존
-  - 덮어쓴 issue 는 applied=True 플래그
-  """
-  status = validation.get("status")
-  if status not in ("warning", "reject"):
-    return
-  fixes = validation.get("suggested_fixes") or {}
-
-  original = {
-    "unit": tag_result.get("unit", ""),
-    "concept_tags": list(tag_result.get("concept_tags", [])),
-    "skill_tags": list(tag_result.get("skill_tags", [])),
-    "difficulty_score": tag_result.get("difficulty_score"),
-  }
-
-  issues = validation.get("issues", []) or []
-
-  def _any_severity(field_names: set[str], min_severity: str = "low") -> list[dict]:
-    levels = {"low": 0, "medium": 1, "high": 2}
-    min_lvl = levels.get(min_severity, 0)
-    return [
-      i for i in issues
-      if i.get("field") in field_names and levels.get(i.get("severity", "low"), 0) >= min_lvl
-    ]
-
-  applied_fields: set[str] = set()
-
-  if not fixes:
-    # suggested_fixes 없으면 difficulty_score 이슈는 수정하지 않고 이슈만 남김 (수동 수정 필요)
-    return
-
-  # concept_tags — low 포함 suggested_fixes 있으면 교체
-  suggested_concepts = fixes.get("concept_tags") or []
-  concept_issues = _any_severity({"concept_tags", "concept_tags/skill_tags"}, "low")
-  if suggested_concepts and concept_issues:
-    normalized = normalize_tags(suggested_concepts, "concept", concept_embeddings, threshold=0.65)
-    if normalized:
-      tag_result["concept_tags"] = normalized
-      applied_fields.add("concept_tags")
-
-  # skill_tags — low 포함 suggested_fixes 있으면 교체
-  suggested_skills = fixes.get("skill_tags") or []
-  skill_issues = _any_severity({"skill_tags", "concept_tags/skill_tags"}, "low")
-  if suggested_skills and skill_issues:
-    normalized = normalize_tags(suggested_skills, "skill", skill_embeddings, threshold=0.65)
-    if normalized:
-      tag_result["skill_tags"] = normalized
-      applied_fields.add("skill_tags")
-
-  # difficulty_score — suggested_fixes 직접 값 우선, 없으면 이슈 reason 텍스트 fallback
-  diff_issues = _any_severity({"difficulty_score"}, "low")
-  if diff_issues:
-    import re as _re
-    suggested_diff = fixes.get("difficulty_score")
-    if isinstance(suggested_diff, int) and 1 <= suggested_diff <= 10:
-      tag_result["difficulty_score"] = suggested_diff
-      applied_fields.add("difficulty_score")
-      logger.info(f"difficulty_score 조정: {original['difficulty_score']} → {suggested_diff} (suggested_fixes)")
-    else:
-      for iss in diff_issues:
-        reason = iss.get("reason", "")
-        m = _re.search(r'\b([1-4])(?:~[1-4])?\s*점?\s*(?:이|가|로|으로)?\s*(?:적절|조정|변경|평가|될\s*수\s*있)', reason)
-        if m:
-          score = max(1, min(4, int(m.group(1))))
-          tag_result["difficulty_score"] = score
-          applied_fields.add("difficulty_score")
-          logger.info(f"difficulty_score 조정: {original['difficulty_score']} → {score} (reason 파싱)")
-          break
-
-  # unit — validator 가 직접 제안한 unit path 또는 수정된 concept/skill 로 재매칭
-  if leaf_embeddings is not None:
-    unit_changed = False
-    old_score = float(tag_result.get("unit_score", 0.0))
-
-    # 1) validator 가 unit 을 직접 제시했으면 그 path 가 taxonomy leaf 에 있는지 확인 후 match_unit 로 점수 계산
-    suggested_unit = (fixes.get("unit") or "").strip()
-    if suggested_unit:
-      # 해당 path 를 쿼리로 match_unit 돌려서 실제 점수 확인
-      new_unit, new_score = unit_matcher.match_unit(suggested_unit, leaf_embeddings)
-      if new_unit and new_score > old_score:
-        tag_result["unit"] = new_unit
-        tag_result["unit_score"] = new_score
-        applied_fields.add("unit")
-        unit_changed = True
-
-    # 2) concept/skill 이 교체됐으면 그 새 태그들로 unit 재매칭 시도
-    if not unit_changed and ("concept_tags" in applied_fields or "skill_tags" in applied_fields):
-      query_parts = list(tag_result.get("concept_tags", [])) + list(tag_result.get("skill_tags", []))
-      query_text = ", ".join(query_parts)
-      if query_text:
-        new_unit, new_score = unit_matcher.match_unit(query_text, leaf_embeddings)
-        if new_unit and new_score > old_score:
-          tag_result["unit"] = new_unit
-          tag_result["unit_score"] = new_score
-          applied_fields.add("unit")
-
-  if applied_fields:
-    validation["original_values"] = original
-    for issue in issues:
-      if issue.get("field") in applied_fields or issue.get("field") == "concept_tags/skill_tags":
-        if (issue.get("field") == "concept_tags/skill_tags"
-            and ("concept_tags" in applied_fields or "skill_tags" in applied_fields)):
-          issue["applied"] = True
-        elif issue.get("field") in applied_fields:
-          issue["applied"] = True
-    logger.info(f"suggested_fixes 자동 반영: {sorted(applied_fields)}")
-
-
 # ── 공개 API ──────────────────────────────────────────────────────────────────
 
 def extract_tags_from_image(
@@ -635,22 +515,7 @@ def extract_tags_from_image(
       "answer_type": result.answer_type,
     }
 
-    if os.environ.get("TAG_VALIDATOR_ENABLED", "true") == "true":
-      try:
-        from . import tag_validator
-        validation = tag_validator.validate(tag_result, vl_image_arg)
-        validation_dict = validation.model_dump()
-        _apply_suggested_fixes(
-          tag_result,
-          validation_dict,
-          concept_embeddings=concept_embeddings,
-          skill_embeddings=skill_embeddings,
-          leaf_embeddings=leaf_embeddings,
-        )
-        tag_result["_validation"] = validation_dict
-      except Exception as ve:
-        logger.warning(f"검증 에이전트 오류 (무시): {ve}")
-
+    # 태깅 검증(Layer 2)은 폐기됨(2026-06-22). Call A 결과를 그대로 사용한다.
     return tag_result
 
   except requests.exceptions.ConnectionError as e:  # type: ignore[name-defined]
@@ -734,11 +599,6 @@ def tag_all_solutions(
       flagged.append(num)
       continue
     results[num] = result
-
-    validation = result.get("_validation", {})
-    if validation.get("status") == "reject":
-      flagged.append(num)
-      logger.warning(f"검증 reject: {num}번 — {validation.get('issues', [])}")
 
   if progress_callback:
     progress_callback(total, total, -1)
