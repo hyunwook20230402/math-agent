@@ -19,6 +19,7 @@ import {
   Lightbulb
 } from 'lucide-react';
 import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@shared/lib/api';
+import { checkAnswer } from '@shared/lib/answerNormalizer';
 import type { DistributionWithDetails } from '@shared/types/database';
 import StuckHelperModal from '@/components/tutor/StuckHelperModal';
 
@@ -199,9 +200,12 @@ const SolveProblem = () => {
       // 답안 제출 및 결과 계산
       const results: { [key: string]: boolean } = {};
       const answerPromises = problems.map(async (problem) => {
-        // 정답 비교 - 단순 문자열 비교
-        const isCorrect = answers[problem.id] === problem.correct_answer;
-        
+        // 정답 비교 - 형식 차이(①/"3번"/"3")를 흡수하도록 정규화 후 비교
+        const check = checkAnswer(answers[problem.id], problem.correct_answer, problem.answer_type);
+        // 정답 정보가 없는 문제(correct_answer 빈 값)는 오답으로 박제하지 않고 정답 처리
+        // (학생 책임 아님 — CMS 에서 정답 채워지면 재채점 가능). 오답 노트에도 안 넣음.
+        const isCorrect = check.hasCorrectAnswer ? check.isCorrect : true;
+
         results[problem.id] = isCorrect;
 
         // 학생 답안 저장
