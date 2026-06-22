@@ -75,7 +75,7 @@ pdf_pipeline/
 │   ├── vl_providers.py          # VL 호출 (OpenAI 단일) — call_vl(image, prompt, schema)
 │   ├── solution_tagger.py       # Call A(메타, gpt-4o) + 정답률 난이도(difficulty_resolver)
 │   ├── difficulty_resolver.py   # 정답률 → 난이도 구간매핑
-│   ├── rag_node_extractor.py    # 풀이 그래프 노드 1회 통합 추출(uses/whys, gpt-5.2) — 막힌 지점 도우미 코퍼스
+│   ├── rag_node_extractor.py    # 풀이 그래프 노드 1회 통합 추출(uses/whys, 난이도분기 Lv1~2 gpt-4o/Lv3~4 gpt-5.2) — 막힌 지점 도우미 코퍼스
 │   ├── tag_normalizer.py        # 태그 → canonical 매칭 (bge-m3 cosine ≥ 0.65)
 │   ├── unit_matcher.py          # 태그 → units leaf 경로 매핑 (bge-m3)
 │   ├── embedder.py              # 임베딩 (bge-m3, Ollama 고정)

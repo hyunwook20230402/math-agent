@@ -37,10 +37,24 @@ logger = logging.getLogger(__name__)
 MAX_NODES = int(os.environ.get("RAG_MAX_NODES", "15"))
 # 1회 통합 출력 토큰 상한 (15노드×필드+uses/whys ≈ 1500tok 여유). 잘리면 _call_openai 가 loud fail.
 RAG_MAX_OUTPUT_TOKENS = int(os.environ.get("VL_OPENAI_MAX_TOKENS", "4000"))
-# 노드 추출은 도형 언어화·논리 분해라 무거운 작업 → gpt-5.2 로 고정(메타 Call A 의 gpt-4o 와 분리).
-# call_vl 에 model 을 명시 주입하므로 OPENAI_MODEL env 와 무관하게 항상 이 모델을 쓴다.
-# NODE_MODEL env 로 덮어쓸 수 있다.
-NODE_MODEL = os.environ.get("NODE_MODEL", "gpt-5.2")
+# 노드 추출 모델은 난이도(difficulty_score)로 분기한다(2026-06-22).
+#  - Lv1~2(score 1~2, 쉬움/보통): 논리 분해가 단순 → gpt-4o 로 충분(NODE_MODEL_EASY)
+#  - Lv3~4(score 3~4, 어려움/최고난도): 도형 언어화·경우분리 무거움 → gpt-5.2(NODE_MODEL_HARD)
+# call_vl 에 model 을 명시 주입하므로 OPENAI_MODEL env 와 무관하게 분기 결과 모델을 쓴다.
+# score 가 없거나(None)·범위 밖(옛 1~10 데이터의 5~10 등)이면 안전하게 상위(hard) 모델로.
+# env(NODE_MODEL_EASY / NODE_MODEL_HARD)로 각각 덮어쓸 수 있다.
+# (NODE_MODEL 은 하위호환 — 설정돼 있으면 hard 기본값으로 흡수)
+NODE_MODEL_EASY = os.environ.get("NODE_MODEL_EASY", "gpt-4o")
+NODE_MODEL_HARD = os.environ.get("NODE_MODEL_HARD") or os.environ.get("NODE_MODEL", "gpt-5.2")
+
+
+def _pick_node_model(difficulty_score) -> str:
+  """난이도로 노드 추출 모델 선택. Lv1~2→gpt-4o, Lv3~4(및 불명)→gpt-5.2."""
+  try:
+    score = int(difficulty_score)
+  except (TypeError, ValueError):
+    return NODE_MODEL_HARD
+  return NODE_MODEL_EASY if score <= 2 else NODE_MODEL_HARD
 
 _VALID_ROLES = (
   "condition_analysis",
@@ -399,14 +413,17 @@ def extract_nodes(problem: dict) -> NodeExtractionResult:
 
     # 문제 유형(과목/혼합/난이도)에 맞는 가이드 조각을 베이스에 덧붙여 조립.
     prompt = _compose_extraction_prompt(problem)
+    # 난이도로 모델 분기 — Lv1~2 는 gpt-4o, Lv3~4(및 불명)는 gpt-5.2.
+    node_model = _pick_node_model(problem.get("difficulty_score"))
     logger.info(f"[rag_node] problem_id={problem_id} unit={problem.get('unit')!r} "
-                f"difficulty={problem.get('difficulty_score')} prompt_len={len(prompt)}")
+                f"difficulty={problem.get('difficulty_score')} model={node_model} "
+                f"prompt_len={len(prompt)}")
 
     # 1회 통합 호출 — 전체 노드 배열을 한 번에. 잘리면 _call_openai 가 loud fail.
-    # model=NODE_MODEL(gpt-5.2) 명시 — 메타 Call A(gpt-4o)와 분리, OPENAI_MODEL env 무관.
+    # model 명시 주입 — 메타 Call A 와 분리, OPENAI_MODEL env 무관.
     payload = call_vl(images, prompt, _NodeExtractionPayload,
                       provider="openai", max_tokens=RAG_MAX_OUTPUT_TOKENS,
-                      model=NODE_MODEL)
+                      model=node_model)
 
     nodes = sorted(payload.nodes, key=lambda n: n.node_index)
     if len(nodes) > MAX_NODES:
