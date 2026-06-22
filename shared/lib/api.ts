@@ -1115,3 +1115,61 @@ export const nodeApi = {
   reExtract: (problemId: string) =>
     _nodeFetch(`/${problemId}/nodes/re-extract`, { method: 'POST' }),
 };
+
+// ===== 학생 성취도/취약점 분석 API (Postgres RPC 래퍼) =====
+// 집계는 DB RPC(022_student_analytics_rpcs)에서 "최신 시도 기준"으로 처리한다.
+export interface AchievementRow {
+  distribution_id: string;
+  distribution_title: string;
+  total_problems: number;
+  attempted: number;
+  correct: number;
+  accuracy: number;
+}
+
+export interface WeaknessRow {
+  dimension: 'unit' | 'difficulty' | 'concept' | 'skill';
+  label: string;
+  total: number;
+  correct: number;
+  accuracy: number;
+}
+
+export interface ClassSummaryRow {
+  student_id: string;
+  student_name: string;
+  attempted: number;
+  correct: number;
+  accuracy: number;
+  distributions_count: number;
+}
+
+export const analyticsApi = {
+  // 학생의 배포별 성취도 (전체 합산은 프론트에서 계산)
+  getStudentAchievement: async (studentId: string): Promise<AchievementRow[]> => {
+    const { data, error } = await supabase.rpc('get_student_achievement', {
+      p_student_id: studentId,
+    });
+    if (error) throw error;
+    return data || [];
+  },
+
+  // 학생의 취약 영역 (정답률 threshold 이하). dimension: unit/difficulty/concept/skill
+  getStudentWeaknesses: async (studentId: string, threshold = 50): Promise<WeaknessRow[]> => {
+    const { data, error } = await supabase.rpc('get_student_weaknesses', {
+      p_student_id: studentId,
+      p_threshold: threshold,
+    });
+    if (error) throw error;
+    return data || [];
+  },
+
+  // 선생님 반 전체 학생 요약 (정답률 낮은 순, 미풀이 학생은 뒤로)
+  getClassSummary: async (teacherId: string): Promise<ClassSummaryRow[]> => {
+    const { data, error } = await supabase.rpc('get_teacher_class_summary', {
+      p_teacher_id: teacherId,
+    });
+    if (error) throw error;
+    return data || [];
+  },
+};

@@ -19,11 +19,13 @@ import {
   MessageSquare,
   FileText,
   Award,
-  BookOpen
+  BookOpen,
+  Send
 } from 'lucide-react';
 import { useAuth } from '@shared/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
-import { profileApi, distributionApi, studentApi } from '@shared/lib/api';
+import { profileApi, distributionApi, studentApi, analyticsApi } from '@shared/lib/api';
+import type { ClassSummaryRow } from '@shared/lib/api';
 import type { Profile, DistributionWithDetails } from '@shared/types/database';
 
 
@@ -44,7 +46,8 @@ const TeacherDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<string>('all');
-  
+  // 학생별 성취도 요약 (student_id → 요약). 카드에 정답률 배지로 표시.
+  const [summaryByStudent, setSummaryByStudent] = useState<Record<string, ClassSummaryRow>>({});
 
   const [recentActivities, setRecentActivities] = useState<RecentActivity[]>([]);
 
@@ -76,6 +79,17 @@ const TeacherDashboard = () => {
 
       // 실제 최근 활동 데이터 조회 (현재는 빈 배열)
       setRecentActivities([]);
+
+      // 반 전체 성취도 요약 (DB RPC — 학생별 최신 시도 기준 정답률)
+      try {
+        const summary = await analyticsApi.getClassSummary(profile.id);
+        const map: Record<string, ClassSummaryRow> = {};
+        summary.forEach((row) => { map[row.student_id] = row; });
+        setSummaryByStudent(map);
+      } catch (error) {
+        console.warn('반 요약 조회 실패:', error);
+        setSummaryByStudent({});
+      }
 
       setLoading(false);
     } catch (error) {
@@ -197,10 +211,33 @@ const TeacherDashboard = () => {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs">
-                        <TrendingUp className="h-3 w-3 mr-1" />
-                        분석
-                      </Badge>
+                      {(() => {
+                        const s = summaryByStudent[student.id];
+                        if (s && s.attempted > 0) {
+                          const low = s.accuracy < 50;
+                          return (
+                            <Badge
+                              variant="outline"
+                              className={`text-xs ${low ? 'border-red-300 text-red-600' : 'border-green-300 text-green-600'}`}
+                            >
+                              <TrendingUp className="h-3 w-3 mr-1" />
+                              정답률 {s.accuracy}%
+                            </Badge>
+                          );
+                        }
+                        return (
+                          <Badge variant="outline" className="text-xs text-muted-foreground">
+                            미풀이
+                          </Badge>
+                        );
+                      })()}
+                      <Button variant="outline" size="sm" onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/teacher/distribute?student=${student.id}`);
+                      }}>
+                        <Send className="h-3.5 w-3.5 mr-1" />
+                        배포
+                      </Button>
                       <Button variant="ghost" size="sm" onClick={(e) => {
                         e.stopPropagation();
                         navigate(`/teacher/student/${student.id}`);

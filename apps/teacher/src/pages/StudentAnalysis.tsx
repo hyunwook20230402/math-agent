@@ -19,7 +19,9 @@ import {
   BarChart3
 } from 'lucide-react';
 import { useAuth } from '@shared/hooks/useAuth';
-import { distributionApi, studentAnswerApi, wrongAnswerApi, studentApi } from '@shared/lib/api';
+import { distributionApi, studentAnswerApi, wrongAnswerApi, studentApi, analyticsApi } from '@shared/lib/api';
+import type { WeaknessRow } from '@shared/lib/api';
+import { WeaknessPanel } from '@/components/WeaknessPanel';
 import { format } from 'date-fns';
 import { Calendar } from '@shared/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
@@ -30,6 +32,9 @@ import type {
   WrongAnswer,
   Profile
 } from '@shared/types/database';
+
+// 취약 영역 판정 임계값(정답률 %). 이 값 이하면 취약으로 표시.
+const WEAKNESS_THRESHOLD = 50;
 
 interface StudentStats {
   totalProblems: number;
@@ -51,6 +56,7 @@ const StudentAnalysis = () => {
   const [filteredDistributions, setFilteredDistributions] = useState<DistributionWithDetails[]>([]);
   const [studentAnswers, setStudentAnswers] = useState<StudentAnswer[]>([]);
   const [wrongAnswers, setWrongAnswers] = useState<WrongAnswer[]>([]);
+  const [weaknesses, setWeaknesses] = useState<WeaknessRow[]>([]);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<StudentStats>({
@@ -156,6 +162,15 @@ const StudentAnalysis = () => {
         wrongAnswersData = [];
       }
       setWrongAnswers(wrongAnswersData);
+
+      // 5. 취약 영역 조회 (DB RPC 집계 — 최신 시도 기준 unit/difficulty/concept/skill)
+      try {
+        const weaknessData = await analyticsApi.getStudentWeaknesses(studentId, WEAKNESS_THRESHOLD);
+        setWeaknesses(weaknessData);
+      } catch (error) {
+        console.warn('취약 영역 조회 실패:', error);
+        setWeaknesses([]);
+      }
 
       setLoading(false);
     } catch (error) {
@@ -609,6 +624,9 @@ const StudentAnalysis = () => {
           </div>
         </CardContent>
       </Card>
+
+      {/* 취약 영역 분석 (DB RPC 집계 — 단원/난이도/개념/스킬별 정답률) */}
+      <WeaknessPanel rows={weaknesses} threshold={WEAKNESS_THRESHOLD} />
     </div>
   );
 };

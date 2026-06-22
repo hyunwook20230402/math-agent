@@ -208,7 +208,31 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
                     .update({"promoted_problem_id": pid}) \
                     .eq("id", p["id"]) \
                     .execute()
+                # 개념/스킬 태그를 staging_id → problem_id 로 복사.
+                # (취약점 분석은 problem_tags.problem_id 기준으로 집계하므로 승격 시 옮겨줘야 함.)
+                _copy_tags_staging_to_problem(p["id"], pid)
     return inserted
+
+
+def _copy_tags_staging_to_problem(staging_id: str, problem_id: str) -> None:
+    """staging 단계에서 붙은 AI 태그를 승격된 problem_id 로 복사.
+
+    problem_tags 는 staging 단계에서 staging_id 로만 저장된다. 승격 후
+    취약점 분석(student_answers ⨝ problem_tags.problem_id)이 가능하려면
+    같은 태그를 problem_id 로도 남겨야 한다. 멱등(기존 AI 태그 교체)."""
+    try:
+        client = get_client()
+        existing = (
+            client.table("problem_tags")
+            .select("tag, tag_type, confidence, source")
+            .eq("staging_id", staging_id)
+            .execute()
+        ).data or []
+        if not existing:
+            return
+        upsert_problem_tags(existing, problem_id=problem_id)
+    except Exception as e:  # 태그 복사 실패가 승격 자체를 막지 않게
+        print(f"[approve] 태그 복사 실패 staging={staging_id} problem={problem_id}: {e}")
 
 
 def _build_title(p: dict) -> str:
