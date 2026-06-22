@@ -929,26 +929,14 @@ const StudentDashboard = () => {
                           <XCircle className="h-4 w-4 mr-2" />
                           오답만 다시 풀기
                         </Button>
-                                        <Button 
-                  variant="outline"
-                  className="w-full" 
-                  onClick={() => navigate(`/student/wrong-answers/${distribution.id}`)}
-                >
-                  <AlertCircle className="h-4 w-4 mr-2" />
-                  처음 틀린 문제들 목록
-                </Button>
-                
-                <Button 
-                  variant="outline"
-                  className="w-full" 
-                  onClick={() => navigate(`/student/still-wrong-answers/${distribution.id}`)}
-                >
-                  <div className="flex items-center mr-2">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertCircle className="h-4 w-4 -ml-1" />
-                  </div>
-                  두번 틀린 문제들 목록
-                </Button>
+                        <Button
+                          variant="outline"
+                          className="w-full"
+                          onClick={() => navigate(`/student/wrong-answers/${distribution.id}`)}
+                        >
+                          <AlertCircle className="h-4 w-4 mr-2" />
+                          오답 분석
+                        </Button>
                       </>
                     )}
                   </div>
