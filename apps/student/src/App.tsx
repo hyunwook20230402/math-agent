@@ -1,7 +1,22 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { MathJaxContext } from 'better-react-mathjax';
 import { Toaster } from '@shared/ui/toaster';
 import { AuthProvider, useAuth } from '@shared/hooks/useAuth';
+
+// MathJax 전역 설정 — CMS 와 동일. 막힌 지점 도우미 힌트의 LaTeX(\( \) / \[ \])를 렌더.
+// MathJax 는 구분자가 빠진 raw 수식도 관대하게 렌더해 KaTeX 정규식 파싱보다 견고(11차).
+const MATHJAX_CONFIG = {
+  loader: { load: ['[tex]/ams'] },
+  tex: {
+    inlineMath: [['\\(', '\\)']],
+    displayMath: [['\\[', '\\]']],
+    packages: { '[+]': ['ams'] },
+  },
+  options: {
+    enableMenu: false,
+  },
+};
 
 import Index from '@/pages/Index';
 import EmailConfirm from '@/pages/EmailConfirm';
@@ -59,9 +74,11 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <Router>
-        <AppContent />
-      </Router>
+      <MathJaxContext version={3} config={MATHJAX_CONFIG}>
+        <Router>
+          <AppContent />
+        </Router>
+      </MathJaxContext>
     </AuthProvider>
   );
 }

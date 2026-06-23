@@ -82,48 +82,63 @@ class _Localized(BaseModel):
     ..., description="학생이 이해한 마지막 단계 index (0-indexed). 아예 모르면 -1"
   )
   reasoning: str = Field(..., description="그렇게 판단한 짧은 이유")
+  reached_answer: bool = Field(
+    ..., description="학생의 발화가 이미 마지막 단계(정답)의 결과에 도달했는가. "
+                     "확신이 적으면 false(보수적). 정답을 흘릴 위험이 더 크므로 애매하면 false."
+  )
 
 
-def _localize(problem_image_path: Optional[str], blocked_desc: str, nodes: list[dict]) -> int:
-  """학생이 이해한 마지막 노드 index 추정. 노드 없거나 이미지/호출 실패 시 -1(처음부터)."""
+def _localize(problem_image_path: Optional[str], blocked_desc: str,
+              nodes: list[dict]) -> tuple[int, bool]:
+  """학생이 이해한 마지막 노드 index + 정답 도달 여부 추정.
+
+  반환: (last_understood_index, reached_answer). 노드 없거나 이미지/호출 실패 시 (-1, False).
+  멀티턴 매 턴 호출되어 학생 발화를 노드 결과식과 대조한다(10차).
+  """
   if not nodes or not problem_image_path:
-    return -1
+    return -1, False
   # 각 단계의 실제 결과식(output_formula)까지 보여줘야 학생 진술("3^2/3까지 했다")을
   # 정확한 단계에 매칭한다. key_concept(이름)만 주면 VL 이 위치를 뒤로 과대추정한다.
   outline = "\n".join(
     f"  step {n['node_index']}: {n['key_concept']} — 결과: {_strip_math(n.get('output_formula'))}"
     for n in nodes
   )
+  # 마지막 노드(= conclusion, 정답) 결과식 — 학생 발화가 여기 도달했는지 판정 기준.
+  last_output = _strip_math(nodes[-1].get('output_formula')) if nodes else "(없음)"
   prompt = f"""[이미지 1] = 학생이 푸는 수학 문제입니다.
 
-학생이 이 문제를 풀다가 막혔습니다.
+학생이 이 문제를 풀다가 막혔거나 진전이 있습니다.
 학생의 말: "{blocked_desc}"
 
 이 문제 풀이는 다음 단계들로 이뤄집니다(각 단계의 결과식 포함):
 {outline}
 
-학생이 **이해해서 끝낸 마지막 단계의 index** 를 추정하세요(0-indexed).
+마지막 단계(정답)의 결과: {last_output}
 
-먼저 reasoning 에 다음을 적고, 그 분석으로 last_understood_index 를 판정하세요:
+먼저 reasoning 에 다음을 적고, 그 분석으로 last_understood_index 와 reached_answer 를 판정하세요:
 1) 학생의 말에 나온 식/값을 적는다.
 2) 그 식/값이 위 단계들의 **결과**와 하나씩 대조해 어느 단계의 결과와 일치하는지 찾는다.
    (예: 학생이 "3^(2/3)까지 했다" → 결과가 3^(2/3) 인 단계가 마지막 이해 단계.)
-3) 학생이 "처음부터 모르겠다"거나 진전이 없으면 -1.
+3) 학생이 "처음부터 모르겠다"거나 진전이 없으면 last_understood_index=-1.
+4) 학생의 말이 **마지막 단계 결과({last_output})나 정답에 도달**했으면 reached_answer=true.
+   - 정확히 일치하거나, 최종 답 형태의 발화이거나, "다 풀었다/이 값이 답"이 명확한 경우만 true.
+   - **확신이 적으면 false.** 틀렸는데 맞다고 인정하면 정답을 흘리는 셈이라, 애매하면 false 가 안전.
 
 규칙:
-- **애매하면 뒤(큰 index)가 아니라 앞(작은 index)으로 보수적으로** 잡으세요. 다음 한 걸음을
-  안내하는 게 목적이라, 학생이 아직 안 한 단계를 이미 했다고 잘못 잡으면 힌트가 엉뚱해집니다."""
+- **애매하면 뒤(큰 index)가 아니라 앞(작은 index)으로 보수적으로** 잡으세요. 학생이 아직 안 한
+  단계를 이미 했다고 잘못 잡으면 힌트가 엉뚱해집니다.
+- **특수 공백(NBSP)·화살표(↑↓←→▲▼)·제로폭 문자 금지.** reasoning 에도 일반 ASCII 만 쓰세요."""
 
   try:
     # 위치 판단은 정확도가 중요 → reasoning medium(대조 추론). index 정수라 structured 유지(안전).
     res = call_vl(problem_image_path, prompt, _Localized, timeout=_VL_TIMEOUT,
                   max_tokens=2000, reasoning_effort="medium")
-    idx = res.last_understood_index
     max_idx = max(n["node_index"] for n in nodes)
-    return max(-1, min(idx, max_idx))
+    idx = max(-1, min(res.last_understood_index, max_idx))
+    return idx, bool(res.reached_answer)
   except Exception as exc:
-    logger.warning(f"막힌 지점 찾기(_localize) 실패 → -1 fallback: {exc}")
-    return -1
+    logger.warning(f"막힌 지점 찾기(_localize) 실패 → (-1, False) fallback: {exc}")
+    return -1, False
 
 
 # ── 2) 유사 풀이 끌어오기 (retrieve) ──────────────────────────────────────────
@@ -214,7 +229,17 @@ def _generate(problem_image_path: Optional[str], blocked_desc: str,
 - 힌트는 1~2문장, 한국어. 한 번에 다음 한 걸음만. 전체 풀이를 쏟아내지 마세요.
 - **정답(최종 수치)·객관식 보기 번호(①②③④⑤)를 절대 말하지 마세요.** 답을 직접 알려주는 게 아니라
   학생이 스스로 다음 발을 디디게 질문·방향만 주세요.
-- 수식은 LaTeX 인라인 \\( ... \\) 로."""
+- **학생의 말이 이미 올바른 다음 단계/정답이면 같은 걸 또 묻지 말고, 짧게 인정("맞아요! 잘했어요")
+  하고 자연스럽게 다음으로 이어가세요.**
+- **모든 수식·숫자식·지수·근호·분수·기호는 반드시 LaTeX 인라인 \\( ... \\) 로 감싼다. 평문 수식 절대 금지.**
+  구분자(\\( \\))가 빠진 수식은 화면에서 깨져 보인다. 답변을 쓴 뒤 모든 수식에 \\(...\\) 가 붙었는지 다시 확인하라.
+  좋은 예 / 나쁜 예:
+    ❌ "9를 3^2로 쓰면"        → ✅ "\\(9\\)를 \\(3^2\\)로 쓰면"
+    ❌ "세제곱근 9를 구하려면"  → ✅ "\\(\\sqrt[3]{{9}}\\)를 구하려면"
+    ❌ "분자가 2x+1"           → ✅ "분자가 \\(2x+1\\)"
+  유형별: 근호 \\(\\sqrt{{2}}\\)·\\(\\sqrt[3]{{x}}\\), 분수 \\(\\frac{{1}}{{2}}\\), 지수 \\(2^x\\)·\\(e^{{-t}}\\), 첨자 \\(a_1\\)·\\(x_{{n+1}}\\).
+- **특수 공백(NBSP)·화살표(↑↓←→▲▼)·제로폭 문자 금지.** 공백은 일반 띄어쓰기, 곱셈은 \\times,
+  화살표가 필요하면 \\rightarrow 등 LaTeX 명령으로 쓰세요."""
 
   # call_vl 은 이미지 경로 리스트를 받음 — 문제 이미지 + 도형 이미지(최대 2개)
   images = [p for p in (problem_image_path, *figure_paths[:2]) if p]
@@ -301,22 +326,46 @@ def generate_hint(problem_id: str, blocked_description: str,
   figure_paths: list[str] = []
   _t_localize = _t_retrieve = _t_figures = _t_generate = 0.0
   try:
-    # 막힌 지점 찾기: 멀티턴이면 revealed_node_index 이후부터, 첫 호출이면 _localize 로 추정
-    if revealed_node_index >= 0:
-      current_index = revealed_node_index
-    else:
-      _t = time.time()
-      current_index = _localize(prob_path, blocked_description, nodes_all)
-      _t_localize = time.time() - _t
+    # 막힌 지점 찾기: 멀티턴 포함 매 턴 _localize 로 학생 발화를 노드와 대조(10차).
+    # 학생이 정답을 말해도 인정 못 하던 문제 해결 — 위치 재추정 + 정답 도달 판정.
+    _t = time.time()
+    current_index, reached_answer = _localize(prob_path, blocked_description, nodes_all)
+    _t_localize = time.time() - _t
 
-    # 멀티턴 끝 도달 — 마지막 노드까지 안내했으면 더 줄 힌트 없음.
-    # 이때 VL 을 부르면 근거 공백으로 gpt-5.2 가 쓰레기(제어문자)를 뱉으므로 호출 없이 종료 안내.
+    # 퇴행 방지: 멀티턴에서 학생이 헷갈려 뒤로 간 듯한 발화(localize 결과 < 직전 공개)는
+    # 직전 위치를 유지(이미 안내한 단계를 다시 묻지 않게). 단 정답 도달이면 localize 신뢰(정답 점프 허용).
+    if revealed_node_index >= 0 and current_index < revealed_node_index and not reached_answer:
+      logger.info("[TUTOR] problem_id=%s 학생 발화 퇴행 추정 → 직전 위치 유지(localized=%d, revealed=%d)",
+                  problem_id, current_index, revealed_node_index)
+      current_index = revealed_node_index
+
+    # 정답 인정 경로(끝 가드보다 우선) — 학생이 정답/마지막 단계에 도달했으면 VL _generate 없이
+    # 인정+마무리. 정답 수치는 직접 말 안 함(학생이 이미 말했으니 인정만). 멀티턴(revealed>=0)에서만
+    # 발동 — 첫 호출에 곧장 정답 인정으로 빠지는 오판 방지.
+    if reached_answer and revealed_node_index >= 0:
+      logger.info("[TUTOR] problem_id=%s 학생 정답 도달 → 인정+마무리(VL _generate 안 함)", problem_id)
+      return {
+        "hint_text": "정확해요! 잘 따라왔어요. 이제 그대로 정리하면 답이 나와요. 끝까지 한번 적어볼까요?",
+        "next_step_concept": None,
+        "next_revealed_node_index": current_index,  # 더 진행 안 함(클라가 hasMore=false 처리)
+        "reference_nodes": [],
+        "figure_urls": [],
+        "has_solution_nodes": True,
+      }
+
+    # 멀티턴 끝 도달 — 마지막 노드(정답) 또는 그 직전까지 왔으면 더 줄 힌트 없음.
+    # 마지막 직전(current_index == last_idx-1)이면 다음 노드가 conclusion(=정답)이라,
+    # VL 을 부르면 ① 근거에서 정답(output_formula) 제외로 빈약 → gpt-5.2 가 "정답 금지+근거 없음"
+    # 모순에서 thinking 폭주 → 90초 timeout 무응답, ② 정답 노출 위험. 둘 다 막으려 VL 호출 없이
+    # "거의 다 왔지만 답은 직접 못 준다" 마무리 안내로 종료(사용자 결정, 9차).
     if nodes_all:
       last_idx = max(n["node_index"] for n in nodes_all)
-      if revealed_node_index >= 0 and current_index >= last_idx:
-        logger.info("[TUTOR] problem_id=%s 멀티턴 끝 도달 → 종료 안내(VL 호출 안 함)", problem_id)
+      # revealed_node_index >= 0 체크로 첫 호출(=-1) 보호: 노드 1개(last_idx==0) 문제에서도
+      # 첫 호출은 -1 이라 이 가드를 통과 못 하고 정상 힌트 → 첫 힌트가 종료로 안 빠진다.
+      if revealed_node_index >= 0 and current_index >= last_idx - 1:
+        logger.info("[TUTOR] problem_id=%s 멀티턴 끝 도달(마지막 or 직전) → 종료 안내(VL 호출 안 함)", problem_id)
         return {
-          "hint_text": "여기까지 오면 마지막 한 걸음만 남았어요. 지금까지 정리한 걸 바탕으로 스스로 답을 적어볼까요?",
+          "hint_text": "거의 다 왔어요! 마지막 한 걸음만 남았는데, 정답은 직접 알려줄 수 없어요. 지금까지 정리한 걸 바탕으로 스스로 마무리해볼까요?",
           "next_step_concept": None,
           "next_revealed_node_index": current_index,  # 더 진행 안 함(클라가 hasMore=false 처리)
           "reference_nodes": [],

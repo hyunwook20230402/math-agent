@@ -31,35 +31,58 @@ logger = logging.getLogger(__name__)
 # 앞의 `\_` 만 좁게 매칭. 정상 `a_1`(백슬래시 없음)은 매칭 안 됨.
 _LATEX_SUBSCRIPT_ESCAPE = re.compile(r'(?<!\\)\\_(?=[0-9a-zA-Z])')
 
-# 깨진 수식 여는 구분자 복원. OpenAI 가 인라인 `\(` / 블록 `\[` 를 `\w(` / `\w[` 로 깨뜨려
-# 출력하는 케이스(존재하지 않는 `\w` 명령). 프론트 renderMath 가 `\(...\)` 매칭에 실패해
-# 전체가 raw 노출되며 `\w` 의 백슬래시가 안 보여 'w' 만 남는 버그(2026-06-23).
-# 구분자 `(`/`[` 바로 앞 `\w` 만 좁게 매칭 — 정상 텍스트의 `\w` 는 건드리지 않음.
-_LATEX_BROKEN_DELIM = re.compile(r'\\w(?=[\(\[])')
+# 깨진 수식 여는 구분자 복원. OpenAI 가 인라인 `\(` / 블록 `\[` 를 `\w(` / `\w[` 또는
+# 대문자 `\W(` / `\W[` 로 깨뜨려 출력하는 케이스(존재하지 않는 `\w`/`\W` 명령).
+# 프론트 renderMath 가 `\(...\)` 매칭에 실패해 전체가 raw 노출되며 `\w`/`\W` 의 백슬래시가
+# 안 보여 'w'/'W' 만 남는 버그(2026-06-23. 9차에서 대문자 `\W` 변형까지 확대).
+# 구분자 `(`/`[` 바로 앞 `\w`/`\W` 만 좁게 매칭 — 정상 텍스트·정상 명령(\frac 등 뒤에 괄호 없음)은
+# lookahead 때문에 안 건드림.
+_LATEX_BROKEN_DELIM = re.compile(r'\\[wW](?=[\(\[])')
 
 
 def _fix_latex_broken_delimiters(s: str) -> str:
-  """깨진 여는 구분자 `\\w(`→`\\(`, `\\w[`→`\\[` 복원."""
+  """깨진 여는 구분자 `\\w(`/`\\W(`→`\\(`, `\\w[`/`\\W[`→`\\[` 복원."""
   if not s:
     return s
   fixed = _LATEX_BROKEN_DELIM.sub(r'\\', s)
   if fixed != s:
-    logger.warning("[latex] 깨진 구분자 복원(\\w → \\): %r → %r", s[:60], fixed[:60])
+    logger.warning("[latex] 깨진 구분자 복원(\\w/\\W → \\): %r → %r", s[:60], fixed[:60])
   return fixed
 
 
 # 제어문자(\x00-\x08,\x0b,\x0c,\x0e-\x1f,\x7f). \t\n\r 은 보존.
 _CONTROL_CHARS = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 
+# NBSP(\xa0)·제로폭·방향제어문자. gpt-5.2 가 자유텍스트에서 일반 공백 대신 NBSP 를 내거나
+# 제로폭/방향문자를 섞어 화면에 깨진 기호로 보이는 것 방지(2026-06-23, 10차).
+# NBSP 는 공백으로 치환(아래 별도 처리), 나머지는 제거.
+_NBSP = re.compile(r'\xa0')  # → 일반 공백으로(제거하면 단어 붙음)
+_ZERO_WIDTH_DIRECTIONAL = re.compile(
+  r'[​-‏‪-‮⁠-⁤⁦-⁩﻿؜]'
+  # 200b-200f: 제로폭/방향 마크, 202a-202e: 방향 임베딩/오버라이드,
+  # 2060-2064: word joiner 등, 2066-2069: 방향 isolate, feff: BOM, 061c: 아랍 마크
+)
+# 화살표는 매우 보수적으로 ↑↓←→ 4개만 제거(정상 수식은 \rightarrow 등 LaTeX 명령으로 표현).
+# gpt-5.2 가 지수/곱 표기를 화살표(▲↑)로 깨뜨리는 케이스. 재발 시 로그로 실제 문자 확인 후 확대.
+_STRAY_ARROWS = re.compile(r'[←↑→↓]')
+
 
 def _strip_control_chars(s: str) -> str:
-  """LLM 이 간헐적으로 뱉는 제어문자(예: \\x7f) 제거 — 화면에 깨진 기호로 보이는 것 방지."""
+  """LLM 이 간헐적으로 뱉는 제어문자·특수공백(NBSP)·제로폭·방향문자·화살표 제거.
+
+  화면에 깨진 기호(▲, ` `, 제로폭)로 보이는 것 방지(2026-06-23, 10차 확장).
+  NBSP 는 공백으로(단어 붙음 방지), 제로폭/방향/화살표는 제거. \\t\\n\\r·한글·정상 LaTeX 보존.
+  """
   if not s:
     return s
-  fixed = _CONTROL_CHARS.sub('', s)
-  if fixed != s:
-    logger.warning("[latex] 제어문자 제거: %d개", len(s) - len(fixed))
-  return fixed
+  orig = s
+  s = _CONTROL_CHARS.sub('', s)
+  s = _NBSP.sub(' ', s)
+  s = _ZERO_WIDTH_DIRECTIONAL.sub('', s)
+  s = _STRAY_ARROWS.sub('', s)
+  if s != orig:
+    logger.warning("[latex] 제어/특수문자 제거·정규화: %r → %r", orig[:60], s[:60])
+  return s
 
 
 def _fix_latex_subscript_escapes(s: str) -> str:

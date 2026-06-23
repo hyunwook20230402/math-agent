@@ -2,10 +2,9 @@
 // 막힌 지점 도우미 모달 — 순수 HTML/CSS (Radix Portal 금지: dev-rules)
 // RAG 백엔드(POST /api/tutor/hint)를 호출해 막힌 지점 다음 한 단계만 힌트로 안내.
 import { useState, useEffect } from 'react';
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
 import { X, Send, Loader2, Lightbulb, Trash2 } from 'lucide-react';
 import { Button } from '@shared/ui/button';
+import { MathText } from '@shared/ui/MathText';
 import { ragHintApi } from '@shared/lib/api';
 
 interface HintTurn {
@@ -19,32 +18,17 @@ interface HintTurn {
 const CHAT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const chatKey = (problemId: string) => `tutor_chat_${problemId}`;
 
-// \( ... \) / \[ ... \] 인라인·블록 수식을 KaTeX 로 렌더링한 HTML 반환.
-function renderMath(text: string): string {
+// 힌트 텍스트 경량 정리 — 특수문자만 제거하고 수식 렌더는 MathText(MathJax)에 위임(11차).
+// 옛 KaTeX 정규식 파싱은 구분자(\( \))가 빠진 raw 수식(\sqrt[3]{9} 등)을 못 잡아 평문 노출됐다.
+// MathJax 는 구분자 없는 수식도 관대하게 렌더하므로 정규식 파싱을 버리고 MathText 로 통일.
+// 캐시된 옛 대화(localStorage) 방어용으로 NBSP/제로폭/화살표만 정리(9·10차 sanitize 유지).
+function sanitizeHintText(text: string): string {
   if (!text) return '';
-  // 깨진 여는 구분자 방어 — OpenAI 가 `\(`/`\[` 를 `\w(`/`\w[` 로 깨뜨리는 경우(백엔드와 동일 방어).
-  // 구분자 바로 앞 `\w` 만 좁게 치환해 정상 텍스트 오염 방지.
-  text = text.replace(/\\w(?=[([])/g, '\\');
-  const escapeHtml = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  // \[ ... \] (블록) → \( ... \) (인라인) 순으로 치환
-  const pattern = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
-  let out = '';
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = pattern.exec(text)) !== null) {
-    out += escapeHtml(text.slice(last, m.index));
-    const isBlock = m[1] !== undefined;
-    const expr = (m[1] ?? m[2] ?? '').trim();
-    try {
-      out += katex.renderToString(expr, { displayMode: isBlock, throwOnError: false });
-    } catch {
-      out += escapeHtml(expr);
-    }
-    last = pattern.lastIndex;
-  }
-  out += escapeHtml(text.slice(last));
-  return out;
+  // NBSP→공백, 제로폭/방향문자 제거, 화살표(↑↓←→) 제거.
+  text = text.replace(/ /g, ' ')
+    .replace(/[​-‏‪-‮⁠-⁤⁦-⁩﻿]/g, '')
+    .replace(/[←↑→↓]/g, '');
+  return text;
 }
 
 interface Props {
@@ -204,9 +188,10 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
                 {t.concept && (
                   <div className="text-xs font-medium text-amber-600">💡 {t.concept}</div>
                 )}
-                <div
+                <MathText
                   className="leading-relaxed"
-                  dangerouslySetInnerHTML={{ __html: renderMath(t.text) }}
+                  text={sanitizeHintText(t.text)}
+                  inline={false}
                 />
                 {t.figureUrls && t.figureUrls.length > 0 && (
                   <div className="space-y-1">
