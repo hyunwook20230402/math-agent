@@ -105,27 +105,54 @@ class _Localized(BaseModel):
     ..., description="학생의 발화가 이미 마지막 단계(정답)의 결과에 도달했는가. "
                      "확신이 적으면 false(보수적). 정답을 흘릴 위험이 더 크므로 애매하면 false."
   )
+  reached_near_answer: bool = Field(
+    ..., description="학생의 발화가 **정답 직전 단계(이상)**의 결과/정답에 도달했는가. "
+                     "reached_answer(최종 정답 단계만)보다 한 단계 넓다 — 정답 직전 결과식에 도달해도 true. "
+                     "확신이 적으면 false(보수적). 위치 index 오판과 무관하게 '도달 여부'만 본다."
+  )
 
 
 def _localize(problem_image_path: Optional[str], blocked_desc: str,
-              nodes: list[dict], history_block: str = "") -> tuple[int, bool]:
-  """학생이 이해한 마지막 노드 index + 정답 도달 여부 추정.
+              nodes: list[dict], history_block: str = "",
+              revealed_node_index: int = -1) -> tuple[int, bool, bool]:
+  """학생이 이해한 마지막 노드 index + 정답 도달 여부 + 정답직전 도달 여부 추정.
 
-  반환: (last_understood_index, reached_answer). 노드 없거나 이미지/호출 실패 시 (-1, False).
+  반환: (last_understood_index, reached_answer, reached_near_answer).
+  노드 없거나 이미지/호출 실패 시 (-1, False, False).
   멀티턴 매 턴 호출되어 학생 발화를 노드 결과식과 대조한다(10차).
+  revealed_node_index(18차): 학생이 직전까지 받은 힌트 노드. VL 에 줘서 "같은 갈래면 이 이상,
+    다른 갈래(case_split 형제)면 작아도 정상"을 알려 위치 오판을 줄인다(노드 index≠진행순서).
   history_block: 지금까지의 대화(15차) — "그 다음은?" 같은 맥락 의존 발화의 위치를 정확히 잡게 한다.
+  reached_near_answer(17차): 학생 발화가 정답 직전 노드(이상) 결과식에 도달했는지 직접 판정 —
+    _localize 가 위치 index 를 오판해도 이 신호로 마무리 가드가 견고하게 발동한다.
   """
   if not nodes or not problem_image_path:
-    return -1, False
+    return -1, False, False
   # 각 단계의 실제 결과식(output_formula)까지 보여줘야 학생 진술("3^2/3까지 했다")을
   # 정확한 단계에 매칭한다. key_concept(이름)만 주면 VL 이 위치를 뒤로 과대추정한다.
-  outline = "\n".join(
-    f"  step {n['node_index']}: {n['key_concept']} — 결과: {_strip_math(n.get('output_formula'))}"
-    for n in nodes
-  )
+  # role·uses(전이 DAG)도 줘서 VL 이 갈래 구조(case_split 형제/합류)를 이해하게 한다(18차) —
+  # 노드 index 는 진행 순서가 아니라 DAG 위치라, 형제 갈래 전환을 퇴행으로 오인하면 안 된다.
+  def _node_line(n: dict) -> str:
+    uses = n.get("uses") or []
+    uses_str = f"이전단계 {uses}" if uses else "첫 단계"
+    return (f"  step {n['node_index']} [{n.get('role', '?')}]: {n['key_concept']} "
+            f"— 결과: {_strip_math(n.get('output_formula'))} ({uses_str})")
+  outline = "\n".join(_node_line(n) for n in nodes)
   # 마지막 노드(= conclusion, 정답) 결과식 — 학생 발화가 여기 도달했는지 판정 기준.
   last_output = _strip_math(nodes[-1].get('output_formula')) if nodes else "(없음)"
+  # 정답 직전 노드 결과식(17차) — reached_near_answer 판정 기준. 노드 2개 미만이면 마지막과 동일.
+  near_output = _strip_math(nodes[-2].get('output_formula')) if len(nodes) >= 2 else last_output
   history_prefix = f"{history_block}\n\n" if history_block else ""
+  # revealed 주입(18차) — 학생이 직전까지 받은 노드. 같은 갈래면 이 이상, 다른 갈래면 작아도 정상.
+  revealed_hint = ""
+  if revealed_node_index >= 0:
+    revealed_hint = (
+      f"\n[진행 정보] 학생은 직전까지 step {revealed_node_index} 까지 힌트를 받았습니다.\n"
+      f"- 학생이 **같은 풀이 갈래**를 이어간다면 위치는 보통 step {revealed_node_index} 이상입니다 "
+      f"(진도는 뒤로 안 갑니다). 학생이 더 진전된 결과를 말하면 그 단계로 잡으세요.\n"
+      f"- 단 이 문제에 **경우분리(case_split)** 가 있고 학생이 다른 갈래로 갈아탔다면, step "
+      f"{revealed_node_index} 보다 작은 index 도 정상입니다(형제 갈래). 각 단계의 [role]·이전단계(uses)를 "
+      f"보고 갈래 구조를 파악해, 학생이 어느 갈래의 어디에 있는지 **결과식 기준**으로 잡으세요.\n")
   prompt = f"""[이미지 1] = 학생이 푸는 수학 문제입니다.
 
 학생이 이 문제를 풀다가 막혔거나 진전이 있습니다.
@@ -134,12 +161,13 @@ def _localize(problem_image_path: Optional[str], blocked_desc: str,
 (위 대화 이력은 참고용입니다. "그 다음은?", "맞나요?" 같은 발화는 직전 튜터 힌트가 가리킨 단계를
 이어가는 것이니 맥락으로 해석하되, 위치 판정은 학생이 실제 도달한 결과 기준으로 하세요.)
 
-이 문제 풀이는 다음 단계들로 이뤄집니다(각 단계의 결과식 포함):
+이 문제 풀이는 다음 단계들로 이뤄집니다(각 단계: [role] 개념 — 결과 (이전단계=DAG 전이)):
 {outline}
-
+{revealed_hint}
+정답 직전 단계의 결과: {near_output}
 마지막 단계(정답)의 결과: {last_output}
 
-먼저 reasoning 에 다음을 적고, 그 분석으로 last_understood_index 와 reached_answer 를 판정하세요:
+먼저 reasoning 에 다음을 적고, 그 분석으로 last_understood_index·reached_answer·reached_near_answer 를 판정하세요:
 1) 학생의 말에 나온 식/값을 적는다.
 2) 그 식/값이 위 단계들의 **결과**와 하나씩 대조해 어느 단계의 결과와 일치하는지 찾는다.
    (예: 학생이 "3^(2/3)까지 했다" → 결과가 3^(2/3) 인 단계가 마지막 이해 단계.)
@@ -147,10 +175,16 @@ def _localize(problem_image_path: Optional[str], blocked_desc: str,
 4) 학생의 말이 **마지막 단계 결과({last_output})나 정답에 도달**했으면 reached_answer=true.
    - 정확히 일치하거나, 최종 답 형태의 발화이거나, "다 풀었다/이 값이 답"이 명확한 경우만 true.
    - **확신이 적으면 false.** 틀렸는데 맞다고 인정하면 정답을 흘리는 셈이라, 애매하면 false 가 안전.
+5) 학생의 말이 **정답 직전 단계 결과({near_output}) 또는 그 이후(정답 포함)에 도달**했으면
+   reached_near_answer=true. (예: 직전 결과가 3^(-1) 인데 학생이 "3^-1 인가?"라 함 → true.)
+   - 이건 위치 index 오판과 무관하게, **학생 발화가 거의 다 온 결과에 닿았는지**만 본다.
+   - reached_answer 가 true 면 reached_near_answer 도 당연히 true. **확신이 적으면 false(보수적).**
 
 규칙:
-- **애매하면 뒤(큰 index)가 아니라 앞(작은 index)으로 보수적으로** 잡으세요. 학생이 아직 안 한
-  단계를 이미 했다고 잘못 잡으면 힌트가 엉뚱해집니다.
+- **학생 발화에 특정 단계의 결과식이 명확히 나오면 그 단계로 정확히 잡으세요**(앞으로 끌어내리지 말 것).
+  예: 학생이 "3^-1"이라 하고 그게 step 3 결과면 step 3 입니다 — step 0~1 로 내리면 안 됩니다.
+- **결과식이 모호하거나 어느 단계인지 불분명할 때만** 앞(작은 index)으로 보수적으로 잡으세요(아직 안 한
+  단계를 했다고 과대추정하면 힌트가 엉뚱해지니, 명확하지 않을 때의 안전장치).
 - **특수 공백(NBSP)·화살표(↑↓←→▲▼)·제로폭 문자 금지.** reasoning 에도 일반 ASCII 만 쓰세요."""
 
   try:
@@ -159,9 +193,11 @@ def _localize(problem_image_path: Optional[str], blocked_desc: str,
                   max_tokens=2000, reasoning_effort="medium")
     max_idx = max(n["node_index"] for n in nodes)
     idx = max(-1, min(res.last_understood_index, max_idx))
-    return idx, bool(res.reached_answer)
+    # reached_answer 가 true 면 near 도 true(논리적 포함) — 모델이 빠뜨려도 보정.
+    near = bool(res.reached_near_answer) or bool(res.reached_answer)
+    return idx, bool(res.reached_answer), near
   except Exception as exc:
-    logger.warning(f"막힌 지점 찾기(_localize) 실패 → (-1, False) fallback: {exc}")
+    logger.warning(f"막힌 지점 찾기(_localize) 실패 → (-1, False, False) fallback: {exc}")
     return -1, False
 
 
@@ -363,55 +399,36 @@ def generate_hint(problem_id: str, blocked_description: str,
     history_block = _format_history(conversation_history, limit=7)
 
     # 막힌 지점 찾기: 멀티턴 포함 매 턴 _localize 로 학생 발화를 노드와 대조(10차).
-    # 학생이 정답을 말해도 인정 못 하던 문제 해결 — 위치 재추정 + 정답 도달 판정.
+    # revealed 를 줘서 "같은 갈래면 그 이상, 다른 갈래면 작아도 정상"을 VL 이 알게 한다(18차).
     _t = time.time()
-    current_index, reached_answer = _localize(prob_path, blocked_description, nodes_all, history_block)
+    current_index, reached_answer, reached_near_answer = _localize(
+      prob_path, blocked_description, nodes_all, history_block, revealed_node_index)
     _t_localize = time.time() - _t
 
-    # 퇴행 방지: 멀티턴에서 학생이 헷갈려 뒤로 간 듯한 발화(localize 결과 < 직전 공개)는
-    # 직전 위치를 유지(이미 안내한 단계를 다시 묻지 않게). 단 정답 도달이면 localize 신뢰(정답 점프 허용).
-    if revealed_node_index >= 0 and current_index < revealed_node_index and not reached_answer:
-      logger.info("[TUTOR] problem_id=%s 학생 발화 퇴행 추정 → 직전 위치 유지(localized=%d, revealed=%d)",
-                  problem_id, current_index, revealed_node_index)
-      current_index = revealed_node_index
+    # 18차: 코드 퇴행방지(current<revealed → revealed 강제) 제거.
+    # 노드 index 는 진행순서가 아니라 DAG 위치라, case_split 형제 갈래 전환(노드5→노드2)을
+    # "퇴행"으로 오인해 막으면 오답(사용자 지적). 위치는 VL 이 DAG(role/uses) 보고 판정하게 맡긴다.
+    # "엉뚱한 앞 단계로 돌아감"은 _localize 프롬프트 개선(revealed 주입·명확발화 정확매칭)으로 줄인다.
 
-    # 정답 인정 경로(끝 가드보다 우선) — 학생이 정답/마지막 단계에 도달했으면 VL _generate 없이
-    # 인정+마무리. 정답 수치는 직접 말 안 함(학생이 이미 말했으니 인정만). 멀티턴(revealed>=0)에서만
-    # 발동 — 첫 호출에 곧장 정답 인정으로 빠지는 오판 방지.
-    if reached_answer and revealed_node_index >= 0:
-      logger.info("[TUTOR] problem_id=%s 학생 정답 도달 → 인정+마무리(VL _generate 안 함)", problem_id)
+    # 마무리 가드(18차) — 학생이 정답/정답직전에 도달했으면 VL 없이 종료 유도 마무리.
+    # ① **결정론 1순위(LLM 무관)**: revealed >= last_idx-1. 학생이 (다음힌트로) 정답직전 노드까지
+    #    받았으면 _localize 판정과 무관하게 무조건 마무리. ② reached_answer ③ reached_near_answer(보조).
+    # ①이 핵심 — _localize 가 위치를 오판해도 revealed 는 백엔드가 직접 기록한 값이라 흔들리지 않음.
+    # 정답 직전이면 다음 노드가 conclusion(=정답)이라 VL 호출 시 근거 빈약→timeout + 정답 노출 위험 →
+    # VL 호출 없이 종료. revealed>=0 로 첫 호출 보호.
+    last_idx = max(n["node_index"] for n in nodes_all) if nodes_all else -1
+    if nodes_all and revealed_node_index >= 0 and (
+        revealed_node_index >= last_idx - 1 or reached_answer or reached_near_answer):
+      logger.info("[TUTOR] problem_id=%s 마무리(revealed=%d last_idx=%d ans=%s near=%s) → 종료 유도(VL 없음)",
+                  problem_id, revealed_node_index, last_idx, reached_answer, reached_near_answer)
       return {
-        "hint_text": "정확해요! 잘 따라왔어요. 이제 그대로 정리하면 답이 나와요. 끝까지 한번 적어볼까요?",
+        "hint_text": "오케이, 거의 다 왔어요! 여기까지 정말 잘 따라왔어요. 마지막 답은 직접 고민해서 결정해보세요. 충분히 할 수 있어요!",
         "next_step_concept": None,
-        "next_revealed_node_index": current_index,  # 더 진행 안 함(클라가 hasMore=false 처리)
+        "next_revealed_node_index": max(current_index, last_idx - 1),  # 더 진행 안 함(클라 hasMore=false)
         "reference_nodes": [],
         "figure_urls": [],
         "has_solution_nodes": True,
       }
-
-    # 멀티턴 끝 도달 — 마지막 노드(정답) 또는 그 직전까지 왔으면 더 줄 힌트 없음.
-    # 마지막 직전(current_index == last_idx-1)이면 다음 노드가 conclusion(=정답)이라,
-    # VL 을 부르면 ① 근거에서 정답(output_formula) 제외로 빈약 → gpt-5.2 가 "정답 금지+근거 없음"
-    # 모순에서 thinking 폭주 → 90초 timeout 무응답, ② 정답 노출 위험. 둘 다 막으려 VL 호출 없이
-    # 마무리 안내로 종료(사용자 결정, 9차).
-    # 15차/버그B: 학생이 "3^-1맞나요?"처럼 정답 직전 단계를 **정확히 맞혀** 여기 온 경우,
-    # 맥 빠지는 "정답 못 준다"가 아니라 **"맞아요! 거기까지 정확해요"로 인정+마무리**한다
-    # (사용자 결정: 정답·정답 바로 직전까지는 인정). current_index 가 직전 이상에 도달했다는 것
-    # 자체가 _localize 가 학생을 그 단계로 판정했다는 신호 → 인정 톤으로 통일.
-    if nodes_all:
-      last_idx = max(n["node_index"] for n in nodes_all)
-      # revealed_node_index >= 0 체크로 첫 호출(=-1) 보호: 노드 1개(last_idx==0) 문제에서도
-      # 첫 호출은 -1 이라 이 가드를 통과 못 하고 정상 힌트 → 첫 힌트가 종료로 안 빠진다.
-      if revealed_node_index >= 0 and current_index >= last_idx - 1:
-        logger.info("[TUTOR] problem_id=%s 멀티턴 끝(마지막 or 직전) 도달 → 인정+마무리(VL 호출 안 함)", problem_id)
-        return {
-          "hint_text": "맞아요! 거기까지 정확하게 잘 왔어요. 이제 마지막 한 걸음만 그대로 정리하면 답이 나와요. 직접 끝까지 적어볼까요?",
-          "next_step_concept": None,
-          "next_revealed_node_index": current_index,  # 더 진행 안 함(클라가 hasMore=false 처리)
-          "reference_nodes": [],
-          "figure_urls": [],
-          "has_solution_nodes": True,
-        }
 
     # 검색 쿼리 텍스트: 학생 서술 + 현재 위치 다음 노드 개념(있으면)
     next_node = next((n for n in nodes_all if n["node_index"] == current_index + 1), None)
