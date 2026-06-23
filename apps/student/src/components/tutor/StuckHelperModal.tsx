@@ -2,9 +2,10 @@
 // 막힌 지점 도우미 모달 — 순수 HTML/CSS (Radix Portal 금지: dev-rules)
 // RAG 백엔드(POST /api/tutor/hint)를 호출해 막힌 지점 다음 한 단계만 힌트로 안내.
 import { useState, useEffect } from 'react';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 import { X, Send, Loader2, Lightbulb, Trash2 } from 'lucide-react';
 import { Button } from '@shared/ui/button';
-import { MathText } from '@shared/ui/MathText';
 import { ragHintApi } from '@shared/lib/api';
 
 interface HintTurn {
@@ -16,19 +17,51 @@ interface HintTurn {
 
 // 대화 영속화 — 문제별 localStorage 키. 7일 지난 대화는 로드 시 폐기.
 const CHAT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// 캐시 스키마 버전. 옛 버전(제어문자 sanitize 전 저장분)은 로드 시 폐기(12차).
+const CHAT_CACHE_VERSION = 2;
 const chatKey = (problemId: string) => `tutor_chat_${problemId}`;
 
-// 힌트 텍스트 경량 정리 — 특수문자만 제거하고 수식 렌더는 MathText(MathJax)에 위임(11차).
-// 옛 KaTeX 정규식 파싱은 구분자(\( \))가 빠진 raw 수식(\sqrt[3]{9} 등)을 못 잡아 평문 노출됐다.
-// MathJax 는 구분자 없는 수식도 관대하게 렌더하므로 정규식 파싱을 버리고 MathText 로 통일.
-// 캐시된 옛 대화(localStorage) 방어용으로 NBSP/제로폭/화살표만 정리(9·10차 sanitize 유지).
+// 힌트 텍스트 sanitize — 제어문자·특수문자 제거. 백엔드가 이미 거르지만 localStorage 캐시된
+// 옛 대화(sanitize 적용 전 백엔드가 생성한 제어문자 텍스트) 방어용 이중 안전(12차).
+// 제어문자(U+0000-001F except \t\n\r, U+007F-009F)·NBSP·제로폭/방향·화살표 모두 제거.
 function sanitizeHintText(text: string): string {
   if (!text) return '';
-  // NBSP→공백, 제로폭/방향문자 제거, 화살표(↑↓←→) 제거.
-  text = text.replace(/ /g, ' ')
-    .replace(/[​-‏‪-‮⁠-⁤⁦-⁩﻿]/g, '')
-    .replace(/[←↑→↓]/g, '');
-  return text;
+  return text
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, '')  // 제어문자(C0+C1, \t\n\r 보존)
+    .replace(/ /g, ' ')                                // NBSP → 일반 공백
+    .replace(/[​-‏‪-‮⁠-⁤⁦-⁩﻿؜]/g, '')  // 제로폭/방향
+    .replace(/[←↑→↓]/g, '');            // 화살표 ←↑→↓
+}
+
+// \( ... \) / \[ ... \] 인라인·블록 수식을 KaTeX 로 렌더링한 HTML 반환.
+function renderMath(rawText: string): string {
+  if (!rawText) return '';
+  // 1) 제어문자/특수문자 strip(캐시된 옛 대화 방어).
+  let text = sanitizeHintText(rawText);
+  // 2) 깨진 여는 구분자 방어 — OpenAI 가 `\(`/`\[` 를 `\w(`/`\w[` 또는 대문자 `\W(`/`\W[` 로
+  //    깨뜨리는 경우(백엔드와 동일 방어, 9차에서 대문자까지 확대).
+  //    구분자 바로 앞 `\w`/`\W` 만 좁게 치환해 정상 텍스트 오염 방지.
+  text = text.replace(/\\[wW](?=[([])/g, '\\');
+  const escapeHtml = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // \[ ... \] (블록) → \( ... \) (인라인) 순으로 치환
+  const pattern = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
+  let out = '';
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(text)) !== null) {
+    out += escapeHtml(text.slice(last, m.index));
+    const isBlock = m[1] !== undefined;
+    const expr = (m[1] ?? m[2] ?? '').trim();
+    try {
+      out += katex.renderToString(expr, { displayMode: isBlock, throwOnError: false });
+    } catch {
+      out += escapeHtml(expr);
+    }
+    last = pattern.lastIndex;
+  }
+  out += escapeHtml(text.slice(last));
+  return out;
 }
 
 interface Props {
@@ -54,13 +87,18 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
       const saved = localStorage.getItem(chatKey(problemId));
       if (saved) {
         const data = JSON.parse(saved);
-        if (data && (!data.timestamp || Date.now() - data.timestamp < CHAT_TTL_MS)) {
+        // version 불일치(옛 제어문자 캐시) 또는 만료면 폐기. version 2 부터만 신뢰.
+        if (
+          data &&
+          data.version === CHAT_CACHE_VERSION &&
+          (!data.timestamp || Date.now() - data.timestamp < CHAT_TTL_MS)
+        ) {
           setTurns(Array.isArray(data.turns) ? data.turns : []);
           setRevealedIndex(typeof data.revealedIndex === 'number' ? data.revealedIndex : -1);
           setHasMore(data.hasMore ?? true);
           return;
         }
-        localStorage.removeItem(chatKey(problemId)); // 만료 → 폐기
+        localStorage.removeItem(chatKey(problemId)); // 만료·옛 버전 → 폐기
       }
     } catch (e) {
       console.warn('[tutor] 대화 복구 실패', e);
@@ -70,11 +108,12 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
     setHasMore(true);
   }, [problemId]);
 
-  // 대화 변경 시 저장 (최근 200턴까지만)
+  // 대화 변경 시 저장 (최근 200턴까지만). 저장 직전 각 turn.text sanitize → 깨진 텍스트 캐시 차단(12차).
   useEffect(() => {
     try {
       const data = {
-        turns: turns.slice(-200),
+        version: CHAT_CACHE_VERSION,
+        turns: turns.slice(-200).map((t) => ({ ...t, text: sanitizeHintText(t.text) })),
         revealedIndex,
         hasMore,
         timestamp: Date.now(),
@@ -188,10 +227,9 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
                 {t.concept && (
                   <div className="text-xs font-medium text-amber-600">💡 {t.concept}</div>
                 )}
-                <MathText
+                <div
                   className="leading-relaxed"
-                  text={sanitizeHintText(t.text)}
-                  inline={false}
+                  dangerouslySetInnerHTML={{ __html: renderMath(t.text) }}
                 />
                 {t.figureUrls && t.figureUrls.length > 0 && (
                   <div className="space-y-1">
