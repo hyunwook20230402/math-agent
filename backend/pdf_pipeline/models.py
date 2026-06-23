@@ -12,6 +12,12 @@ from pydantic import BaseModel, Field
 
 # ── 요청 ────────────────────────────────────────────────────────────
 
+class ConversationTurn(BaseModel):
+    """대화 이력 한 턴 — role('student'|'tutor') + text."""
+    role: str
+    text: str
+
+
 class HintRequest(BaseModel):
     """POST /api/tutor/hint — 막힌 지점 도우미"""
     problem_id: str
@@ -20,6 +26,9 @@ class HintRequest(BaseModel):
     )
     revealed_node_index: Optional[int] = Field(
         None, description="멀티턴 — 직전 호출까지 공개한 노드 index. 첫 호출은 생략(또는 -1)"
+    )
+    conversation_history: Optional[list[ConversationTurn]] = Field(
+        None, description="직전까지의 대화 이력(최근 N턴). _localize/_generate 가 맥락으로 사용(15차)."
     )
 
 

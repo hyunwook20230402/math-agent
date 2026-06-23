@@ -30,6 +30,7 @@ async def get_hint(
       problem_id=req.problem_id,
       blocked_description=req.student_blocked_description or "아예 모르겠어요",
       revealed_node_index=req.revealed_node_index if req.revealed_node_index is not None else -1,
+      conversation_history=[t.model_dump() for t in req.conversation_history] if req.conversation_history else None,
     )
   except ValueError as exc:
     raise HTTPException(status_code=404, detail=str(exc))

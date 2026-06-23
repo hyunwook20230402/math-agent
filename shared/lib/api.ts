@@ -1057,13 +1057,16 @@ export const ragHintApi = {
     problemId: string;
     blockedDescription: string;
     revealedNodeIndex?: number;
+    // 직전까지의 대화 이력(최근 N턴) — 백엔드가 _localize/_generate 맥락으로 사용(15차).
+    conversationHistory?: { role: string; text: string }[];
   }) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) throw new Error('로그인이 필요합니다');
 
-    // 힌트 모델이 gpt-5.2(추론)라 길어질 수 있음 — 95초 timeout 후 명확한 에러(무한 로딩 방지).
+    // 힌트 생성은 실측상 3~16초(백엔드 결백, 16회 측정). 어쩌다 느려도 50초면 충분 —
+    // 95초는 과해 사용자가 오래 기다림(16차). 50초 timeout 후 친화 에러 + 재시도 유도.
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 95000);
+    const timeoutId = setTimeout(() => controller.abort(), 50000);
 
     let resp: Response;
     try {
@@ -1077,6 +1080,7 @@ export const ragHintApi = {
           problem_id: params.problemId,
           student_blocked_description: params.blockedDescription,
           revealed_node_index: params.revealedNodeIndex ?? -1,
+          conversation_history: params.conversationHistory ?? [],
         }),
         signal: controller.signal,
       });

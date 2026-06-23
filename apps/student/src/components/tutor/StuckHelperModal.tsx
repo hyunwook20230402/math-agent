@@ -18,8 +18,35 @@ interface HintTurn {
 // 대화 영속화 — 문제별 localStorage 키. 7일 지난 대화는 로드 시 폐기.
 const CHAT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // 캐시 스키마 버전. 옛 버전(제어문자 sanitize 전 저장분)은 로드 시 폐기(12차).
-const CHAT_CACHE_VERSION = 2;
-const chatKey = (problemId: string) => `tutor_chat_${problemId}`;
+export const CHAT_CACHE_VERSION = 2;
+const CHAT_KEY_PREFIX = 'tutor_chat_';
+const chatKey = (problemId: string) => `${CHAT_KEY_PREFIX}${problemId}`;
+
+// 앱 진입 시 1회 호출 — 옛 버전(또는 깨진) tutor_chat_* 캐시를 일괄 폐기(13차/F2).
+// 12차의 키별 로드 시 폐기는 "그 문제를 다시 열 때"만 동작해, 안 연 문제의 옛 깨진 캐시가
+// 남았다. 사용자가 문제를 일일이 안 열어도 앱만 새로 로드하면 모든 옛 캐시가 사라지게 한다.
+export function purgeStaleTutorChatCache(): void {
+  try {
+    const keys = Object.keys(localStorage).filter((k) => k.startsWith(CHAT_KEY_PREFIX));
+    let removed = 0;
+    for (const k of keys) {
+      try {
+        const data = JSON.parse(localStorage.getItem(k) || 'null');
+        const expired = data?.timestamp && Date.now() - data.timestamp >= CHAT_TTL_MS;
+        if (!data || data.version !== CHAT_CACHE_VERSION || expired) {
+          localStorage.removeItem(k);
+          removed++;
+        }
+      } catch {
+        localStorage.removeItem(k); // 파싱 불가(깨진 JSON) → 폐기
+        removed++;
+      }
+    }
+    if (removed > 0) console.info(`[tutor] 옛 대화 캐시 ${removed}개 정리`);
+  } catch {
+    /* localStorage 접근 불가 — 무시 */
+  }
+}
 
 // 힌트 텍스트 sanitize — 제어문자·특수문자 제거. 백엔드가 이미 거르지만 localStorage 캐시된
 // 옛 대화(sanitize 적용 전 백엔드가 생성한 제어문자 텍스트) 방어용 이중 안전(12차).
@@ -33,6 +60,60 @@ function sanitizeHintText(text: string): string {
     .replace(/[←↑→↓]/g, '');            // 화살표 ←↑→↓
 }
 
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// LaTeX 같은 토큰: 백슬래시 명령(\times \frac \sqrt …, 그리고 \, \; \! \: 같은 비알파벳 공백명령)
+// 또는 지수/첨자(a^2, x_{n+1}). 이게 들어있는 덩어리만 KaTeX 렌더를 시도할 후보로 본다(14차).
+// 비알파벳 공백명령(`\,`=얇은공백 등)을 빠뜨리면 화면에 `₩,` 로 raw 노출되므로 포함(15차/버그A).
+const LATEX_TOKEN = /\\(?:[a-zA-Z]+|[,;!:])|[A-Za-z0-9)}\]][\^_]/;
+
+// 공백 없는 한 덩어리에서 "수식으로 볼 선행 부분"의 끝 인덱스를 찾는다(14차).
+// 한국어는 수식 뒤에 조사가 공백 없이 붙는다(`3^{2/3}이다`, `\sqrt[3]{9}를`). 중괄호 밖에서 한글이
+// 나오면 거기서 수식이 끝난 것 → 그 앞만 수식, 뒤 한글은 평문으로 분리. `\text{한글}` 안의 한글은
+// 중괄호 깊이>0 라 보존(KaTeX 가 렌더).
+function splitMathPrefix(chunk: string): number {
+  let depth = 0;
+  for (let i = 0; i < chunk.length; i++) {
+    const c = chunk[i];
+    if (c === '\\') { i++; continue; }                   // 이스케이프 명령 1글자 건너뜀
+    if (c === '{') depth++;
+    else if (c === '}') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && /[가-힣]/.test(c)) return i;  // 중괄호 밖 한글 → 수식 끝
+  }
+  return chunk.length;
+}
+
+// 구분자(\(...\)) 밖 텍스트 조각 처리 — gpt-5.2 가 구분자를 빠뜨린 평문 LaTeX(예: `a^m\times a^n`)도
+// 화면에 raw 노출되지 않게 렌더 시도(14차, 렌더러 폴백). 안전장치: KaTeX `strict:true` —
+// 한글 등 LaTeX 비호환 입력이 섞이면 KaTeX 가 거부(throw)하므로 평문(escapeHtml)으로 폴백(실측 확인).
+// 수식 뒤 한글 조사는 splitMathPrefix 로 미리 떼어내 수식 부분만 렌더한다.
+function renderBareSegment(seg: string): string {
+  if (!seg) return '';
+  return seg
+    .split(/(\s+)/)
+    .map((chunk) => {
+      if (/^\s+$/.test(chunk) || !chunk) return chunk;       // 공백은 그대로
+      if (!LATEX_TOKEN.test(chunk)) return escapeHtml(chunk); // LaTeX 토큰 없으면 평문(한글·일반어)
+      const cut = splitMathPrefix(chunk);
+      const mathPart = chunk.slice(0, cut);
+      const rest = chunk.slice(cut);                          // 뒤에 붙은 한글 조사 등
+      let head: string;
+      if (mathPart && LATEX_TOKEN.test(mathPart)) {
+        try {
+          // strict:true → LaTeX 비호환이면 throw → catch 평문 폴백.
+          head = katex.renderToString(mathPart, { throwOnError: true, strict: true });
+        } catch {
+          head = escapeHtml(mathPart);
+        }
+      } else {
+        head = escapeHtml(mathPart);
+      }
+      return head + escapeHtml(rest);
+    })
+    .join('');
+}
+
 // \( ... \) / \[ ... \] 인라인·블록 수식을 KaTeX 로 렌더링한 HTML 반환.
 function renderMath(rawText: string): string {
   if (!rawText) return '';
@@ -42,15 +123,14 @@ function renderMath(rawText: string): string {
   //    깨뜨리는 경우(백엔드와 동일 방어, 9차에서 대문자까지 확대).
   //    구분자 바로 앞 `\w`/`\W` 만 좁게 치환해 정상 텍스트 오염 방지.
   text = text.replace(/\\[wW](?=[([])/g, '\\');
-  const escapeHtml = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   // \[ ... \] (블록) → \( ... \) (인라인) 순으로 치환
   const pattern = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
   let out = '';
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = pattern.exec(text)) !== null) {
-    out += escapeHtml(text.slice(last, m.index));
+    // 구분자 밖 텍스트도 평문 노출 대신 렌더 폴백(14차).
+    out += renderBareSegment(text.slice(last, m.index));
     const isBlock = m[1] !== undefined;
     const expr = (m[1] ?? m[2] ?? '').trim();
     try {
@@ -60,7 +140,7 @@ function renderMath(rawText: string): string {
     }
     last = pattern.lastIndex;
   }
-  out += escapeHtml(text.slice(last));
+  out += renderBareSegment(text.slice(last));
   return out;
 }
 
@@ -75,6 +155,8 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 실패한 마지막 발화 — timeout/에러 시 "다시 시도" 버튼으로 한 번에 재요청(16차).
+  const [lastFailedDesc, setLastFailedDesc] = useState<string | null>(null);
   // 멀티턴 — 직전 힌트까지 공개한 노드 index (첫 호출 -1)
   const [revealedIndex, setRevealedIndex] = useState<number>(-1);
   const [hasMore, setHasMore] = useState(true);
@@ -127,12 +209,17 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
   const requestHint = async (description: string) => {
     setLoading(true);
     setError(null);
+    setLastFailedDesc(null);
+    // 현재 발화를 추가하기 직전의 turns = 백엔드에 줄 "지금까지의 대화" 이력(최근 7턴, role+text 만).
+    // setTurns 는 비동기라 이 시점 turns 가 곧 직전 이력이다(15차: LLM 이 맥락 이해하게).
+    const history = turns.slice(-7).map((t) => ({ role: t.role, text: t.text }));
     setTurns((prev) => [...prev, { role: 'student', text: description }]);
     try {
       const res = await ragHintApi.getHint({
         problemId,
         blockedDescription: description,
         revealedNodeIndex: revealedIndex,
+        conversationHistory: history,
       });
       setTurns((prev) => [
         ...prev,
@@ -150,9 +237,20 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
       }
     } catch (e: any) {
       setError(e?.message || '힌트 생성에 실패했습니다');
+      // 방금 학생 발화를 turns 에서 빼고(중복 방지) lastFailedDesc 로 보관 → "다시 시도" 버튼(16차).
+      setTurns((prev) => prev.filter((t, i) => !(i === prev.length - 1 && t.role === 'student' && t.text === description)));
+      setLastFailedDesc(description);
     } finally {
       setLoading(false);
     }
+  };
+
+  // timeout/에러 후 마지막 발화를 한 번에 재요청(16차).
+  const retryLast = () => {
+    if (loading || !lastFailedDesc) return;
+    const desc = lastFailedDesc;
+    setLastFailedDesc(null);
+    requestHint(desc);
   };
 
   const handleSubmit = () => {
@@ -255,13 +353,20 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
                 <Loader2 className="h-4 w-4 animate-spin" />
                 힌트를 준비하고 있어요...
               </div>
-              <div className="text-xs text-muted-foreground">생각하는 데 최대 1분 정도 걸릴 수 있어요</div>
+              <div className="text-xs text-muted-foreground">보통 10초 안에 답해요</div>
             </div>
           </div>
         )}
 
         {error && (
-          <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
+          <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 space-y-2">
+            <div>{error}</div>
+            {lastFailedDesc && !loading && (
+              <Button variant="outline" size="sm" className="h-7" onClick={retryLast}>
+                다시 시도
+              </Button>
+            )}
+          </div>
         )}
       </div>
 

@@ -10,6 +10,11 @@ import SolveProblem from '@/pages/SolveProblem';
 import WrongAnswerNote from '@/pages/WrongAnswerNote';
 import AchievementPage from '@/pages/AchievementPage';
 import Header from '@/components/layout/Header';
+import { purgeStaleTutorChatCache } from '@/components/tutor/StuckHelperModal';
+
+// 앱 시작 시 1회 — 옛 버전/깨진 막힌 지점 도우미 대화 캐시 일괄 폐기(13차/F2).
+// 모듈 평가 시점에 실행되어 첫 렌더 전에 끝난다(사용자가 문제를 안 열어도 정리됨).
+purgeStaleTutorChatCache();
 
 // 구 "두번 틀린 문제" 경로 → 통합 오답 페이지로 리다이렉트 (북마크·기존 링크 호환)
 function StillWrongRedirect() {

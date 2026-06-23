@@ -40,9 +40,10 @@ _TIMEOUT_EXC = (openai.APITimeoutError, httpx.TimeoutException)
 
 logger = logging.getLogger(__name__)
 
-# VL 호출 timeout(초). 튜터 모델은 gpt-5.2(추론) 유지라 응답이 길 수 있어 넉넉히.
-# 무한 대기는 막되, 정상 추론을 timeout 으로 끊지 않게 90초.
-_VL_TIMEOUT = 90
+# VL 호출 timeout(초). 실측상 각 VL 호출 max ~6초, 전체 힌트 max 16초(16회 측정, 16차).
+# 프론트 50초와 정합 — 프론트가 먼저 끊는데 백엔드만 90초 도는 낭비 제거. 무한 대기는 막되
+# 정상 추론(어쩌다 느린 경우)엔 충분한 50초.
+_VL_TIMEOUT = 50
 
 # 튜터 힌트 VL 은 OpenAI 단일(2026-06-19 gemma4 폐기). call_vl 이 항상 OpenAI 호출.
 
@@ -57,6 +58,24 @@ def _strip_math(s: Optional[str]) -> str:
   s = _MATH_DELIM.sub('', s)
   s = s.replace('\\times', '×').replace('\\cdot', '·').replace('\\frac', 'frac')
   return s.strip()
+
+
+# 대화 이력(최근 N턴)을 "학생: …/튜터: …" 블록으로 포맷(15차). LLM 이 맥락을 이해하게 _localize/_generate
+# 프롬프트에 주입. 빈 이력이면 빈 문자열(첫 호출 등 → 기존 동작 그대로, 회귀 0).
+def _format_history(history: Optional[list[dict]], limit: int = 7) -> str:
+  if not history:
+    return ""
+  lines = []
+  for t in history[-limit:]:
+    role = t.get("role")
+    text = (t.get("text") or "").strip()
+    if not text:
+      continue
+    who = "학생" if role == "student" else "튜터"
+    lines.append(f"{who}: {text}")
+  if not lines:
+    return ""
+  return "지금까지의 대화:\n" + "\n".join(lines)
 
 
 # ── 이미지 다운로드 (call_vl 은 로컬 파일 경로를 요구) ─────────────────────────
@@ -89,11 +108,12 @@ class _Localized(BaseModel):
 
 
 def _localize(problem_image_path: Optional[str], blocked_desc: str,
-              nodes: list[dict]) -> tuple[int, bool]:
+              nodes: list[dict], history_block: str = "") -> tuple[int, bool]:
   """학생이 이해한 마지막 노드 index + 정답 도달 여부 추정.
 
   반환: (last_understood_index, reached_answer). 노드 없거나 이미지/호출 실패 시 (-1, False).
   멀티턴 매 턴 호출되어 학생 발화를 노드 결과식과 대조한다(10차).
+  history_block: 지금까지의 대화(15차) — "그 다음은?" 같은 맥락 의존 발화의 위치를 정확히 잡게 한다.
   """
   if not nodes or not problem_image_path:
     return -1, False
@@ -105,10 +125,14 @@ def _localize(problem_image_path: Optional[str], blocked_desc: str,
   )
   # 마지막 노드(= conclusion, 정답) 결과식 — 학생 발화가 여기 도달했는지 판정 기준.
   last_output = _strip_math(nodes[-1].get('output_formula')) if nodes else "(없음)"
+  history_prefix = f"{history_block}\n\n" if history_block else ""
   prompt = f"""[이미지 1] = 학생이 푸는 수학 문제입니다.
 
 학생이 이 문제를 풀다가 막혔거나 진전이 있습니다.
-학생의 말: "{blocked_desc}"
+{history_prefix}학생의 현재 말: "{blocked_desc}"
+
+(위 대화 이력은 참고용입니다. "그 다음은?", "맞나요?" 같은 발화는 직전 튜터 힌트가 가리킨 단계를
+이어가는 것이니 맥락으로 해석하되, 위치 판정은 학생이 실제 도달한 결과 기준으로 하세요.)
 
 이 문제 풀이는 다음 단계들로 이뤄집니다(각 단계의 결과식 포함):
 {outline}
@@ -206,7 +230,7 @@ def _evidence_line(n: dict) -> str:
 
 
 def _generate(problem_image_path: Optional[str], blocked_desc: str,
-              nodes: list[dict], figure_paths: list[str]) -> _Hint:
+              nodes: list[dict], figure_paths: list[str], history_block: str = "") -> _Hint:
   if nodes:
     evidence = "\n".join(_evidence_line(n) for n in nodes)
     grounding = f"""다음은 이 문제(및 같은 유형 기출)의 풀이 단계 근거입니다:
@@ -218,10 +242,11 @@ def _generate(problem_image_path: Optional[str], blocked_desc: str,
     grounding = """이 문제는 단계별 해설 데이터가 아직 없습니다.
 문제 이미지를 직접 읽고, 학생이 막힌 지점 바로 다음 한 단계만 힌트로 안내하세요."""
 
+  history_prefix = f"{history_block}\n\n" if history_block else ""
   prompt = f"""당신은 친절한 고등학교 수학 튜터입니다.
 
 [이미지 1] = 학생이 푸는 문제입니다.
-학생의 말: "{blocked_desc}"
+{history_prefix}학생의 현재 말: "{blocked_desc}"
 
 {grounding}
 
@@ -229,15 +254,20 @@ def _generate(problem_image_path: Optional[str], blocked_desc: str,
 - 힌트는 1~2문장, 한국어. 한 번에 다음 한 걸음만. 전체 풀이를 쏟아내지 마세요.
 - **정답(최종 수치)·객관식 보기 번호(①②③④⑤)를 절대 말하지 마세요.** 답을 직접 알려주는 게 아니라
   학생이 스스로 다음 발을 디디게 질문·방향만 주세요.
-- **학생의 말이 이미 올바른 다음 단계/정답이면 같은 걸 또 묻지 말고, 짧게 인정("맞아요! 잘했어요")
-  하고 자연스럽게 다음으로 이어가세요.**
+- **위 대화 이력을 참고해 자연스럽게 이어가세요. 이미 준 힌트를 똑같이 반복하지 말고, 학생이 방금
+  한 말이 맞으면 짧게 인정("맞아요! 잘했어요")한 뒤 다음 한 걸음으로 넘어가세요.** (이력은 맥락 참고용 —
+  거기 담긴 정답·중간 결과를 다시 흘리지 마세요.)
 - **모든 수식·숫자식·지수·근호·분수·기호는 반드시 LaTeX 인라인 \\( ... \\) 로 감싼다. 평문 수식 절대 금지.**
   구분자(\\( \\))가 빠진 수식은 화면에서 깨져 보인다. 답변을 쓴 뒤 모든 수식에 \\(...\\) 가 붙었는지 다시 확인하라.
   좋은 예 / 나쁜 예:
-    ❌ "9를 3^2로 쓰면"        → ✅ "\\(9\\)를 \\(3^2\\)로 쓰면"
-    ❌ "세제곱근 9를 구하려면"  → ✅ "\\(\\sqrt[3]{{9}}\\)를 구하려면"
-    ❌ "분자가 2x+1"           → ✅ "분자가 \\(2x+1\\)"
-  유형별: 근호 \\(\\sqrt{{2}}\\)·\\(\\sqrt[3]{{x}}\\), 분수 \\(\\frac{{1}}{{2}}\\), 지수 \\(2^x\\)·\\(e^{{-t}}\\), 첨자 \\(a_1\\)·\\(x_{{n+1}}\\).
+    ❌ "9를 3^2로 쓰면"          → ✅ "\\(9\\)를 \\(3^2\\)로 쓰면"
+    ❌ "세제곱근 9를 구하려면"    → ✅ "\\(\\sqrt[3]{{9}}\\)를 구하려면"
+    ❌ "분자가 2x+1"             → ✅ "분자가 \\(2x+1\\)"
+    ❌ "a^m\\times a^n 일 때"     → ✅ "\\(a^m \\times a^n\\)일 때"   ← 곱셈 명령도 반드시 \\(...\\) 안에!
+    ❌ "3^a\\times 3^b 는"        → ✅ "\\(3^a \\times 3^b\\)는"
+  유형별: 근호 \\(\\sqrt{{2}}\\)·\\(\\sqrt[3]{{x}}\\), 분수 \\(\\frac{{1}}{{2}}\\), 지수 \\(2^x\\)·\\(e^{{-t}}\\),
+  첨자 \\(a_1\\)·\\(x_{{n+1}}\\), 곱셈 \\(a \\times b\\)·\\(2 \\cdot 3\\), 나눗셈 \\(a \\div b\\)·\\(\\frac{{a}}{{b}}\\).
+  **특히 `\\times`·`\\cdot`·`\\div`·`\\frac` 같은 LaTeX 명령은 절대 `\\(...\\)` 밖 평문에 쓰지 마세요.**
 - **특수 공백(NBSP)·화살표(↑↓←→▲▼)·제로폭 문자 금지.** 공백은 일반 띄어쓰기, 곱셈은 \\times,
   화살표가 필요하면 \\rightarrow 등 LaTeX 명령으로 쓰세요."""
 
@@ -287,13 +317,15 @@ def _generate(problem_image_path: Optional[str], blocked_desc: str,
 # ── 공개 진입점 ───────────────────────────────────────────────────────────────
 
 def generate_hint(problem_id: str, blocked_description: str,
-                  revealed_node_index: int = -1) -> dict:
+                  revealed_node_index: int = -1,
+                  conversation_history: Optional[list[dict]] = None) -> dict:
   """막힌 지점 힌트 1발 생성.
 
   Args:
     problem_id: 현재 푸는 문제 id
     blocked_description: 학생의 막힌 지점 서술 ("아예 모르겠어요" 포함)
     revealed_node_index: 직전 호출까지 공개한 노드 index (멀티턴; 첫 호출 -1)
+    conversation_history: 직전까지의 대화 이력(최근 N턴, role+text). _localize/_generate 맥락(15차).
 
   Returns:
     {hint_text, next_step_concept, next_revealed_node_index,
@@ -326,10 +358,14 @@ def generate_hint(problem_id: str, blocked_description: str,
   figure_paths: list[str] = []
   _t_localize = _t_retrieve = _t_figures = _t_generate = 0.0
   try:
+    # 대화 이력(최근 7턴)을 맥락 블록으로 — _localize/_generate 가 "그 다음은?" 같은 발화를
+    # 직전 힌트 맥락으로 이해하게 한다(15차). 빈 이력이면 빈 문자열(첫 호출 → 기존 동작).
+    history_block = _format_history(conversation_history, limit=7)
+
     # 막힌 지점 찾기: 멀티턴 포함 매 턴 _localize 로 학생 발화를 노드와 대조(10차).
     # 학생이 정답을 말해도 인정 못 하던 문제 해결 — 위치 재추정 + 정답 도달 판정.
     _t = time.time()
-    current_index, reached_answer = _localize(prob_path, blocked_description, nodes_all)
+    current_index, reached_answer = _localize(prob_path, blocked_description, nodes_all, history_block)
     _t_localize = time.time() - _t
 
     # 퇴행 방지: 멀티턴에서 학생이 헷갈려 뒤로 간 듯한 발화(localize 결과 < 직전 공개)는
@@ -357,15 +393,19 @@ def generate_hint(problem_id: str, blocked_description: str,
     # 마지막 직전(current_index == last_idx-1)이면 다음 노드가 conclusion(=정답)이라,
     # VL 을 부르면 ① 근거에서 정답(output_formula) 제외로 빈약 → gpt-5.2 가 "정답 금지+근거 없음"
     # 모순에서 thinking 폭주 → 90초 timeout 무응답, ② 정답 노출 위험. 둘 다 막으려 VL 호출 없이
-    # "거의 다 왔지만 답은 직접 못 준다" 마무리 안내로 종료(사용자 결정, 9차).
+    # 마무리 안내로 종료(사용자 결정, 9차).
+    # 15차/버그B: 학생이 "3^-1맞나요?"처럼 정답 직전 단계를 **정확히 맞혀** 여기 온 경우,
+    # 맥 빠지는 "정답 못 준다"가 아니라 **"맞아요! 거기까지 정확해요"로 인정+마무리**한다
+    # (사용자 결정: 정답·정답 바로 직전까지는 인정). current_index 가 직전 이상에 도달했다는 것
+    # 자체가 _localize 가 학생을 그 단계로 판정했다는 신호 → 인정 톤으로 통일.
     if nodes_all:
       last_idx = max(n["node_index"] for n in nodes_all)
       # revealed_node_index >= 0 체크로 첫 호출(=-1) 보호: 노드 1개(last_idx==0) 문제에서도
       # 첫 호출은 -1 이라 이 가드를 통과 못 하고 정상 힌트 → 첫 힌트가 종료로 안 빠진다.
       if revealed_node_index >= 0 and current_index >= last_idx - 1:
-        logger.info("[TUTOR] problem_id=%s 멀티턴 끝 도달(마지막 or 직전) → 종료 안내(VL 호출 안 함)", problem_id)
+        logger.info("[TUTOR] problem_id=%s 멀티턴 끝(마지막 or 직전) 도달 → 인정+마무리(VL 호출 안 함)", problem_id)
         return {
-          "hint_text": "거의 다 왔어요! 마지막 한 걸음만 남았는데, 정답은 직접 알려줄 수 없어요. 지금까지 정리한 걸 바탕으로 스스로 마무리해볼까요?",
+          "hint_text": "맞아요! 거기까지 정확하게 잘 왔어요. 이제 마지막 한 걸음만 그대로 정리하면 답이 나와요. 직접 끝까지 적어볼까요?",
           "next_step_concept": None,
           "next_revealed_node_index": current_index,  # 더 진행 안 함(클라가 hasMore=false 처리)
           "reference_nodes": [],
@@ -409,7 +449,7 @@ def generate_hint(problem_id: str, blocked_description: str,
     _t_figures = time.time() - _t
 
     _t = time.time()
-    hint = _generate(prob_path, blocked_description, retrieved, figure_paths)
+    hint = _generate(prob_path, blocked_description, retrieved, figure_paths, history_block)
     _t_generate = time.time() - _t
     logger.info(
       "[TUTOR] problem_id=%s download=%.1fs localize=%.1fs retrieve=%.1fs figures=%.1fs generate=%.1fs total=%.1fs",
