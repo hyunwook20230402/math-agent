@@ -31,6 +31,16 @@ def _select_embed_provider() -> str:
 # Ollama
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
+# 로컬 ollama fallback — 서버 터널(예: 21434)이 죽었을 때 로컬 11434 로 자동 재시도.
+# 같은 bge-m3(1024차원)라 차원 호환. OLLAMA_URL 이 이미 11434 면 중복 제거.
+_LOCAL_OLLAMA_URL = "http://localhost:11434"
+
+
+def _ollama_urls() -> List[str]:
+  urls = [OLLAMA_URL]
+  if _LOCAL_OLLAMA_URL not in urls:
+    urls.append(_LOCAL_OLLAMA_URL)
+  return urls
 
 # OpenAI
 OPENAI_EMBED_MODEL = os.environ.get("OPENAI_EMBED_MODEL", "text-embedding-3-small")
@@ -52,13 +62,28 @@ def get_provider_model_tag() -> Tuple[str, str]:
 # ── Ollama ────────────────────────────────────────────────────────────────────
 
 def _generate_embedding_ollama(text: str) -> List[float]:
-  resp = requests.post(
-    f"{OLLAMA_URL}/api/embed",
-    json={"model": EMBED_MODEL, "input": text},
-    timeout=60,
-  )
-  resp.raise_for_status()
-  return resp.json()["embeddings"][0]
+  # 서버 터널(OLLAMA_URL) 우선 시도 → 죽었으면 로컬 11434 fallback.
+  # 죽은 터널에 오래 안 매달리게 timeout 15초.
+  urls = _ollama_urls()
+  last_err: Exception | None = None
+  for i, base in enumerate(urls):
+    try:
+      resp = requests.post(
+        f"{base}/api/embed",
+        json={"model": EMBED_MODEL, "input": text},
+        timeout=15,
+      )
+      resp.raise_for_status()
+      if i > 0:
+        logger.warning(f"임베딩: {urls[0]} 실패 → 로컬 fallback {base} 성공")
+      return resp.json()["embeddings"][0]
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+      last_err = e
+      if i < len(urls) - 1:
+        logger.warning(f"임베딩 {base} 접속 실패 → 다음 URL 시도: {e}")
+        continue
+      raise
+  raise last_err if last_err else RuntimeError("ollama embed failed")
 
 
 _OLLAMA_BATCH_SIZE = 8

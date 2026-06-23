@@ -211,7 +211,15 @@ parsed` 에러가 나고 그 턴이 멈춘다("또 멈췄다" 의 진짜 원인)
   - 모델 `models.py` — `HintRequest`/`HintResponse`/`NodeReference`
 - **DB**: `solution_nodes` 테이블(uses/whys 포함, baseline 에 반영) + RPC `search_solution_nodes_for_hint`. 임베딩 **bge-m3 1024차원**(problems.embedding 과 동일 — OpenAI 1536 혼입 금지).
 - **VL**: `call_vl()` 통일(막힌 지점 찾기/힌트 만들기/노드추출 멀티모달). OpenAI 단일.
-- **백필**: `cd backend/pdf_pipeline && venv\Scripts\activate && python -m scripts.backfill_solution_nodes --limit 5` (`OLLAMA_URL` 이 서버 터널 21434 면 임베딩 위해 로컬 11434 로 override 필요. `OPENAI_API_KEY` 필수).
+- **튜터 힌트 모델·타임아웃 정책 (2026-06-23)**: 힌트(`stuck_helper` _localize/_generate)는 **`OPENAI_MODEL`(gpt-5.2) 유지**(품질 우선, 사용자 결정). 추론 모델이라 느려서 다음으로 대응 — ① VL timeout **90초**(`_VL_TIMEOUT`), `_call_openai` 가 `with_options(timeout=)` 로 실제 적용. ② `_generate` 재시도는 **timeout 예외엔 즉시 실패**(2배 대기 방지), rate limit/5xx 만 1회 재시도. ③ 프론트 `ragHintApi.getHint` 는 AbortController **95초** timeout + 친화 에러. 단계별 시간은 `[TUTOR] ... total=Xs` 로그로 관찰.
+- **튜터 gpt-5.2 안정화 (2026-06-23, 8차)**: gpt-5.2(추론 모델)는 **structured output(JSON 강제)에서 같은 문자 반복 디코딩 루프**에 빠져 출력이 깨짐(제어문자·` ` 무한반복→JSON 잘림). 해결:
+  - **힌트 생성(_generate)은 structured output 폐기 → 자유 텍스트** `call_vl_text()`(vl_providers, `responses.create`, text_format 없음). 반환 텍스트를 `_fix_latex_subscript_escapes` 후처리 후 `_Hint(hint_text=…, next_step_concept=None)` 로 감쌈(호출부 호환). 자유 텍스트는 루프가 없어 한 방에 정상. `next_step_concept` 는 모델이 안 주므로 None(프론트 개념 배지 생략).
+  - **reasoning effort**: 힌트 `low`(짧은 출력, thinking 최소), 위치추적 `_localize` `medium`(대조 추론 정확도). `call_vl(..., reasoning_effort=…)` → `responses.parse` 에 `reasoning={"effort":…}` 주입. `max_tokens=2000`(thinking+출력 합산 여유).
+  - **verbosity 미사용**: Responses API 가 `text.verbosity` 로 받는데 `text_format` 과 병합이 까다로워 적용 안 함(프롬프트 "1~2문장" 으로 길이 제어). call_vl 의 verbosity 인자는 받아두되 무시.
+  - **_localize 는 structured 유지**(index 정수 짧아 루프 안 깨짐) + CoT 프롬프트(reasoning 필드에 단계 결과식 대조 먼저).
+  - 근거 노드 `_retrieve(limit=4)`(5→4 경량화). 7차 재생성 방어·끝 도달 종료 안내는 보조로 유지.
+- **임베딩 로컬 fallback (2026-06-23)**: `embedder._generate_embedding_ollama` 가 `OLLAMA_URL`(서버 터널 21434) 접속 실패 시 **로컬 `http://localhost:11434` 자동 재시도**(같은 bge-m3 1024차원, 차원 호환). timeout 15초. 둘 다 죽으면 예외 → stuck_helper same-problem fallback. OpenAI 임베딩(1536) fallback 은 RAG 검색용으론 부적합이라 차단 유지.
+- **백필**: `cd backend/pdf_pipeline && venv\Scripts\activate && python -m scripts.backfill_solution_nodes --limit 5` (`OPENAI_API_KEY` 필수. 임베딩은 OLLAMA_URL 실패 시 로컬 11434 자동 fallback 하므로 수동 override 불필요).
 - **도형/그래프 (2026-06-18 결정)**: 해설 도형 자동 crop 안 함. `rag_node_extractor` 는 `figure_image_crop_url=None` 으로 두고(해설 통째 폴백은 정답 노출 위험), `figure_description`(VL 언어화)만 검색·근거로 사용. 정확한 도형 영역은 **CMS 수동 bbox 로 채운다(후속)**. 1차는 도형 이미지 없이 텍스트 힌트만(graceful). stuck_helper 는 같은 문제(`is_same_problem`) crop 은 학생에게 안 보여줌(정답 노출 방어).
 - **프론트**: `apps/student` `SolveProblem.tsx` → `components/tutor/StuckHelperModal.tsx` → `shared/lib/api.ts:ragHintApi.getHint`. base URL env `VITE_TUTOR_API_URL`(구 `VITE_DEEPTUTOR_URL` 하위호환 fallback), 기본 `http://localhost:8001`.
 - **하네스**:

@@ -31,14 +31,46 @@ logger = logging.getLogger(__name__)
 # 앞의 `\_` 만 좁게 매칭. 정상 `a_1`(백슬래시 없음)은 매칭 안 됨.
 _LATEX_SUBSCRIPT_ESCAPE = re.compile(r'(?<!\\)\\_(?=[0-9a-zA-Z])')
 
+# 깨진 수식 여는 구분자 복원. OpenAI 가 인라인 `\(` / 블록 `\[` 를 `\w(` / `\w[` 로 깨뜨려
+# 출력하는 케이스(존재하지 않는 `\w` 명령). 프론트 renderMath 가 `\(...\)` 매칭에 실패해
+# 전체가 raw 노출되며 `\w` 의 백슬래시가 안 보여 'w' 만 남는 버그(2026-06-23).
+# 구분자 `(`/`[` 바로 앞 `\w` 만 좁게 매칭 — 정상 텍스트의 `\w` 는 건드리지 않음.
+_LATEX_BROKEN_DELIM = re.compile(r'\\w(?=[\(\[])')
+
+
+def _fix_latex_broken_delimiters(s: str) -> str:
+  """깨진 여는 구분자 `\\w(`→`\\(`, `\\w[`→`\\[` 복원."""
+  if not s:
+    return s
+  fixed = _LATEX_BROKEN_DELIM.sub(r'\\', s)
+  if fixed != s:
+    logger.warning("[latex] 깨진 구분자 복원(\\w → \\): %r → %r", s[:60], fixed[:60])
+  return fixed
+
+
+# 제어문자(\x00-\x08,\x0b,\x0c,\x0e-\x1f,\x7f). \t\n\r 은 보존.
+_CONTROL_CHARS = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
+
+def _strip_control_chars(s: str) -> str:
+  """LLM 이 간헐적으로 뱉는 제어문자(예: \\x7f) 제거 — 화면에 깨진 기호로 보이는 것 방지."""
+  if not s:
+    return s
+  fixed = _CONTROL_CHARS.sub('', s)
+  if fixed != s:
+    logger.warning("[latex] 제어문자 제거: %d개", len(s) - len(fixed))
+  return fixed
+
 
 def _fix_latex_subscript_escapes(s: str) -> str:
-  """LaTeX 최종 문자열 보정 — 아래첨자 백슬래시(`\\_`→`_`) + 닫는 짝(중괄호/구분자) 누락 채우기.
+  """LaTeX 최종 문자열 보정 — 제어문자 제거 + 깨진 구분자 복원 + 아래첨자 백슬래시(`\\_`→`_`) + 닫는 짝 누락 채우기.
 
-  추출·편집 양쪽이 저장 직전 이 함수를 거치므로, 여기서 닫는 짝까지 보정하면 두 경로 모두 커버.
+  추출·편집·힌트 생성이 저장/반환 직전 이 함수를 거치므로, 여기서 다 보정하면 모든 경로 커버.
   """
   if not s:
     return s
+  s = _strip_control_chars(s)
+  s = _fix_latex_broken_delimiters(s)
   s = _LATEX_SUBSCRIPT_ESCAPE.sub('_', s)
   s = _balance_latex_delimiters(s)
   return s
@@ -136,6 +168,17 @@ def _mime_for(path: str) -> str:
   return "image/jpeg" if suffix in (".jpg", ".jpeg") else "image/png"
 
 
+def _build_content(image_path: ImagePaths, prompt: str) -> list[dict]:
+  """이미지(들) base64 + 프롬프트 → responses API content 블록."""
+  content: list[dict] = []
+  for p in _normalize_paths(image_path):
+    with open(p, "rb") as f:
+      img_b64 = base64.b64encode(f.read()).decode("utf-8")
+    content.append({"type": "input_image", "image_url": f"data:{_mime_for(p)};base64,{img_b64}"})
+  content.append({"type": "input_text", "text": prompt})
+  return content
+
+
 def call_vl(
   image_path: ImagePaths,
   prompt: str,
@@ -145,6 +188,8 @@ def call_vl(
   provider: str | None = None,
   max_tokens: int | None = None,
   model: str | None = None,
+  reasoning_effort: str | None = None,
+  verbosity: str | None = None,
 ) -> T:
   """VL 모델(OpenAI) 호출. 반환값은 항상 schema 인스턴스 (Pydantic 검증 완료).
 
@@ -152,13 +197,59 @@ def call_vl(
   provider 인자는 하위호환용으로 받기만 하고 무시한다(항상 OpenAI).
   max_tokens 는 출력 잘림 방어용(list[Node] 1회 통합 등 긴 출력).
   model 을 지정하면 그 모델로 호출(예: 메타 분석은 gpt-4o). 없으면 OPENAI_MODEL env.
+  reasoning_effort("minimal"/"low"/"medium"/"high") 는 추론 모델(gpt-5 계열)의 thinking 토큰 제어 —
+    힌트처럼 짧은 출력엔 low, 위치 판단엔 medium. None 이면 미적용.
+  verbosity("low"/"medium"/"high") 는 출력 장황도. None 이면 미적용.
   """
-  return _call_openai(image_path, prompt, schema, timeout, max_tokens=max_tokens, model=model)
+  return _call_openai(image_path, prompt, schema, timeout, max_tokens=max_tokens,
+                      model=model, reasoning_effort=reasoning_effort, verbosity=verbosity)
+
+
+def call_vl_text(
+  image_path: ImagePaths,
+  prompt: str,
+  timeout: int | None = None,
+  *,
+  max_tokens: int | None = None,
+  model: str | None = None,
+  reasoning_effort: str | None = None,
+) -> str:
+  """VL 모델(OpenAI) 자유 텍스트 호출 — structured output 없이 평문 반환.
+
+  gpt-5.2(추론 모델)는 structured output(JSON 강제)에서 같은 문자를 반복하는 디코딩 루프에
+  빠져 출력이 깨지는 경우가 잦다. 짧은 자연어 힌트는 자유 텍스트가 훨씬 안정적이라 별도 경로로 둔다.
+  반환 후 호출부가 LaTeX 보정(_fix_latex_subscript_escapes) 등 후처리를 한다.
+  """
+  try:
+    import openai
+  except ImportError as e:
+    raise ImportError("openai 패키지 필요: pip install openai") from e
+  api_key = os.environ.get("OPENAI_API_KEY", "")
+  if not api_key:
+    raise ValueError("OPENAI_API_KEY 환경변수 없음")
+
+  client = openai.OpenAI(api_key=api_key)
+  model = model or os.environ.get("OPENAI_MODEL", OPENAI_MODEL)
+  kwargs: dict = {"model": model, "input": [{"role": "user", "content": _build_content(image_path, prompt)}]}
+  if max_tokens is not None:
+    kwargs["max_output_tokens"] = max_tokens
+  if reasoning_effort is not None:
+    kwargs["reasoning"] = {"effort": reasoning_effort}
+
+  client = client.with_options(timeout=timeout if timeout is not None else 45)
+  response = client.responses.create(**kwargs)
+
+  status = getattr(response, "status", None)
+  if status == "incomplete":
+    reason = getattr(getattr(response, "incomplete_details", None), "reason", "unknown")
+    raise RuntimeError(f"OpenAI 응답 미완(잘림): reason={reason} — max_tokens 상향 필요")
+  return (getattr(response, "output_text", None) or "").strip()
 
 
 def _call_openai(image_path: ImagePaths, prompt: str, schema: type[T],
                  timeout: int | None = None, max_tokens: int | None = None,
-                 model: str | None = None) -> T:
+                 model: str | None = None, reasoning_effort: str | None = None,
+                 verbosity: str | None = None) -> T:
   try:
     import openai
   except ImportError as e:
@@ -171,16 +262,7 @@ def _call_openai(image_path: ImagePaths, prompt: str, schema: type[T],
   client = openai.OpenAI(api_key=api_key)
   model = model or os.environ.get("OPENAI_MODEL", OPENAI_MODEL)
 
-  paths = _normalize_paths(image_path)
-  content: list[dict] = []
-  for p in paths:
-    with open(p, "rb") as f:
-      img_b64 = base64.b64encode(f.read()).decode("utf-8")
-    content.append({
-      "type": "input_image",
-      "image_url": f"data:{_mime_for(p)};base64,{img_b64}",
-    })
-  content.append({"type": "input_text", "text": prompt})
+  content = _build_content(image_path, prompt)
 
   kwargs: dict = {
     "model": model,
@@ -190,7 +272,16 @@ def _call_openai(image_path: ImagePaths, prompt: str, schema: type[T],
   # 출력 잘림 방어 — max_tokens 명시 시 전달. None 이면 모델 기본(제한 안 둠).
   if max_tokens is not None:
     kwargs["max_output_tokens"] = max_tokens
+  # 추론 모델(gpt-5 계열) 제어 — thinking 토큰 제어가 핵심. None 이면 미적용(하위호환).
+  if reasoning_effort is not None:
+    kwargs["reasoning"] = {"effort": reasoning_effort}
+  # verbosity 는 Responses API 에서 text.verbosity 로 받는데, 우리는 text_format(structured output)을
+  # 쓰므로 text 객체 병합이 까다로움 → 적용 안 함(프롬프트의 "1~2문장만" 으로 출력 길이 제어로 충분).
+  # (인자는 받아두되 무시 — 호출부 수정 없이 안전.)
+  _ = verbosity
 
+  # timeout 실제 적용 — 미지정 시 45초(무한 대기 방지). 호출별로 with_options 로 주입.
+  client = client.with_options(timeout=timeout if timeout is not None else 45)
   response = client.responses.parse(**kwargs)
 
   # truncation 감지 — incomplete(토큰 한계) 면 조용한 JSON 손상 대신 loud fail.

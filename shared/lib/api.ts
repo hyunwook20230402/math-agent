@@ -1061,18 +1061,33 @@ export const ragHintApi = {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) throw new Error('로그인이 필요합니다');
 
-    const resp = await fetch(`${TUTOR_API_BASE_URL}/api/tutor/hint`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({
-        problem_id: params.problemId,
-        student_blocked_description: params.blockedDescription,
-        revealed_node_index: params.revealedNodeIndex ?? -1,
-      }),
-    });
+    // 힌트 모델이 gpt-5.2(추론)라 길어질 수 있음 — 95초 timeout 후 명확한 에러(무한 로딩 방지).
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 95000);
+
+    let resp: Response;
+    try {
+      resp = await fetch(`${TUTOR_API_BASE_URL}/api/tutor/hint`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          problem_id: params.problemId,
+          student_blocked_description: params.blockedDescription,
+          revealed_node_index: params.revealedNodeIndex ?? -1,
+        }),
+        signal: controller.signal,
+      });
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        throw new Error('힌트가 오래 걸려요. 잠시 후 다시 시도해주세요.');
+      }
+      throw e;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!resp.ok) {
       let detail = '힌트 생성에 실패했습니다';

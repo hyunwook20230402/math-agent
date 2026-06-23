@@ -15,8 +15,7 @@ import {
   Clock, 
   BookOpen,
   Send,
-  AlertCircle,
-  Lightbulb
+  AlertCircle
 } from 'lucide-react';
 import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@shared/lib/api';
 import { checkAnswer } from '@shared/lib/answerNormalizer';
@@ -51,7 +50,6 @@ const SolveProblem = () => {
   const [attemptCounts, setAttemptCounts] = useState<{ [key: string]: number }>({});
   const [timeSpent, setTimeSpent] = useState(0);
   const [isWrongAnswersOnly, setIsWrongAnswersOnly] = useState(false);
-  const [showStuckHelper, setShowStuckHelper] = useState(false);
 
   // 배포 날짜를 URL 파라미터로 변환하는 함수
   const getDistributionDateParam = () => {
@@ -466,8 +464,11 @@ const SolveProblem = () => {
         </div>
       </div>
 
-      {/* 문제 카드 */}
-      <Card className="max-w-4xl mx-auto">
+      {/* 2단 레이아웃: 좌측 문제 / 우측 막힌 지점 도우미 채팅 (데스크톱) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* 좌측: 문제 카드 */}
+        <div className="lg:col-span-2">
+      <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>문제 {currentProblemIndex + 1}</CardTitle>
@@ -525,18 +526,6 @@ const SolveProblem = () => {
             )}
           </div>
 
-          {/* 막힌 지점 도우미 */}
-          <div className="pt-2">
-            <Button
-              variant="outline"
-              className="w-full border-amber-300 text-amber-700 hover:bg-amber-50"
-              onClick={() => setShowStuckHelper(true)}
-            >
-              <Lightbulb className="h-4 w-4 mr-2" />
-              막혔어요 — 도움받기
-            </Button>
-          </div>
-
           {/* 네비게이션 */}
           <div className="flex justify-between pt-4">
             <Button
@@ -568,14 +557,15 @@ const SolveProblem = () => {
           </div>
         </CardContent>
       </Card>
+        </div>
 
-      {/* 막힌 지점 도우미 모달 */}
-      {showStuckHelper && currentProblem && (
-        <StuckHelperModal
-          problemId={currentProblem.id}
-          onClose={() => setShowStuckHelper(false)}
-        />
-      )}
+        {/* 우측: 막힌 지점 도우미 채팅 (상시 노출). 데스크톱은 sticky, 모바일은 문제 아래로 스택 */}
+        <div className="lg:col-span-1">
+          <div className="lg:sticky lg:top-6 h-[70vh] lg:h-[calc(100vh-7rem)]">
+            <StuckHelperModal problemId={currentProblem.id} mode="panel" key={currentProblem.id} />
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
