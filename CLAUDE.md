@@ -4,6 +4,12 @@
 > 접두어 빠진 `<invoke>` 는 파싱 실패로 턴이 멈춘다("또 멈췄다"의 원인). **한 메시지에
 > 도구 1개씩, 접두어 확인 후 전송.** 빠르게 연속 호출할 때 빠뜨리기 쉬움. (상세: dev-rules)
 
+> ⚠️ **서버 재기동**: "재기동했다"를 믿지 말 것. 새 uvicorn/vite 는 옛 서버가 포트 점유 중이면
+> **조용히 바인딩 실패**(고친 코드가 화면에 반영 안 됨 — 8~18차 11번 헛수고의 정체). `netstat` PID 는
+> 죽은 소켓 캐시라 못 믿음 → `Get-CimInstance` 로 살아있는 프로세스 시작시각 확인, 옛 것 `taskkill`,
+> `Test-NetConnection` False(포트 해제) 확인 후 재기동. **"화면 실패" 디버깅 1순위 = '어느 서버가
+> 그 포트를 서빙 중인가'.** 한 방에: `/server-check`. (상세: dev-rules 19차)
+
 고등 수학 과외/학원 LMS. 교재 문제 등록 → 숙제 배포 → AI 튜터 오답 진단/힌트.
 
 ## 구조 (모노레포)
@@ -53,3 +59,4 @@ import type { Database } from '@shared/types/database';
 | `/migration-safety` | 마이그레이션 적용 전 점검 |
 | `/bbox-verify` | problem_staging bbox 이상치 |
 | `/cms-dev-check` | CMS 빌드·금지패턴 점검 |
+| `/server-check` | 서버 옛 코드/포트 점유 진단·재기동 검증 |

@@ -186,13 +186,40 @@ parsed` 에러가 나고 그 턴이 멈춘다("또 멈췄다" 의 진짜 원인)
 
 (2026-04-19 다회 발생한 버그들 → 해결 완료. 자세한 원인/해결은 git log + 커밋 메시지)
 
-- **uvicorn 재시작 전 좀비 확인**: `netstat -ano | findstr :8001` → `Stop-Process -Id <PID> -Force`
+- **uvicorn 재시작 전 좀비 확인** → **`/server-check`** 권장. `netstat` PID 만으론 부족(죽은 소켓 캐시) — 살아있는 프로세스는 `Get-CimInstance Win32_Process` 로 확인. 옛 서버가 포트 점유 중이면 새 서버가 조용히 바인딩 실패한다(19차, 위 ★체크리스트).
 - **dict 키 타입 불일치**: page_bboxes 같은 key 일치 필수. `dict.get(int) or dict.get(str(int))` 패턴
 - **PIL ↔ numpy 변환**: `_trim_whitespace` 같은 cv2/numpy 기대 함수에 PIL Image 직접 전달 금지
 - **React useCallback stale closure**: state 의존하는 콜백은 `useRef` 동기화 패턴
 - **stage 복구 분기**: 빈 결과여도 stage 업데이트는 early return 전에 호출
 
 (백엔드 포트 8001 / CORS 정책은 루트 README + ARCHITECTURE 참조 — 한 곳에서만 관리)
+
+## ★ "또 화면 실패/헛수고" 방지 체크리스트 (2026-06-24, 19차 — 8~18차 11번 헛수고의 결론)
+
+> **이 체크리스트가 dev-rules 에 산문으로만 있었던 "옛 서버 의심"·"좀비 확인" 규칙을 대체한다 —
+> 산문 규칙은 11번 안 지켜졌다(증명됨). 화면 문제 신고 시 코드부터 의심하지 말고 이 순서로.**
+
+**0. 한 방에: `/server-check`** — 아래 1~4 를 자동 수행(옛 서버 진단·정리·재기동·HTTP 검증).
+
+1. **옛 서버 포트 점유(핵심, 8~18차 화면 실패의 진짜 정체)**: 내가 "재기동"해도 옛 서버가 포트를
+   안 놓으면 새 uvicorn/vite 가 **조용히 바인딩 실패** → 고친 코드가 화면에 반영 안 됨. **`netstat` PID
+   는 죽은 소켓 캐시라 못 믿는다** → `Get-CimInstance Win32_Process -Filter "Name='python.exe'"` 로
+   **살아있는 프로세스의 시작시각** 확인. 시작시각 < 코드수정시각이면 옛 서버. 정리: 부모+자식
+   (`ParentProcessId`) `taskkill /F` → `Test-NetConnection <port>` **False** 확인 후 재기동 →
+   **새 PID 시작시각 > 코드수정시각** 재확인. `--reload` 는 포트 충돌 시 조용히 죽으니 의존 금지.
+
+2. **실측 방법론(코드 결백 vs 화면 재현 분리)**: 코드 결백은 **직접 import**(`generate_hint` 호출,
+   `/tutor-smoke`)로, 화면 재현은 **실제 HTTP 경로**(JWT 발급 → `/api/tutor/hint`, `/server-check` 6번)로.
+   **둘이 엇갈리면(직접 8초·정상인데 HTTP 90초·틀림) = 옛 서버가 범인**(19차 결정타). 반드시 **분산
+   실측(5~10회)** — gpt-5.2 간헐성·꼬리 지연(어쩌다 90초)은 1회 측정으로 안 잡힘(16차).
+
+3. **증상별 땜질 회피**: "느림/깨짐/이상" 신고를 한 증상씩 정규식·프롬프트로 막으면 다음 변형이 샘
+   (8~18차: 디코딩루프→W→NBSP→MathJax→`\times`→`\,`… 11번). **환경(서버·캐시)부터 가리고 코드는
+   마지막.** 근본(구조/위치/서버)을 먼저, 표면 증상 X. 모델 교체로 증상 덮지 말 것(품질 희생, 13차).
+
+4. **캐시/번들 의심**: 화면만 깨지고 **백엔드 raw 는 정상**이면 localStorage 옛 대화 캐시
+   (`tutor_chat_*`, `CHAT_CACHE_VERSION`) 또는 옛 번들. Ctrl+Shift+R + `purgeStaleTutorChatCache`
+   (앱 진입 시 자동 정리). "퀄리티 저하" 신고도 캐시였던 전례(12~13차) — 코드 추가 수정 전에 캐시부터.
 
 ## 막힌 지점 도우미 — 풀이 그래프 위치추적 RAG 튜터 (2026-06-18 재설계)
 
@@ -269,6 +296,20 @@ parsed` 에러가 나고 그 턴이 멈춘다("또 멈췄다" 의 진짜 원인)
     - **해결(사용자 확정: LLM 에 DAG 정보 주고 맡김 + 하한강제 제거)**: ⓐ **`_localize` outline 에 role·uses(전이 DAG) 추가** → VL 이 갈래 구조(형제/합류) 이해, 갈래 전환을 퇴행으로 오인 안 함. ⓑ **`revealed_node_index` 주입** → "같은 갈래면 그 이상, 다른 갈래(case_split)면 작아도 정상" 명시. ⓒ **보수규칙 이중기준** → "결과식 명확하면 그 단계로 정확히, 모호할 때만 앞으로 보수적"(정답직전 명확발화 끌어내림 방지). ⓓ **코드 퇴행방지·하한강제 제거** — 위치는 전적으로 VL(DAG 정보로 신뢰도↑)에 맡김. ⓔ **마무리 가드만 결정론**: `revealed >= last_idx-1`(LLM 무관 1순위) OR reached_answer OR reached_near_answer.
     - **검증(분산 실측)**: ① 선형 "지수끼리 더해서 3^-1" revealed=2 **8회 → 앞단계 되돌이 0/8, 마무리 8/8**(스크린샷 버그 소멸). ② **분기 갈래전환**: revealed=5(x→2)에서 "x=1 좌극한" 발화 → localize_idx=**1**(x→1 갈래, 5에 안 막힘 — 하한강제였으면 막혔을 것). ③ 결정론 마무리 revealed=last-1 → 3/3(LLM 무관). ④ 첫 호출(-1) 정상 힌트.
     - **교훈(핵심)**: **노드 index ≠ 진행순서**. solution_nodes 는 `uses` DAG 분기 구조(case_split). 위치를 1차원 정수로 강제(`max`, 퇴행방지)하면 분기에서 깨진다 — **VL 에 role/uses(DAG)를 줘서 갈래를 이해시키는 게** 코드 휴리스틱보다 견고. 단일 케이스(선형 5노드)로 과적합 말 것(사용자 경계). 마무리 같은 안전가드만 결정론(revealed)으로.
+- **마무리 가드 위치 index 결정론 보강 (2026-06-24, 19차)**: 18차 후에도 사용자 직접 검사 시 또 "정답직전(3^-1) 도달에 처음으로 되돌아감" 스크린샷. 실패 케이스 재분석 + 분기 마무리 근본 보강.
+    - **분산 실측으로 코드 결백/유죄 먼저 가림(13·16차 교훈)**: 18차 현재 코드로 스크린샷과 똑같은 **선형 5노드**(평가원 6월 26년 1번) 흐름을 `generate_hint` 멀티턴 3회 + `_localize` 25회 실측 → "3^-1" 발화 **전부 idx=3·reached_near=True 정확 판정, 마무리 정상**(처음 회귀 0). revealed=-1/0/1/2 어디서도 동일. **→ 18차 코드는 선형에서 결백**. 사용자 화면 실패는 13차부터 살아있던 **옛 서버(8001 PID 13292)** 또는 프론트 옛 캐시(13·16차 반복 패턴).
+    - **그러나 분기(case_split)에서 마무리가 LLM 단독 의존 = 실재 약점**: 18차 가드 `revealed >= last_idx-1 OR reached_answer OR reached_near_answer`. 선형은 `revealed`(단조증가) 결정론이 받치지만, **분기는 revealed 가 단조증가 안 함**(갈래 오가며 index 작아짐) → 결정론 무력 → `reached_near_answer`(gpt-5.2) **단독 의존** → LLM 한 번 흔들리면 마무리 실패→엉뚱한 앞 갈래 힌트.
+    - **해결(변경 1, 백엔드 1줄): 마무리 가드에 `current_index >= last_idx-1` OR 추가**. 이번 턴 `_localize` 가 잡은 **위치 index** 가 최종/직전 노드면 LLM near 판정 없이 마무리. revealed 와 달리 분기에서도 유효(이번 턴 실제 도달 위치). 위치 index 는 18차에서 DAG(role/uses) 정보로 신뢰도↑. 실측 근거: 분기 18노드(평가원 25년 21번) 최종 도달 시 idx 와 reached_near 가 5/5 일치 → idx 도 신뢰 가능한 결정론 신호. **첫 호출 보호(revealed>=0)·보수판정(틀린발화는 idx 앞이라 ②도 false) 유지**.
+    - **폐기(사용자 직전 선택 실측 반증): "모든 conclusion 노드 도달이면 마무리"는 조기종료 버그**. 18노드 case_split 은 conclusion 이 step 4/7/13/16 네 군데(갈래별 중간 결론), 진짜 최종은 step17(role=computation!). 학생이 step7(전체 1/3 지점) 도달을 마무리로 치면 **1/3 지점 종료**. → 마무리 기준은 **"최종 노드(nodes[-1]) 또는 직전(nodes[-2])"** = 18차 reached_near_answer 정의가 의미적으로 옳았음. ②가 `last_idx-1 이상`일 때만 발동하므로 중간 conclusion(idx<last-1)은 안 잡힘(정합).
+    - **함께 수정**: `_localize` except fallback 이 `return -1, False`(2-tuple)로 18차에서 **누락** — 호출부 3-tuple 언팩과 불일치라 예외 시 500. `return -1, False, False` 로 교정.
+    - **검증(분산 실측)**: ① 선형 멀티턴 5회 → **마무리 5/5, 앞단계 되돌이 0**. ② 분기 최종 step17 도달 5회 → **마무리 5/5**(②로 near 무관 발동). ③ 분기 중간 conclusion step7 5회 → **마무리 0/5**(조기종료 0). ④ 분기 중간 case_split step2 5회 → **마무리 0/5**(정상 힌트). ⑤ /tutor-smoke(평가원 25년 6번) 첫호출·멀티턴 진행 정상. 백엔드만 변경(프론트/DB 무관).
+    - **교훈**: **마무리 판정은 LLM 단독 의존 금지.** 선형은 revealed 결정론, **분기는 위치 index 결정론**(revealed 가 단조증가 안 하므로)으로 받치고 LLM(near/answer)은 보조 — 둘 다 OR. "정답직전"은 conclusion 역할 전체가 아니라 **최종/직전 노드 위치**로 정의(분기 중간 결론 마무리 오인=조기종료, 실측 반증). "화면 실패" 신고 = 백엔드 raw 분산 실측부터(코드 결백 25회 확인 후 옛 서버/캐시 의심).
+    - **★진짜 근본 원인 발견 (19차-2, 8~18차 화면 실패의 정체)**: 변경 1 배포 후에도 사용자가 같은 스크린샷 재현. **실제 HTTP 경로**(JWT 발급 → `/api/tutor/hint`, 프론트와 100% 동일)로 재현하니 첫 호출이 **3회 모두 90초 timeout**(내 직접 `generate_hint` import 는 8~16초인데!). 동일 코드인데 **uvicorn 경로에서만 극심하게 느림** → 옛 서버 의심 확정 절차:
+      - `netstat -ano | findstr :8001` 가 PID **13292**(13차 plan 의 그 PID) LISTENING 표시하나 `taskkill /F /PID 13292`·`tasklist`·`Get-Process` 모두 "프로세스 없음" → **netstat 이 죽은 PID 를 캐시**(소켓 잔류)해 헷갈림. `Test-NetConnection 8001` = **True**(살아있는 서버가 응답) → 누군가 8001 서빙 중.
+      - **`Get-CimInstance Win32_Process -Filter "Name='python.exe'"` 가 결정타**: 살아있는 python 은 **PID 9140 단 하나, 시작 시각 2026-06-21**(3일 전!), 커맨드라인 `from multi...`(uvicorn `--reload` multiprocessing). = **6월 21일 띄운 옛 서버가 3일간 포트 8001 점유**. 8~18차 수정 전 코드 + 옛 셸의 죽은 임베딩 터널(21434) 로 돌아 매 임베딩 15초 timeout 누적 → 90초.
+      - **내가 "재기동"할 때마다 새 uvicorn 은 포트 8001 이미 점유 → 바인딩 실패 후 조용히 죽음**(에러를 독립 cmd 창이 먹어 안 보임). 사용자 요청은 계속 옛 서버 9140 으로 감. **= 8~18차 내 모든 백엔드 수정이 화면에 단 한 번도 반영된 적 없음.** "코드 결백 실측 통과(직접 import)인데 화면은 계속 실패/느림"의 정체.
+      - **해결**: `Get-CimInstance ... ParentProcessId` 로 9140+자식 `taskkill /F` → `Test-NetConnection 8001`=**False**(포트 완전 해제) 확인 후 새 uvicorn 기동(2초 바인딩 성공). **실제 HTTP 멀티턴 재현 = 턴1 15.6s/턴2 12.3s/턴3 6.4s, 턴3 "더하면 3^-1" → "오케이 거의 다 왔어요!" 마무리**(90초 timeout·처음회귀 소멸).
+    - **★재발 방지 원칙(최우선, 모든 차수 공통)**: "재기동했다"를 믿지 말 것 — **새 서버가 실제로 그 포트를 잡았는지 PID 로 검증**. 절차: ① 재기동 전 `Get-CimInstance Win32_Process -Filter "Name='python.exe'"`(또는 node) 로 **살아있는 프로세스의 시작시각·PID 확인**(netstat PID 는 죽은 소켓 캐시라 못 믿음). ② 옛 프로세스(시작시각 오래됨)를 `taskkill /F` + 자식까지(`ParentProcessId`). ③ `Test-NetConnection <port>` 가 **False**(포트 해제) 확인 후 재기동. ④ 재기동 후 새 PID 시작시각 > 코드 수정시각 확인(`feedback_stale_dev_server`). ⑤ **HTTP 경로로 실측**(직접 import 아님) — uvicorn 이 실제 서빙하는 코드/속도 검증. `--reload` 는 포트 충돌 시 조용히 실패하니 의존 말 것. **"화면 실패" 디버깅의 1순위는 코드가 아니라 '어느 서버가 그 포트를 서빙 중인가'.**
 - **임베딩 로컬 fallback (2026-06-23)**: `embedder._generate_embedding_ollama` 가 `OLLAMA_URL`(서버 터널 21434) 접속 실패 시 **로컬 `http://localhost:11434` 자동 재시도**(같은 bge-m3 1024차원, 차원 호환). timeout 15초. 둘 다 죽으면 예외 → stuck_helper same-problem fallback. OpenAI 임베딩(1536) fallback 은 RAG 검색용으론 부적합이라 차단 유지.
 - **백필**: `cd backend/pdf_pipeline && venv\Scripts\activate && python -m scripts.backfill_solution_nodes --limit 5` (`OPENAI_API_KEY` 필수. 임베딩은 OLLAMA_URL 실패 시 로컬 11434 자동 fallback 하므로 수동 override 불필요).
 - **도형/그래프 (2026-06-18 결정)**: 해설 도형 자동 crop 안 함. `rag_node_extractor` 는 `figure_image_crop_url=None` 으로 두고(해설 통째 폴백은 정답 노출 위험), `figure_description`(VL 언어화)만 검색·근거로 사용. 정확한 도형 영역은 **CMS 수동 bbox 로 채운다(후속)**. 1차는 도형 이미지 없이 텍스트 힌트만(graceful). stuck_helper 는 같은 문제(`is_same_problem`) crop 은 학생에게 안 보여줌(정답 노출 방어).

@@ -64,7 +64,10 @@
       "mcp__supabase__list_migrations",
       "mcp__supabase__get_advisors",
       "mcp__supabase__list_extensions",
-      "mcp__supabase__get_publishable_keys"
+      "mcp__supabase__get_publishable_keys",
+      "Bash(./venv/Scripts/python.exe -c \"from handlers import stuck_helper; print\\('import OK'\\)\")",
+      "Bash(curl -s -m 3 http://localhost:8001/docs)",
+      "Bash(./venv/Scripts/python.exe -u /tmp/http19.py)"
     ]
   }
 }

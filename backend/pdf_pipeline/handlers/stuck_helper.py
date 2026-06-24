@@ -198,7 +198,7 @@ def _localize(problem_image_path: Optional[str], blocked_desc: str,
     return idx, bool(res.reached_answer), near
   except Exception as exc:
     logger.warning(f"막힌 지점 찾기(_localize) 실패 → (-1, False, False) fallback: {exc}")
-    return -1, False
+    return -1, False, False  # 3-tuple — 호출부 언팩(current/answer/near)과 맞춰야 함(18차 누락 버그)
 
 
 # ── 2) 유사 풀이 끌어오기 (retrieve) ──────────────────────────────────────────
@@ -410,17 +410,26 @@ def generate_hint(problem_id: str, blocked_description: str,
     # "퇴행"으로 오인해 막으면 오답(사용자 지적). 위치는 VL 이 DAG(role/uses) 보고 판정하게 맡긴다.
     # "엉뚱한 앞 단계로 돌아감"은 _localize 프롬프트 개선(revealed 주입·명확발화 정확매칭)으로 줄인다.
 
-    # 마무리 가드(18차) — 학생이 정답/정답직전에 도달했으면 VL 없이 종료 유도 마무리.
-    # ① **결정론 1순위(LLM 무관)**: revealed >= last_idx-1. 학생이 (다음힌트로) 정답직전 노드까지
-    #    받았으면 _localize 판정과 무관하게 무조건 마무리. ② reached_answer ③ reached_near_answer(보조).
-    # ①이 핵심 — _localize 가 위치를 오판해도 revealed 는 백엔드가 직접 기록한 값이라 흔들리지 않음.
+    # 마무리 가드(19차) — 학생이 정답/정답직전에 도달했으면 VL 없이 종료 유도 마무리.
+    # 마무리 신호 4종(OR) — LLM 단독 의존 금지(선형은 revealed, 분기는 위치 index 로 결정론 보강):
+    #  ① revealed >= last_idx-1 : 클라가 (다음힌트로) 정답직전 노드까지 받음 — 선형 결정론(LLM 무관).
+    #     revealed 는 백엔드가 직접 기록한 값이라 _localize 오판에 안 흔들림.
+    #  ② current_index >= last_idx-1 : 이번 턴 _localize 가 잡은 위치가 최종/직전 노드 — 분기 결정론(19차).
+    #     분기(case_split) 문제는 갈래를 오가 revealed 가 단조증가 안 해 ①이 무력 → 위치 index 로 받친다.
+    #     실측(평가원 6월 25년 21번 18노드): 최종 도달 시 idx 와 reached_near 가 5/5 일치 → idx 도 신뢰 가능한
+    #     결정론 신호. ②는 최종/직전(last-1 이상)일 때만 발동 → 분기 중간 conclusion(전체 1/3 지점)은
+    #     idx<last-1 이라 안 잡힘(조기종료 방지 — "모든 conclusion 마무리"는 실측상 조기종료 버그라 폐기).
+    #  ③ reached_answer : 학생이 최종 정답 도달(LLM 판정).
+    #  ④ reached_near_answer : 학생이 정답직전(nodes[-2]) 이상 도달(LLM 판정, 위치 오판 무력화용 17차).
     # 정답 직전이면 다음 노드가 conclusion(=정답)이라 VL 호출 시 근거 빈약→timeout + 정답 노출 위험 →
     # VL 호출 없이 종료. revealed>=0 로 첫 호출 보호.
     last_idx = max(n["node_index"] for n in nodes_all) if nodes_all else -1
     if nodes_all and revealed_node_index >= 0 and (
-        revealed_node_index >= last_idx - 1 or reached_answer or reached_near_answer):
-      logger.info("[TUTOR] problem_id=%s 마무리(revealed=%d last_idx=%d ans=%s near=%s) → 종료 유도(VL 없음)",
-                  problem_id, revealed_node_index, last_idx, reached_answer, reached_near_answer)
+        revealed_node_index >= last_idx - 1
+        or current_index >= last_idx - 1
+        or reached_answer or reached_near_answer):
+      logger.info("[TUTOR] problem_id=%s 마무리(revealed=%d current=%d last_idx=%d ans=%s near=%s) → 종료 유도(VL 없음)",
+                  problem_id, revealed_node_index, current_index, last_idx, reached_answer, reached_near_answer)
       return {
         "hint_text": "오케이, 거의 다 왔어요! 여기까지 정말 잘 따라왔어요. 마지막 답은 직접 고민해서 결정해보세요. 충분히 할 수 있어요!",
         "next_step_concept": None,

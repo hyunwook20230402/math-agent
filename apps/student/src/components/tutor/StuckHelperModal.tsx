@@ -159,7 +159,6 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
   const [lastFailedDesc, setLastFailedDesc] = useState<string | null>(null);
   // 멀티턴 — 직전 힌트까지 공개한 노드 index (첫 호출 -1)
   const [revealedIndex, setRevealedIndex] = useState<number>(-1);
-  const [hasMore, setHasMore] = useState(true);
 
   // 문제별 대화 복구 (problemId 바뀌면 그 문제 대화 로드)
   useEffect(() => {
@@ -177,7 +176,6 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
         ) {
           setTurns(Array.isArray(data.turns) ? data.turns : []);
           setRevealedIndex(typeof data.revealedIndex === 'number' ? data.revealedIndex : -1);
-          setHasMore(data.hasMore ?? true);
           return;
         }
         localStorage.removeItem(chatKey(problemId)); // 만료·옛 버전 → 폐기
@@ -187,7 +185,6 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
     }
     setTurns([]);
     setRevealedIndex(-1);
-    setHasMore(true);
   }, [problemId]);
 
   // 대화 변경 시 저장 (최근 200턴까지만). 저장 직전 각 turn.text sanitize → 깨진 텍스트 캐시 차단(12차).
@@ -197,14 +194,13 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
         version: CHAT_CACHE_VERSION,
         turns: turns.slice(-200).map((t) => ({ ...t, text: sanitizeHintText(t.text) })),
         revealedIndex,
-        hasMore,
         timestamp: Date.now(),
       };
       localStorage.setItem(chatKey(problemId), JSON.stringify(data));
     } catch (e) {
       console.warn('[tutor] 대화 저장 실패', e);
     }
-  }, [turns, revealedIndex, hasMore, problemId]);
+  }, [turns, revealedIndex, problemId]);
 
   const requestHint = async (description: string) => {
     setLoading(true);
@@ -230,9 +226,8 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
           figureUrls: res.figure_urls || [],
         },
       ]);
-      // 다음 "다음 힌트" 호출에 쓸 index 갱신
+      // 멀티턴 진행도 갱신 — 다음 힌트 요청에 그대로 전달
       if (typeof res.next_revealed_node_index === 'number') {
-        if (res.next_revealed_node_index <= revealedIndex) setHasMore(false);
         setRevealedIndex(res.next_revealed_node_index);
       }
     } catch (e: any) {
@@ -265,7 +260,6 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
     if (loading) return;
     setTurns([]);
     setRevealedIndex(-1);
-    setHasMore(true);
     setInput('');
     setError(null);
     try {
@@ -372,16 +366,6 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
 
       {/* 입력 영역 */}
       <div className="border-t px-5 py-3 space-y-2">
-        {turns.length > 0 && hasMore && !loading && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            onClick={() => requestHint('다음 단계도 알려주세요')}
-          >
-            다음 힌트 →
-          </Button>
-        )}
         <div className="flex gap-2">
           <input
             type="text"
@@ -396,15 +380,6 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
             <Send className="h-4 w-4" />
           </Button>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full text-muted-foreground"
-          disabled={loading}
-          onClick={() => requestHint('아예 모르겠어요')}
-        >
-          아예 모르겠어요 — 처음부터 도와주세요
-        </Button>
       </div>
     </>
   );
