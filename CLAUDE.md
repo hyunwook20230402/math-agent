@@ -10,6 +10,10 @@
 > `Test-NetConnection` False(포트 해제) 확인 후 재기동. **"화면 실패" 디버깅 1순위 = '어느 서버가
 > 그 포트를 서빙 중인가'.** 한 방에: `/server-check`. (상세: dev-rules 19차)
 
+> ⚠️ **서브에이전트 모델**: Agent 호출 시 **반드시 `model: "opus"` 명시**. 빠뜨리면 기본값 Haiku 로
+> 떨어진다(전역 규칙=Opus 4.8 위반). PreToolUse hook `enforce_agent_model.py` 가 누락 시 자동 차단하니
+> 막히면 model 을 추가해 재시도. (상세: 전역 CLAUDE.md 모델 기준 + `feedback_agents_use_opus`)
+
 고등 수학 과외/학원 LMS. 교재 문제 등록 → 숙제 배포 → AI 튜터 오답 진단/힌트.
 
 ## 구조 (모노레포)

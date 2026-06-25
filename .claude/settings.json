@@ -39,6 +39,15 @@
             "command": "python \"C:/Users/user/workspaces/math/.claude/check_path_hook.py\" 쓰기"
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/user/workspaces/math/.claude/enforce_agent_model.py\""
+          }
+        ]
       }
     ],
     "PostToolUse": [
