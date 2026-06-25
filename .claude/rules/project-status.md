@@ -18,7 +18,7 @@
 - 해설 태깅 샘플/이어서 모드 (4개 먼저 → 나머지)
 - 단원 계통도 (공통수학1/2, 대수, 미적분I, 확률과 통계 — concepts 375 / skills 359 / units 15)
 - unit 자동 매핑 (`unit_matcher.py` bge-m3 cosine) + difficulty_score AI 추출 (정답률 있으면 구간매핑 우선)
-- **난이도 (difficulty_score) 정답률 우선 / 구조 신호 보조** (2026-06-19) — 해설 PDF 정답률(`problems.correct_rate`) 있으면 `difficulty_resolver.py` 구간매핑. 없으면 구조 신호(경우분리 개수·중첩 깊이·개념 복합도)로 1~10 스코어링. 둘 다 "수능 21/29/30번류" 번호 고정 안 함 — 시대 무관.
+- **난이도 (difficulty_score) Lv 라벨/정답률 우선 / 구조 신호 보조** (2026-06-21 4단계 전환) — 해설 PDF 의 인쇄된 **Lv 라벨(Lv1~Lv4)** 이 1순위(Call A 가 읽어 `difficulty_level`→`1~4` 환산), 없으면 정답률(`problems.correct_rate`) 구간매핑(`difficulty_resolver.py`), 둘 다 없으면 구조 신호로 1~4 추정. 옛 1~10 데이터는 미변환·파생 라벨이 5~10 을 `very_hard`(Lv4)로 흡수. 매핑 코드 `difficulty_resolver.py`. 둘 다 "수능 21/29/30번류" 번호 고정 안 함 — 시대 무관.
 - **VL = OpenAI** (2026-06-19) — gemma4(ollama)/gemini 폐기. 메타 Call A 와 튜터는 OpenAI. 옛 시간대 분기(`provider_selector`)·난이도 분기(`_route_call_b_provider`)·gemma4 폭주 방어 코드 제거. 임베딩만 bge-m3(ollama) 유지.
 - **모델 분리 (2026-06-22)** — 메타 Call A 는 `META_MODEL`(기본 **gpt-4o**). 풀이 노드 추출(`rag_node_extractor.py`)은 **난이도 분기**: Lv1~2(score 1~2)→**gpt-4o**(`NODE_MODEL_EASY`), Lv3~4(score 3~4)→**gpt-5.2**(`NODE_MODEL_HARD`), score 불명/범위밖이면 상위(gpt-5.2). `call_vl(model=...)` 명시 주입이라 `OPENAI_MODEL` env 무관.
 - **해설 태깅 = Call A(메타)만** (2026-06-20, 4차) — 옛 단계별풀이(Call B 2-Pass)와 4필드(solution_summary/pitfall/solution_steps/common_mistakes)는 추출·저장·검증·DB컬럼까지 전부 제거. `solution_tagger.py` 는 Call A 한 번으로 메타(unit/difficulty/concept_tags/skill_tags/correct_rate)만 뽑는다. 풀이 그래프는 별도 추출기 `rag_node_extractor.py`(노드 1회 통합)가 담당.
@@ -35,6 +35,13 @@
 - 백필: `python -m scripts.backfill_solution_nodes --limit N` (VL=OpenAI, 임베딩=bge-m3 ollama)
 - 도형: 자동 crop 없음 — `figure_description` 언어화만, crop URL 은 CMS 수동 bbox 로 후속. 상세 `dev-rules.md`
 - 프론트: `apps/student/SolveProblem.tsx` → `components/tutor/StuckHelperModal.tsx` → `ragHintApi`
+- **힌트 품질·안정화 (8~19차, 2026-06-23~24)** — 핵심만(상세 차수별은 `dev-rules.md`):
+  - **힌트 모델 gpt-5.2 유지**(품질 우선, 교체 금지). `reasoning_effort`: 위치추적(`_localize`) medium / 힌트생성(`_generate`) low. VL timeout **50초**(프론트 `getHint` 50초와 정합). 힌트 생성은 자유텍스트(`call_vl_text`)로 디코딩 루프 회피.
+  - **멀티턴 대화맥락 7턴 주입(15차)** — 프론트가 `conversation_history`(role+text) 전송 → `_localize`/`_generate` 프롬프트에 맥락 주입. 서버는 여전히 무상태(이력은 매 요청 클라가 보냄).
+  - **마무리 가드(17~19차)** — 학생이 정답/정답직전 도달 시 VL 없이 종료 유도. 4신호 OR: `revealed≥last-1`(선형 결정론) / `current_index≥last-1`(분기 위치 index 결정론, 19차) / `reached_answer` / `reached_near_answer`(LLM). 노드 index 는 진행순서가 아니라 `uses` DAG 위치라, `_localize` 에 role·uses(DAG)+revealed 를 주입해 case_split 갈래 전환을 퇴행으로 오인 안 함(18차).
+  - **수식 렌더(12~14차)** — 프론트 KaTeX + 구분자 밖 평문 LaTeX 폴백(`renderBareSegment`, strict:true → 한글 섞이면 평문). 제어문자·NBSP·화살표 sanitize 양쪽 + localStorage 옛 대화 캐시 자동 정리(`purgeStaleTutorChatCache`, CHAT_CACHE_VERSION). 임베딩 OLLAMA_URL 11434 통일(죽은 21434 터널 제거, 13차).
+  - **UI(19차)** — 입력 영역의 "다음 힌트 →"·"아예 모르겠어요 — 처음부터 도와주세요" 버튼 제거(입력창+전송 버튼만).
+  - **★8~18차 화면 실패의 진짜 원인(19차 발견)**: 옛 uvicorn 이 포트 8001 점유 → 새 서버 조용히 바인딩 실패 → 수정이 화면 미반영. `/server-check` 로 진단·정리. ("화면 실패" = 코드 아닌 서버부터, `dev-rules.md` ★체크리스트.)
 
 ### DB 마이그레이션
 - ✅ **baseline 리셋(2026-06-20)** — 드리프트 해소. 엉킨 001~016 은 `_archive/` 로 치우고, 현재 원격 DB 구조를 `baseline_20260620.sql` 한 장으로 스냅샷(테이블 18 + FK·UNIQUE·인덱스·트리거 + RPC 2개). 이후 변경은 `017_` 부터 순번. 상세 `supabase/migrations/README.md`
@@ -45,7 +52,7 @@
 
 ## 향후 작업
 
-- **튜터 고도화** — CMS 해설 도형 수동 bbox 입력 UI(`solution_nodes.figure_image_crop_url` 채우기), 노드 전이 자동 검증(논리 비약 탐지), 대화 이력 저장 여부
+- **튜터 고도화** — CMS 해설 도형 수동 bbox 입력 UI(`solution_nodes.figure_image_crop_url` 채우기), 노드 전이 자동 검증(논리 비약 탐지). (대화맥락 주입은 15차에 완료 — `conversation_history` 7턴.)
 - **teacher 앱** 숙제 배포/분석 완성도 ↑ (현재 기초 구현 60~70%)
 - **student 앱** 오답노트 고도화 (막힌 지점 도우미 연계 UI 포함)
 - ~~로컬 migrations 드리프트 해소~~ ✅ 완료(2026-06-20 baseline 리셋)
@@ -58,7 +65,7 @@
 |------|----------|------|
 | Call A (메타) | OpenAI | `META_MODEL` (기본 gpt-4o). 해설 태깅은 Call A 한 번뿐(Call B 제거, 4차) |
 | 노드 추출 (풀이 그래프) | OpenAI | **난이도 분기**: Lv1~2→gpt-4o(`NODE_MODEL_EASY`) / Lv3~4·불명→gpt-5.2(`NODE_MODEL_HARD`). `call_vl(model=...)` 명시 주입 — OPENAI_MODEL env 무관 |
-| 막힌 지점 도우미 (튜터) | OpenAI | 막힌 지점 찾기 / 힌트 만들기 |
+| 막힌 지점 도우미 (튜터) | OpenAI | **gpt-5.2**(`OPENAI_MODEL`, 품질 우선 유지). 위치추적 effort=medium / 힌트생성 effort=low(자유텍스트). VL timeout 50초 |
 | Embed | Ollama | bge-m3 (1024d 고정) |
 
 - VL 은 OpenAI(2026-06-19 gemma4 폐기). 옛 시간대 분기(`provider_selector`)·옛 Call B 난이도 provider 분기(`_route_call_b_provider`)는 제거됨.

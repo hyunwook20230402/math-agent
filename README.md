@@ -70,7 +70,7 @@ uvicorn main:app --reload --port 8001
 2. 해설 크롭 + 정답·정답률 파싱.
 3. "샘플 (앞 4개)" → "이어서" → "전체 재태깅" 으로 메타 태깅 (unit, difficulty, concept_tags, skill_tags, correct_rate). **Call A 한 번**(VL=OpenAI 단일).
    - 옛 단계별풀이(Call B 2-Pass)와 4필드(summary/pitfall/solution_steps/common_mistakes)는 4차에서 제거 — 풀이 그래프는 별도 추출기 `rag_node_extractor.py` 가 담당.
-   - 2-layer 검증 (`tag_validator`): Layer 1 rule + Layer 2 OpenAI cross-check.
+   - 옛 2-layer 태깅 검증(`tag_validator`)은 2026-06-22 폐기 — Call A 결과를 그대로 저장.
 4. "문제에 적용" → `problem_staging` 에 병합.
 
 ### 풀이 노드 (CMS 편집)
@@ -79,14 +79,14 @@ uvicorn main:app --reload --port 8001
 ### 막힌 지점 도우미 (풀이 그래프 위치추적 RAG)
 1. 학생이 문제 풀다 막힘 → SolveProblem "막혔어요" → `POST /api/tutor/hint` (problem_id, 막힌 서술, revealed_node_index).
 2. **막힌 지점 찾기**: 학생 서술 + 문제 이미지 + 노드 목록으로 "이해한 마지막 노드" 추정 → **유사 풀이 끌어오기**: 다음 노드 + 유사 기출 노드를 `solution_nodes` pgvector 검색(RPC `search_solution_nodes_for_hint`) → **힌트 만들기**: 답을 가린 채 다음 한 스텝만 힌트.
-3. 서버 무상태 — 클라이언트가 `revealed_node_index` 를 들고 멀티턴("다음 힌트"). `solution_nodes` 는 `backfill_solution_nodes.py` 로 적재.
+3. 서버 무상태 — 클라이언트가 `revealed_node_index`(+ 최근 대화 7턴)를 들고 멀티턴. `solution_nodes` 는 `python -m scripts.backfill_solution_nodes --limit N` 으로 적재.
 
 ---
 
 ## 상세 문서
 
 - **개발 규칙 / 컨벤션** — `CLAUDE.md`, `.claude/rules/`
-- **슬래시 커맨드** — `.claude/commands/` (`/pdf-import`, `/register-problems`, `/solution-tagging-status`, `/solution-nodes-status`, `/tutor-smoke`, `/migration-safety`, `/bbox-verify`, `/cms-dev-check`)
+- **슬래시 커맨드** — `.claude/commands/` (`/pdf-import`, `/register-problems`, `/solution-tagging-status`, `/solution-nodes-status`, `/tutor-smoke`, `/migration-safety`, `/bbox-verify`, `/cms-dev-check`, `/server-check`)
 - **에이전트** — `.claude/agents/pdf-extractor.md`
 - **Supabase 마이그레이션** — **baseline 리셋(2026-06-20)**: 현재 원격 구조를 `baseline_20260620.sql` 한 장으로 스냅샷, 이후 `017_` 부터 순번. 옛 001~016 은 `_archive/`. 상세 `supabase/migrations/README.md`
 
