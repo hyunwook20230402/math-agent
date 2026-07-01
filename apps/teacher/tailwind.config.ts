@@ -7,6 +7,9 @@ export default {
 		"./components/**/*.{ts,tsx}",
 		"./app/**/*.{ts,tsx}",
 		"./src/**/*.{ts,tsx}",
+		// 공통 UI(@shared/ui/*) 클래스도 스캔해야 purge 안 됨 — 안 넣으면 shared 컴포넌트
+		// (예: calendar 의 flex/w-9 h-9)가 CSS 에서 사라져 레이아웃이 깨진다.
+		"../../shared/**/*.{ts,tsx}",
 	],
 	prefix: "",
 	theme: {

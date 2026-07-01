@@ -22,6 +22,18 @@ Vite + React 18 환경에서 Portal 이 DOM 에 렌더링되나 시각적으로 
 
 Button, Input, Card 등 Portal 안 쓰는 Radix 컴포넌트는 정상 동작.
 
+### ⚠️ Tailwind content 에 `shared/` 포함 필수 (2026-07-01, 달력 UI 깨짐 원인)
+
+**각 앱 `tailwind.config.ts` 의 `content` 배열에 반드시 `../../shared/**/*.{ts,tsx}` 를 넣는다.**
+안 넣으면 `@shared/ui/*` 컴포넌트가 쓰는 클래스를 Tailwind 가 스캔 못 해 **CSS purge** → 스타일이
+통째로 사라져 레이아웃이 깨진다. 증상: 달력(`@shared/ui/calendar`, react-day-picker)이 `flex`·`w-9`·
+`h-9`·`head_row`·`row` 클래스를 잃어 요일·날짜가 셀 없이 한 줄로 흐름(학생 대시보드 달력 붕괴).
+- 흔한 클래스(`bg-primary`·`px-4` 등)는 앱 자체 파일에도 있어 우연히 살아남지만, 달력의 `w-9 h-9`
+  같은 특수 조합은 앱 어디에도 없어 purge 된다 → shared 컴포넌트만 골라 깨지는 것처럼 보임.
+- **3개 앱(student/teacher/cms) 모두** content 에 shared 없었음(공통 결함). student·teacher 가
+  `@shared/ui/calendar` 를 써서 깨짐 — 셋 다 `../../shared/**` 추가로 해결. 새 앱 추가 시 이 줄 필수.
+- 검증: 앱 빌드 후 `dist/assets/index-*.css` 에 `.w-9{width:2.25rem}` 등 존재하면 purge 안 된 것.
+
 ## 프로젝트 격리 원칙 (필수)
 
 - **`math/` 외부 파일 절대 수정/삭제 금지** — 읽기/복사만 허용
