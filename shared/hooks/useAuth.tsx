@@ -139,23 +139,37 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return { error };
   };
 
-  // 로그인 이후 profiles 레코드가 없다면 자동 생성
+  // 로그인 이후 profiles 레코드가 없다면 자동 생성.
+  // ⚠️ 과거 버그(2026-07-01): .single() 이 중복 프로필에서 406 을 던지는데 error 를 안 받아
+  //   존재하는데도 없다고 판단 → 무한 중복 insert. profiles.user_id 에 UNIQUE 제약(025)이 생겼고,
+  //   회원가입 시 트리거 handle_new_user 가 이미 프로필을 만들므로 여기선 "없을 때만 보완 insert".
+  //   - maybeSingle(): 0행이면 null, 1행이면 데이터. (UNIQUE 라 2행 이상 불가)
+  //   - 조회 에러는 명시적으로 로깅하고 insert 하지 않음(오판 방지).
+  //   - insert 가 UNIQUE 위반(23505)이면 이미 있는 것이므로 조용히 무시.
   useEffect(() => {
     const ensureProfile = async () => {
       if (!user) return;
-      const { data: existing } = await supabase
+      const { data: existing, error: selectError } = await supabase
         .from('profiles')
         .select('id')
         .eq('user_id', user.id)
-        .single();
+        .maybeSingle();
+      if (selectError) {
+        console.error('프로필 조회 실패(중복 생성 방지 위해 insert 안 함):', selectError);
+        return;
+      }
       if (!existing) {
         const inferredRole = (user.user_metadata?.role as 'teacher' | 'student') || 'student';
-        await supabase.from('profiles').insert({
+        const { error: insertError } = await supabase.from('profiles').insert({
           user_id: user.id,
           name: user.user_metadata?.name || '사용자',
           role: inferredRole,
           email: user.email || ''
         });
+        // 23505 = unique_violation: 트리거/동시 요청이 먼저 만든 것 → 정상, 무시.
+        if (insertError && insertError.code !== '23505') {
+          console.error('프로필 생성 실패:', insertError);
+        }
       }
     };
     ensureProfile();
