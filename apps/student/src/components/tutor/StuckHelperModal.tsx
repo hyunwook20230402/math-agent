@@ -1,6 +1,7 @@
 // @ts-nocheck
-// 막힌 지점 도우미 모달 — 순수 HTML/CSS (Radix Portal 금지: dev-rules)
+// 풀이 길잡이 모달 (내부명 stuck_helper) — 순수 HTML/CSS (Radix Portal 금지: dev-rules)
 // RAG 백엔드(POST /api/tutor/hint)를 호출해 막힌 지점 다음 한 단계만 힌트로 안내.
+// 화면 표시명은 "풀이 길잡이"(2026-07-01 확정), 코드 식별자·API 경로는 stuck_helper/tutor 유지.
 import { useState, useEffect } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
@@ -274,7 +275,7 @@ export default function StuckHelperModal({ problemId, onClose, mode = 'modal' }:
       <div className="flex items-center justify-between border-b px-5 py-3">
         <div className="flex items-center gap-2">
           <Lightbulb className="h-5 w-5 text-amber-500" />
-          <h2 className="font-semibold">막힌 지점 도우미</h2>
+          <h2 className="font-semibold">풀이 길잡이</h2>
         </div>
         <div className="flex items-center gap-1">
           {turns.length > 0 && (
