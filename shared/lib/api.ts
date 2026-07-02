@@ -494,13 +494,16 @@ export const distributionApi = {
 
       // 학생인 경우 distribution_students 테이블을 통해 접근 권한 확인 (skipAccessCheck가 false일 때만)
       if (profile.role === 'student' && !skipAccessCheck) {
-        // 먼저 학생이 이 배포에 접근할 수 있는지 확인
+        // 먼저 학생이 이 배포에 접근할 수 있는지 확인.
+        // 합성키(distribution_id, student_id) 조회는 0행(미등록)이 정상 케이스 →
+        // .single() 은 0행에서 406 을 던지므로 .maybeSingle()(0행=null) 이 맞다.
+        // (026 에서 UNIQUE(distribution_id, student_id) 추가 → 2행 불가.)
         const { data: accessCheck, error: accessError } = await supabase
           .from('distribution_students')
           .select('distribution_id')
           .eq('distribution_id', id)
           .eq('student_id', profile.id)
-          .single();
+          .maybeSingle();
 
         if (accessError || !accessCheck) {
           throw new Error('이 배포에 접근할 권한이 없습니다.');
@@ -766,13 +769,15 @@ export const studentApi = {
     try {
       console.log('getStudentsByTeacher 호출됨, teacherEmail:', teacherEmail);
       
-      // 1. 선생님의 프로필 ID 찾기
+      // 1. 선생님의 프로필 ID 찾기.
+      // email 로 조회 → 0행(그 이메일 teacher 없음)이 정상 케이스라 .maybeSingle()(0행=null).
+      // .single() 은 0행에서 406. (026 에서 profiles.email UNIQUE 추가 → 2행 불가.)
       const { data: teacherProfile, error: teacherError } = await supabase
         .from('profiles')
         .select('id')
         .eq('email', teacherEmail)
         .eq('role', 'teacher')
-        .single();
+        .maybeSingle();
 
       console.log('선생님 프로필 조회 결과:', { teacherProfile, teacherError });
 
@@ -923,16 +928,18 @@ export const wrongAnswerApi = {
   // 오답 추가 (중복 처리)
   addWrongAnswer: async (data) => {
     try {
-      // 먼저 기존 오답이 있는지 확인
+      // 먼저 기존 오답이 있는지 확인.
+      // 합성키(student_id, problem_id) 조회 — 0행(첫 오답)이 정상 케이스라 .maybeSingle()(0행=null).
+      // .single() 은 0행에서 406(PGRST116) 을 던져 우회 코드가 필요했으나 maybeSingle 로 불필요.
+      // (026 에서 UNIQUE(student_id, problem_id) 추가 → 2행 불가.)
       const { data: existingWrongAnswer, error: checkError } = await supabase
         .from('wrong_answers')
         .select('id')
         .eq('student_id', data.student_id)
         .eq('problem_id', data.problem_id)
-        .single();
+        .maybeSingle();
 
-      if (checkError && checkError.code !== 'PGRST116') {
-        // PGRST116는 "결과가 없음" 에러이므로 무시
+      if (checkError) {
         throw checkError;
       }
 

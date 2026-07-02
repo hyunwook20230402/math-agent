@@ -1,5 +1,21 @@
 # DB 규칙 (필수)
 
+## ⚠️ 합성키 조회는 `.maybeSingle()` + DB UNIQUE 짝으로 (2026-07-02, profiles 406 버그)
+
+**PK 가 아닌 조합(합성키·비-UNIQUE 컬럼)으로 조회할 땐 `.single()` 금지 → `.maybeSingle()`.**
+`.single()` 은 결과가 **0행이면 406, 2행 이상이면 406** 을 던진다. 그런데 그 조합에 UNIQUE 제약이
+없으면 중복이 쌓여 어느 순간 2행 이상 → 조회가 통째로 깨진다(profiles.user_id 중복 21개로 로그인·
+배포 조회 실패한 실제 사고). 게다가 `.single()` 뒤에 `error` 를 안 받으면 406 을 "결과 없음"으로
+오판해 **또 insert → 무한 중복** 악순환까지 간다.
+
+- **"논리적으로 1행이어야 하는" 합성키는 반드시 짝으로 방어**: ① **DB UNIQUE 제약**(중복 원천 차단)
+  + ② 코드 **`.maybeSingle()`**(0행=null 정상 처리, 2행은 제약이 막음). 예: `profiles.user_id`(025),
+  `distribution_students(distribution_id, student_id)`·`wrong_answers(student_id, problem_id)`·
+  `profiles.email`(026).
+- **PK(`id`) 로 조회하거나 `insert().select()` 는 1행 보장** → `.single()` 안전.
+- 새 조인/계층 테이블 만들 때 "한 조합에 1행"이면 **처음부터 UNIQUE 제약**을 건다(나중에 중복 쌓이면
+  제약 추가 전에 중복 정리부터 해야 해서 번거롭다).
+
 ## ID 사용 규칙 — 핵심
 
 모든 외래키(`teacher_id`, `student_id` 등)는 **`profiles.id`** 참조. `auth.users.id` 직접 사용 금지.
