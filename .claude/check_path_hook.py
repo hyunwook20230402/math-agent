@@ -22,7 +22,7 @@ def main() -> None:
         sys.exit(0)  # file_path 없는 도구 → 통과
 
     p = str(path).replace("\\", "/").lower()
-    if p.startswith("c:/users/user/workspaces/math/") or p.startswith("c:/users/user/.claude/"):
+    if p.startswith("c:/users/fpsem/desktop/math-agent-main/math-agent-main/") or p.startswith("c:/users/fpsem/.claude/"):
         sys.exit(0)  # 허용 경로
 
     sys.stderr.write(f"BLOCK: math/ 프로젝트 외부 파일 {action} 금지: {path}\n")

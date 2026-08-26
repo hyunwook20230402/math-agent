@@ -39,7 +39,7 @@ path = str(path).replace("\\", "/")
 if not any(path.endswith(f) for f in _TUTOR_FILES):
     sys.exit(0)  # 튜터 파일 아님 — 통과
 
-PIPE = "C:/Users/user/workspaces/math/backend/pdf_pipeline"
+PIPE = "C:/Users/fpsem/Desktop/math-agent-main/math-agent-main/backend/pdf_pipeline"
 PY = f"{PIPE}/venv/Scripts/python.exe"
 if not os.path.exists(PY):
     sys.exit(0)  # venv 없으면 검증 생략(차단하지 않음)

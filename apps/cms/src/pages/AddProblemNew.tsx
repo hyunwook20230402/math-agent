@@ -54,8 +54,8 @@ const AddProblemNew = () => {
 
   // 선택된 항목들
   const [selectedTextbook, setSelectedTextbook] = useState<Textbook | null>(null);
-  const [selectedChapter, setSelectedChapter] = useState<Chapter | null>(null);
-  const [selectedSubchapter, setSelectedSubchapter] = useState<Subchapter | null>(null);
+  // 폴더는 깊이 제한 없는 단일 트리(problem_folders)라 선택도 하나면 된다.
+  const [selectedFolder, setSelectedFolder] = useState<{ id: string; name: string } | null>(null);
   const [selectedProblemSet, setSelectedProblemSet] = useState<ProblemSet | null>(null);
   
   // 데이터 목록들
@@ -249,6 +249,7 @@ const AddProblemNew = () => {
   const textbookOptions = [
     { value: '쎈', label: '쎈' },
     { value: '모의고사', label: '모의고사' },
+    { value: '내신', label: '내신' },
     { value: '연산', label: '연산' },
     { value: '자작', label: '자작' }
   ];
@@ -371,19 +372,17 @@ const AddProblemNew = () => {
 
       // 교재/단원 query param으로 초기 선택값 설정
       const textbookId = searchParams.get('textbook_id');
-      const chapterId = searchParams.get('chapter_id');
-      const subchapterId = searchParams.get('subchapter_id');
+      // 옛 링크의 chapter_id/subchapter_id 도 그대로 받는다 — 폴더 통합 때 id 를 물려받아 같은 값이다.
+      const folderId = searchParams.get('folder_id')
+        || searchParams.get('subchapter_id')
+        || searchParams.get('chapter_id');
       if (textbookId) {
         supabase.from('textbooks').select('*').eq('id', textbookId).single()
           .then(({ data }) => { if (data) setSelectedTextbook(data); });
       }
-      if (chapterId) {
-        supabase.from('chapters').select('*').eq('id', chapterId).single()
-          .then(({ data }) => { if (data) setSelectedChapter(data); });
-      }
-      if (subchapterId) {
-        supabase.from('subchapters').select('*').eq('id', subchapterId).single()
-          .then(({ data }) => { if (data) setSelectedSubchapter(data); });
+      if (folderId) {
+        supabase.from('problem_folders').select('id, name').eq('id', folderId).maybeSingle()
+          .then(({ data }) => { if (data) setSelectedFolder(data); });
       }
     }
   }, [profile, searchParams]);
@@ -632,6 +631,10 @@ const AddProblemNew = () => {
         correct_answer: formData.correct_answer,
         choices: null,
         explanation: formData.explanation || null,
+        // 어느 교재·폴더에서 눌러 들어왔는지 반영. 예전엔 이 두 줄이 없어서
+        // 폴더에서 '문제 등록'을 해도 교재 루트에도 안 잡히고 어디에도 안 보였다.
+        textbook_id: selectedTextbook?.id ?? null,
+        folder_id: selectedFolder?.id ?? null,
       };
 
       let data, error;

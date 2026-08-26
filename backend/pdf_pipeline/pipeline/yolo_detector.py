@@ -69,31 +69,37 @@ def _detect_top_line_y(img_gray, page_height: int) -> int:
 def detect_problems(
   model: YOLO,
   image_path: str,
-  page_width: int = 3509,
-  page_height: int = 4963,
+  page_width: Optional[int] = None,
+  page_height: Optional[int] = None,
   conf: float = 0.4,
   start_number: int = 1,
   padding: int = 30,
   min_height: int = 100,
   top_margin: int = 80,
-  mid_line_x: int = 1753,
+  mid_line_x: Optional[int] = None,
   debug_dir: Optional[str] = None,
 ) -> List[Dict]:
   """이미지에서 문제 영역 감지 + 번호 자동 부여
 
-  모의고사 2단 레이아웃: 좌열(위→아래) → 우열(위→아래) 순서로 번호 부여.
+  2단 레이아웃: 좌열(위→아래) → 우열(위→아래) 순서로 번호 부여.
+
+  ⚠️ 페이지 크기를 상수로 박지 않는다. 교재마다 판형이 달라서다 —
+  실측: 쎈 2480x3507 / 내신 3038x4300 / 교육청 3033x4296 / 수능특강 2433x3071 /
+  바이블 2086x2882 (모두 300dpi). 옛 기본값 3509x4963(A3 모의고사)을 그대로 쓰면
+  mid_line_x 가 엉뚱한 곳에 놓여 2단 좌우 판정이 통째로 틀어진다(바이블은 폭의 84% 지점).
+  그래서 **실제 이미지 크기에서 유도**하고, 상수는 이미지를 못 읽을 때의 폴백으로만 둔다.
 
   Args:
     model: load_model()로 로드한 YOLO 모델
     image_path: 페이지 이미지 경로
-    page_width: 페이지 너비 (2단 구분용, 기본 3509)
-    page_height: 페이지 높이 (클리핑용, 기본 4963)
+    page_width: 페이지 너비. None이면 이미지에서 읽음
+    page_height: 페이지 높이. None이면 이미지에서 읽음
     conf: 최소 confidence 임계값
     start_number: 이 페이지의 시작 문제 번호
     padding: bbox 상하좌우 여백 (픽셀)
     min_height: 이 높이 미만 박스는 필터링 (유의사항 등 제거)
     top_margin: 위선에서 이만큼 내려온 곳부터 박스 허용 (픽셀)
-    mid_line_x: 페이지 중앙 구분선 x좌표 (2단 레이아웃 정렬용, 3509x4963 기준)
+    mid_line_x: 2단 구분선 x좌표. None이면 page_width // 2
     debug_dir: 디버그 이미지 저장 디렉토리 (None이면 저장 안 함)
 
   Returns:
@@ -103,11 +109,21 @@ def detect_problems(
   import cv2 as _cv2
   import numpy as _np
 
+  _FALLBACK_W, _FALLBACK_H = 3509, 4963  # 이미지를 못 읽을 때만 쓰는 옛 A3 상수
+
   _img_gray = _cv2.imread(image_path, _cv2.IMREAD_GRAYSCALE)
   if _img_gray is not None:
+    # 이미지 실측이 인자보다 우선한다 — bbox 좌표계가 곧 이 이미지라서.
+    _ih, _iw = _img_gray.shape[:2]
+    page_width, page_height = _iw, _ih
     _top_line_y = _detect_top_line_y(_img_gray, page_height)
   else:
+    page_width = page_width or _FALLBACK_W
+    page_height = page_height or _FALLBACK_H
     _top_line_y = int(page_height * 0.05)  # fallback: 5%
+
+  if mid_line_x is None:
+    mid_line_x = page_width // 2
 
   results = model(image_path, conf=conf, imgsz=1280, verbose=False)
 

@@ -17,6 +17,12 @@ from pydantic import BaseModel
 from config import UPLOAD_DIR
 from pipeline.file_converter import extract_images_from_pdf
 from pipeline.image_cropper import crop_and_save
+from pipeline.answer_type_detector import detect_answer_types
+from pipeline.text_anchor_segmenter import (
+    find_anchors, find_anchors_from_spans, segment_problems,
+)
+from pipeline.solution_masker import strip_solutions
+from pipeline.ocr_anchor_provider import ocr_number_spans, tighten_by_ink
 from pipeline.yolo_detector import load_model as yolo_load, detect_problems as yolo_detect, release_model as yolo_release, model_exists as yolo_model_exists
 from storage.supabase_client import (
     insert_staging_problems,
@@ -117,7 +123,7 @@ class UpdateBboxesRequest(BaseModel):
 
 async def _run_extraction(
     job_id: str, pdf_path: str, teacher_id: str, category: str,
-    textbook_id: Optional[str] = None, chapter_id: Optional[str] = None,
+    textbook_id: Optional[str] = None, folder_id: Optional[str] = None,
     page_start: Optional[int] = None, page_end: Optional[int] = None,
     pdf_type: str = "문제",
 ):
@@ -181,8 +187,8 @@ async def _run_extraction(
                 }
                 if textbook_id:
                     entry["textbook_id"] = textbook_id
-                if chapter_id:
-                    entry["chapter_id"] = chapter_id
+                if folder_id:
+                    entry["folder_id"] = folder_id
                 staging_data.append(entry)
             insert_staging_problems(job_id, teacher_id, staging_data)
             jobs[job_id]["status"] = "done"
@@ -191,12 +197,108 @@ async def _run_extraction(
         jobs[job_id]["status"] = "detecting"
         all_cropped = []
         crop_dir = str(Path(pdf_path).parent / "cropped")
-
-        # YOLO 기반 크롭 (문제 PDF)
-        if not yolo_model_exists():
-            raise RuntimeError(f"YOLO 모델이 없습니다. 학습 후 models/ 에 배치하세요.")
-
         Path(crop_dir).mkdir(parents=True, exist_ok=True)
+
+        def _ocr_spans_and_gray(doc, ocr_dpi: int = 200):
+            """스캔본에서 OCR 로 번호 span 을 얻는다. (spans, 페이지별 grayscale) 반환."""
+            import fitz as _fitz
+            import numpy as _np
+
+            spans, grays = [], {}
+            for pno in range(doc.page_count):
+                page = doc[pno]
+                pix = page.get_pixmap(matrix=_fitz.Matrix(ocr_dpi / 72, ocr_dpi / 72))
+                rgb = _np.frombuffer(pix.samples, dtype=_np.uint8).reshape(
+                    pix.height, pix.width, pix.n)[:, :, :3]
+                grays[pno] = _np.dot(rgb[..., :3], [0.299, 0.587, 0.114]).astype(_np.uint8)
+                spans.extend(ocr_number_spans(pno, rgb, page.rect.width, page.rect.height))
+            return spans, grays
+
+        def _run_text_anchors():
+            """문제번호 좌표로 자르는 경로 (디지털 PDF).
+
+            YOLO 는 모의고사 판형으로만 학습돼 다른 교재에서 심하게 과검출한다
+            (실측 300dpi: 교육청 23문항에 100박스, 내신 21문항에 26박스).
+            디지털 PDF 는 문제번호의 정확한 좌표가 텍스트에 이미 있으니 그걸 읽는다
+            (같은 조건에서 내신 21/21, 교육청 23/23 정확 일치).
+            앵커를 못 찾으면 None 을 돌려주고 호출부가 YOLO 로 넘어간다.
+            """
+            import fitz as _fitz
+
+            doc = _fitz.open(pdf_path)
+            try:
+                anchors = find_anchors(doc)
+                grays = None
+                if not anchors:
+                    # 텍스트 레이어가 없는 스캔본(쎈 등) — OCR 로 번호만 읽어
+                    # 아래 분할 로직을 그대로 태운다.
+                    logger.info("[extract] 텍스트 레이어 없음 → OCR 앵커 시도")
+                    spans, grays = _ocr_spans_and_gray(doc)
+                    anchors = find_anchors_from_spans(spans, doc[0].rect.width)
+                    if not anchors:
+                        return None
+                regions = segment_problems(doc, anchors)
+                strip_solutions(doc, regions)   # 학생 배포물이라 풀이가 섞이면 안 된다
+                if not regions:
+                    return None
+                if grays is not None:
+                    # 스캔본은 텍스트 좌표가 없어 여백이 안 잘린다 — 잉크로 조인다.
+                    for r in regions:
+                        page = doc[r["page"]]
+                        r["rect"] = tighten_by_ink(grays[r["page"]], r["rect"],
+                                                   page.rect.width, page.rect.height)
+
+                # 렌더된 페이지만 대상 (시작/끝 페이지 지정 대응)
+                rendered = {pi["page"]: pi for pi in page_images}
+                results = []
+                page_urls: dict = {}
+                num = 1
+                for r in sorted(regions, key=lambda r: (r["page"], r["column"], r["anchor_y"])):
+                    pnum = r["page"] + 1          # regions 는 0-indexed, page_images 는 1-indexed
+                    pi = rendered.get(pnum)
+                    if pi is None:
+                        continue
+                    ipath = pi["image_path"]
+                    with PILImage.open(ipath) as img:
+                        pw, ph = img.size
+                        # PDF 포인트 → 렌더 이미지 픽셀 (렌더 dpi 를 몰라도 되게 비율로)
+                        page_rect = doc[r["page"]].rect
+                        sx, sy = pw / page_rect.width, ph / page_rect.height
+                        x1, y1 = int(r["rect"].x0 * sx), int(r["rect"].y0 * sy)
+                        x2, y2 = int(r["rect"].x1 * sx), int(r["rect"].y1 * sy)
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(pw, x2), min(ph, y2)
+                        if x2 - x1 < 20 or y2 - y1 < 20:
+                            continue
+                        img.crop((x1, y1, x2, y2)).save(
+                            str(Path(crop_dir) / f"page{pnum:03d}_prob{num:03d}.png"))
+
+                    if pnum not in page_urls:
+                        page_urls[pnum] = upload_page_image(job_id, pnum, ipath)
+
+                    results.append({
+                        "number": num,
+                        "cropped_path": str(Path(crop_dir) / f"page{pnum:03d}_prob{num:03d}.png"),
+                        "page": pnum,
+                        "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                                 "page_width": pw, "page_height": ph},
+                        "source_page_image_url": page_urls[pnum],
+                    })
+                    num += 1
+                return results or None
+            finally:
+                doc.close()
+
+        # 1순위: 텍스트 앵커. 스캔본이라 앵커가 없으면 YOLO 로 넘어간다.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            all_cropped = await loop.run_in_executor(executor, _run_text_anchors) or []
+
+        if all_cropped:
+            logger.info("[extract] 텍스트 앵커로 %d개 문제 분할", len(all_cropped))
+
+        # YOLO 기반 크롭 (스캔본 등 앵커를 못 찾은 PDF)
+        if not all_cropped and not yolo_model_exists():
+            raise RuntimeError(f"YOLO 모델이 없습니다. 학습 후 models/ 에 배치하세요.")
 
         def _run_yolo():
             model = yolo_load()
@@ -213,7 +315,12 @@ async def _run_extraction(
                 page_image_urls[pnum] = page_url
 
                 debug_dir = str(Path(crop_dir).parent / "yolo_debug")
-                dets = yolo_detect(model, ipath, page_width=pw, conf=0.3, start_number=num, debug_dir=debug_dir)
+                # 판형마다 페이지 크기가 달라 상수를 못 쓴다 — 실제 이미지 크기를 넘긴다.
+                # (detect_problems 는 이미지에서 직접 재측정하고, 이 인자는 못 읽을 때의 폴백이다.
+                #  mid_line_x 는 넘기지 않아 page_width//2 로 유도된다 — 옛 고정값 1753 은
+                #  A3 모의고사 전용이라 다른 교재에서 2단 판정이 통째로 틀어졌다.)
+                dets = yolo_detect(model, ipath, page_width=pw, page_height=ph,
+                                   conf=0.3, start_number=num, debug_dir=debug_dir)
                 if not dets:
                     continue
 
@@ -239,8 +346,10 @@ async def _run_extraction(
             yolo_release(model)
             return results
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            all_cropped = await asyncio.get_event_loop().run_in_executor(executor, _run_yolo)
+        if not all_cropped:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                all_cropped = await asyncio.get_event_loop().run_in_executor(executor, _run_yolo)
+            logger.info("[extract] YOLO 로 %d개 문제 분할 (앵커 폴백)", len(all_cropped))
 
         jobs[job_id]["total_problems"] = len(all_cropped)
 
@@ -257,12 +366,30 @@ async def _run_extraction(
 
         # staging 저장 (LLM 구조화 건너뜀)
         jobs[job_id]["status"] = "saving"
+
+        # 내신은 학교마다 문항 구성이 달라 번호 규칙으로 답안유형을 못 맞춘다.
+        # → 지면의 보기기호(①~⑤)를 실제로 읽어 판정한다. 스캔본이라 못 읽으면 None.
+        detected_types: Dict[int, str] = {}
+        if category == "내신":
+            detected_types = detect_answer_types(str(pdf_path), all_cropped) or {}
+            if detected_types:
+                n_mc = sum(1 for v in detected_types.values() if v == "multiple_choice")
+                logger.info(
+                    "[answer_type] 내신 보기기호 검출 — 객관식 %d / 주관식 %d",
+                    n_mc, len(detected_types) - n_mc,
+                )
+            else:
+                logger.info("[answer_type] 내신 보기기호 검출 불가 → 객관식 기본값 사용")
+
         staging_data = []
         for item in uploaded:
             num = item["number"]
             # 모의고사: 문제 번호 기반 유형 자동 설정 (1~15: 5지선다, 16~30: 단답형)
             if category == "모의고사":
                 answer_type = "multiple_choice" if num <= 15 else "short_answer"
+            elif category == "내신":
+                # 검출값 우선, 못 읽은 문항은 객관식(내신은 객관식 위주)으로 둔다.
+                answer_type = detected_types.get(num, "multiple_choice")
             else:
                 answer_type = "short_answer"
             entry = {
@@ -281,8 +408,8 @@ async def _run_extraction(
             }
             if textbook_id:
                 entry["textbook_id"] = textbook_id
-            if chapter_id:
-                entry["chapter_id"] = chapter_id
+            if folder_id:
+                entry["folder_id"] = folder_id
             if page_start:
                 entry["page_start"] = page_start
             if page_end:
@@ -306,7 +433,7 @@ async def upload_file(
     teacher_id: str = Form(...),
     category: str = Form("기타"),
     textbook_id: Optional[str] = Form(None),
-    chapter_id: Optional[str] = Form(None),
+    folder_id: Optional[str] = Form(None),
     page_start: Optional[int] = Form(None),
     page_end: Optional[int] = Form(None),
     pdf_type: str = Form("문제"),
@@ -339,7 +466,7 @@ async def upload_file(
         "teacher_id": teacher_id,
         "category": category,
         "textbook_id": textbook_id,
-        "chapter_id": chapter_id,
+        "folder_id": folder_id,
         "page_start": page_start,
         "page_end": page_end,
         "pdf_type": pdf_type,
@@ -372,7 +499,7 @@ async def start_extraction(job_id: str, background_tasks: BackgroundTasks):
             job["teacher_id"],
             job["category"],
             job.get("textbook_id"),
-            job.get("chapter_id"),
+            job.get("folder_id"),
             job.get("page_start"),
             job.get("page_end"),
             job.get("pdf_type", "문제"),

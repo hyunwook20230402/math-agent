@@ -142,7 +142,41 @@ OPENAI_MODEL=gpt-4o
 
 ## 로컬 실행 환경 (자주 묻는 것)
 
+> ⚠️ **프로젝트 절대경로 (2026-08-26 이전)**: 현재 위치는
+> `C:\Users\fpsem\Desktop\math-agent-main\math-agent-main`. 옛 경로
+> `C:\Users\user\workspaces\math` 는 더 이상 없다. 문서·커맨드 예시에 옛 경로가 남아 있으면
+> 새 경로로 바꿔 읽을 것(`.claude/commands/server-check.md`·`tutor-smoke.md`, 아래 scp 예시 등).
+> `.claude/settings.json` 훅 4개와 `check_path_hook.py`·`tutor_import_hook.py` 는 이전 시 정정 완료.
+> **훅이 옛 경로를 가리키면 python 이 exit 2 → Edit/Write 도구가 통째로 차단된다**(증상: 모든 파일
+> 수정이 `can't open file ... check_path_hook.py` 로 실패). 그땐 Edit 이 막혀 있으니 **Bash 로** 고쳐야 한다.
+
 터미널 2개로 나눠 실행. 혼동 금지.
+
+### ⚠️ venv 신규 생성 시 — pip 이 중간에 끊겨도 "성공"처럼 보인다 (2026-08-26)
+
+**증상**: 새 PC/새 경로에 venv 를 만들고 `pip install -r requirements.txt` 를 돌렸는데, 화면상 에러가
+스쳐 지나가고 `uvicorn` 이 안 뜬다. `import torch` 같은 건 되는데 `fastapi` 는 없다.
+
+**원인**: Windows **260자 경로 제한(WinError 206)**. `torch` 의 라이선스 디렉토리가
+`...\site-packages\torch-*.dist-info\licenses\third_party\kineto\libkineto\third_party\dynolog\...`
+처럼 깊어 260자를 넘기면 압축 해제가 실패하고 **pip 트랜잭션이 그 지점에서 통째로 중단**된다.
+그러면 설치 순서상 **torch 뒤에 오는 패키지가 전부 누락**된다 — fastapi·supabase·openai·ultralytics
+가 여기 해당해서 `main.py:13 from fastapi import ...` 에서 즉사한다.
+(이 프로젝트의 site-packages 경로는 이미 98자라 여유가 없다. `LongPathsEnabled` 은 0.)
+
+**대응**:
+1. pip 종료코드를 반드시 확인한다. `pip ... ; echo $?` 처럼 **다른 명령을 뒤에 붙이면 그 명령의
+   종료코드가 덮어써서 0 으로 보인다** — 실제로 이 함정에 한 번 걸렸다. `code=$?` 로 먼저 받을 것.
+2. torch 는 한 번 들어가면 `pip list` 에 등록되므로, **재실행하면 건너뛰고 나머지만** 설치된다.
+   즉 같은 명령을 한 번 더 돌리는 것만으로 복구된다.
+3. **완주 검증은 `python -c "import main"`** 으로. 예외 없이 끝나야 기동 가능한 상태다.
+4. 근본 해결은 Windows 장문 경로 활성화(관리자 권한 레지스트리 `LongPathsEnabled=1`) 또는
+   프로젝트를 짧은 경로로 옮기기.
+
+**`requirements.txt` 는 불완전하다**: `ultralytics`·`openai`·`requests` 가 빠져 있는데 셋 다
+**모듈 레벨 import** 다(`pipeline/yolo_detector.py:16`, `handlers/stuck_helper.py:30`).
+그 파일만 믿고 설치하면 기동이 안 되니 **설치 명령에 직접 붙여야 한다**:
+`pip install -r requirements.txt ultralytics openai`
 
 **백엔드 (Python, venv 필요)**
 ```
@@ -212,6 +246,24 @@ parsed` 에러가 나고 그 턴이 멈춘다("또 멈췄다" 의 진짜 원인)
 > 산문 규칙은 11번 안 지켜졌다(증명됨). 화면 문제 신고 시 코드부터 의심하지 말고 이 순서로.**
 
 **0. 한 방에: `/server-check`** — 아래 1~4 를 자동 수행(옛 서버 진단·정리·재기동·HTTP 검증).
+
+**0-a. 에러 문구로 먼저 층을 가른다 (2026-08-26 추가 — 30초짜리 판별)**
+브라우저 토스트/콘솔에 뜬 문구가 **영문 `Failed to fetch`(TypeError)** 인가, **한국어 문장**인가?
+- **영문 `Failed to fetch` = 응답을 아예 못 받았다** → 서버 미기동 / 포트 / CORS preflight 차단.
+  **Supabase·인증·쿼리는 용의선상에서 빼라** — 거기까지 도달조차 못 한 것이다.
+  (`shared/lib/api.ts` 의 `if (!resp.ok)` 는 **응답이 온 경우에만** 한국어 detail 로 바꾼다.
+  그래서 영문 원문이 보였다는 것 자체가 "응답 없음"의 증거다.)
+- **한국어 문장** = 응답은 왔고 백엔드가 준 detail 이다 → 인증(401)·권한(403, teacher role 강제)·
+  데이터 문제. 이때부터 Supabase 를 의심하면 된다.
+- 예외 하나: **미처리 500 에는 CORS 헤더가 안 붙어**(Starlette ServerErrorMiddleware 가
+  CORSMiddleware 바깥) 브라우저가 차단 → **500 이 `Failed to fetch` 로 위장**될 수 있다.
+  그래서 서버가 떠 있는데도 영문이 뜨면 브라우저 말고 **uvicorn 터미널의 500 스택**을 봐야 한다.
+
+**0-b. "○○가 없습니다" 빈 상태를 데이터 부재로 믿지 말 것.**
+`SolutionNodeEditorModal.load()` 의 catch 는 `setNodes` 를 건드리지 않아, 조회가 **실패해도**
+초기값 `[]` 이 그대로 "노드가 없습니다"로 렌더된다. 실제로 DB 엔 노드가 멀쩡히 있는데
+"백필이 안 됐나?" 로 오진하기 쉽다(2026-08-26 실제 발생). **빈 상태 + 에러 토스트가 같이 보이면
+데이터가 아니라 통신을 의심**하고, DB 를 직접 조회해 실재 여부부터 확인하라.
 
 1. **옛 서버 포트 점유(핵심, 8~18차 화면 실패의 진짜 정체)**: 내가 "재기동"해도 옛 서버가 포트를
    안 놓으면 새 uvicorn/vite 가 **조용히 바인딩 실패** → 고친 코드가 화면에 반영 안 됨. **`netstat` PID

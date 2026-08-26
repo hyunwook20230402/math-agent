@@ -44,8 +44,8 @@ def insert_staging_problems(job_id: str, teacher_id: str, problems: list) -> lis
         }
         if p.get("textbook_id"):
             row["textbook_id"] = p["textbook_id"]
-        if p.get("chapter_id"):
-            row["chapter_id"] = p["chapter_id"]
+        if p.get("folder_id"):
+            row["folder_id"] = p["folder_id"]
         if p.get("page_start"):
             row["page_start"] = p["page_start"]
         if p.get("page_end"):
@@ -134,8 +134,15 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
       대상 없으면 빈 리스트.
     """
     client = get_client()
-    # 멱등성: 아직 problems 로 승격 안 됨(promoted_to_problems=FALSE) + 해설 태깅 완료
-    # (solution_image_url 있음) 인 것만 대상. → 중복 INSERT 와 빈 메타 등록을 동시에 막는다.
+    # 멱등성: 아직 problems 로 승격 안 됨(promoted_to_problems=FALSE) 인 것만 대상.
+    # → 재호출해도 중복 INSERT 가 안 된다.
+    #
+    # 예전엔 여기에 `.not_.is_("solution_image_url", "null")` 이 붙어 있었다.
+    # 해설 태깅에서 단원·난이도·개념태그가 나오므로 "해설이 붙은 것만 등록" 시킨 것인데,
+    # 그러면 **문제 PDF 만 올린 경우 승격이 0건**이라 화면에 아무것도 안 뜬다
+    # (실측: 내신 21건이 staging 에 approved 로 남았는데 problems 에는 0건).
+    # 해설을 늘 함께 올리는 게 아니어서 이 조건을 뺀다 — 해설 없이 올라온 문제는
+    # unit='미분류', difficulty_score 기본값으로 등록되고, 메타는 나중에 채운다.
     staged = (
         client.table("problem_staging")
         .select("*")
@@ -143,7 +150,6 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
         .eq("teacher_id", teacher_id)
         .in_("status", ["approved", "modified", "pending"])
         .eq("promoted_to_problems", False)
-        .not_.is_("solution_image_url", "null")
         .execute()
     ).data
 
@@ -181,8 +187,8 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
         }
         if p.get("textbook_id"):
             entry["textbook_id"] = p["textbook_id"]
-        if p.get("chapter_id"):
-            entry["chapter_id"] = p["chapter_id"]
+        if p.get("folder_id"):
+            entry["folder_id"] = p["folder_id"]
         problems.append(entry)
 
     inserted = client.table("problems").insert(problems).execute().data or []

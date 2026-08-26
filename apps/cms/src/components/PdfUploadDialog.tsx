@@ -1,13 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '@shared/supabase/client';
 import { useAuth } from '@shared/hooks/useAuth';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { toast } from '@shared/hooks/use-toast';
 import { Upload, FileText, Loader2, AlertTriangle } from 'lucide-react';
-import type { Textbook, Chapter } from '@shared/types/database';
+import type { Textbook, ProblemFolder } from '@shared/types/database';
 
 const PIPELINE_URL =
   (import.meta.env.VITE_TUTOR_API_URL as string | undefined) || 'http://localhost:8001';
@@ -16,10 +15,10 @@ interface PdfUploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   textbook: Textbook;
-  chapter: Chapter | null;
+  folder: ProblemFolder | null;
 }
 
-const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDialogProps) => {
+const PdfUploadDialog = ({ open, onOpenChange, textbook, folder }: PdfUploadDialogProps) => {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const [file, setFile] = useState<File | null>(null);
@@ -30,45 +29,6 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
   const [uploading, setUploading] = useState(false);
   const [jobStatus, setJobStatus] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  // 폴더(chapter) 선택/생성 — props.chapter 를 초기값으로, 다이얼로그 안에서 변경 가능.
-  const [availableChapters, setAvailableChapters] = useState<Chapter[]>([]);
-  const [selectedChapterId, setSelectedChapterId] = useState<string>(chapter?.id ?? '');
-  const [newChapterName, setNewChapterName] = useState('');
-  const [creatingChapter, setCreatingChapter] = useState(false);
-
-  // 다이얼로그 열릴 때 이 교재의 폴더 목록 조회.
-  useEffect(() => {
-    if (!open) return;
-    setSelectedChapterId(chapter?.id ?? '');
-    (async () => {
-      const { data } = await supabase
-        .from('chapters')
-        .select('*')
-        .eq('textbook_id', textbook.id)
-        .order('sort_order', { ascending: true });
-      if (data) setAvailableChapters(data);
-    })();
-  }, [open, textbook.id, chapter?.id]);
-
-  const handleCreateChapter = async () => {
-    const name = newChapterName.trim();
-    if (!name) return;
-    setCreatingChapter(true);
-    const { data, error } = await supabase
-      .from('chapters')
-      .insert({ name, description: '', sort_order: availableChapters.length + 1, textbook_id: textbook.id })
-      .select()
-      .single();
-    setCreatingChapter(false);
-    if (error || !data) {
-      toast({ title: '오류', description: '폴더 생성 실패', variant: 'destructive' });
-      return;
-    }
-    setAvailableChapters(prev => [...prev, data]);
-    setSelectedChapterId(data.id);
-    setNewChapterName('');
-    toast({ title: '폴더 생성', description: `'${name}' 폴더가 만들어졌습니다.` });
-  };
 
   const statusLabel: Record<string, string> = {
     queued: '대기 중',
@@ -94,8 +54,10 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
       formData.append('category', category);
       formData.append('pdf_type', pdfType);
       formData.append('textbook_id', textbook.id);
-      if (selectedChapterId) {
-        formData.append('chapter_id', selectedChapterId);
+      // 폴더는 화면에서 고르지 않는다 — 사이드바에서 열어둔 폴더로, 아니면 교재 루트로.
+      // 폴더가 한 컬럼(folder_id)으로 통합돼 깊이에 상관없이 이 값 하나면 된다.
+      if (folder?.id) {
+        formData.append('folder_id', folder.id);
       }
       if (pageStart) formData.append('page_start', pageStart);
       if (pageEnd) formData.append('page_end', pageEnd);
@@ -180,42 +142,6 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
           <p className="text-sm text-muted-foreground">
             교재: <span className="font-medium text-foreground">{textbook.name}</span>
           </p>
-          <div>
-            <Label>대상 폴더</Label>
-            <select
-              value={selectedChapterId}
-              onChange={(e) => setSelectedChapterId(e.target.value)}
-              disabled={uploading}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-            >
-              <option value="">교재 루트 (폴더 없음)</option>
-              {availableChapters.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground mt-1">
-              이 PDF 의 문제가 들어갈 폴더입니다. 연도/회차별로 폴더를 나눠 넣으세요.
-            </p>
-          </div>
-          <div className="flex items-end gap-2">
-            <div className="flex-1">
-              <Label>새 폴더 만들기</Label>
-              <Input
-                placeholder="예: 고3 평가원 6월 26년"
-                value={newChapterName}
-                onChange={(e) => setNewChapterName(e.target.value)}
-                disabled={uploading || creatingChapter}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleCreateChapter(); } }}
-              />
-            </div>
-            <Button
-              variant="outline"
-              onClick={handleCreateChapter}
-              disabled={!newChapterName.trim() || uploading || creatingChapter}
-            >
-              {creatingChapter ? <Loader2 className="h-4 w-4 animate-spin" /> : '만들기'}
-            </Button>
-          </div>
         </div>
 
         <div className="space-y-4">
@@ -240,6 +166,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, chapter }: PdfUploadDia
               >
                 <option value="쎈">쎈</option>
                 <option value="모의고사">모의고사</option>
+                <option value="내신">내신</option>
                 <option value="연산">연산</option>
                 <option value="자작">자작</option>
               </select>

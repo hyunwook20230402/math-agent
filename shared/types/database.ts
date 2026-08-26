@@ -57,8 +57,9 @@ export interface Database {
           structuring_status: 'pending' | 'processing' | 'done' | 'failed';
           embedding: any | null; // vector(1024)
           textbook_id: string | null;
-          chapter_id: string | null;
-          subchapter_id: string | null;
+          chapter_id: string | null;      // 옛 구조(보존) — 조회는 folder_id 로
+          subchapter_id: string | null;   // 옛 구조(보존)
+          folder_id: string | null;
           solution_image_url: string | null;
           solution_summary: string | null;
           pitfall: string | null;
@@ -90,6 +91,7 @@ export interface Database {
           textbook_id?: string | null;
           chapter_id?: string | null;
           subchapter_id?: string | null;
+          folder_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -116,6 +118,7 @@ export interface Database {
           textbook_id?: string | null;
           chapter_id?: string | null;
           subchapter_id?: string | null;
+          folder_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -503,6 +506,30 @@ export interface Textbook {
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * 통합 폴더 (2026-08-26 개편).
+ * 옛 Chapter(1단계)/Subchapter(2단계) 두 타입을 하나로 합쳤다.
+ * parent_id 로 자기 자신을 가리켜 깊이 제한이 없다 —
+ * 교재 > 공통수학1 > 야탑고 > 2026년 > ... 처럼 계속 내려갈 수 있다.
+ * 옛 두 타입은 아직 남겨둔다(마이그레이션 되돌리기 여지).
+ */
+export interface ProblemFolder {
+  id: string;
+  textbook_id: string;
+  parent_id: string | null;   // null = 교재 바로 아래(최상위 폴더)
+  name: string;
+  description?: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 화면 트리에 쓰는 형태 — 자식을 품고 깊이를 들고 다닌다. */
+export interface ProblemFolderNode extends ProblemFolder {
+  children: ProblemFolderNode[];
+  depth: number;
 }
 
 export interface Chapter {
