@@ -97,7 +97,11 @@ const TextbookManagementNew = () => {
   const [isTextbookDialogOpen, setIsTextbookDialogOpen] = useState(false);
   const [isPdfDialogOpen, setIsPdfDialogOpen] = useState(false);
   // 폴더 생성 모달. parentId=null 이면 교재 바로 아래(최상위), 아니면 그 폴더의 자식.
-  const [folderDialog, setFolderDialog] = useState<{ parentId: string | null; parentName: string } | null>(null);
+  // textbookId 를 같이 들고 다닌다 — 선택 안 된 교재에서도 '폴더 추가' 를 누를 수 있는데,
+  // 선택된 교재를 보고 만들면 엉뚱한 교재 밑에 폴더가 생긴다.
+  const [folderDialog, setFolderDialog] = useState<
+    { textbookId: string; parentId: string | null; parentName: string } | null
+  >(null);
 
   // 삭제 확인 모달
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'textbook' | 'folder'; id: string; name: string } | null>(null);
@@ -204,15 +208,15 @@ const TextbookManagementNew = () => {
   };
 
   /** 한 교재의 모든 폴더를 깊이 상관없이 한 번에 가져온다. */
-  const fetchFolders = async (textbookId: string) => {
+  const fetchFolders = async (textbookId: string): Promise<ProblemFolder[]> => {
     const { data, error } = await supabase
       .from('problem_folders')
       .select('*')
       .eq('textbook_id', textbookId)
       .order('sort_order', { ascending: true });
-    if (!error && data) {
-      setFolders(prev => ({ ...prev, [textbookId]: data }));
-    }
+    if (error || !data) return folders[textbookId] ?? [];
+    setFolders(prev => ({ ...prev, [textbookId]: data }));
+    return data;
   };
 
   // ── 폴더 트리 헬퍼 (평면 목록 → 계층) ──────────────────────────
@@ -275,22 +279,33 @@ const TextbookManagementNew = () => {
     }
   };
 
-  const toggleTextbook = async (textbook: Textbook) => {
-    const isExpanded = expandedTextbooks.has(textbook.id);
-    if (isExpanded) {
+  /** 화살표 전용 — 접기/펼치기만 한다. 폴더 행과 같은 규칙. */
+  const toggleTextbookExpand = async (textbook: Textbook, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (expandedTextbooks.has(textbook.id)) {
       setExpandedTextbooks(prev => { const s = new Set(prev); s.delete(textbook.id); return s; });
-    } else {
-      setExpandedTextbooks(prev => new Set([...prev, textbook.id]));
-      if (!folders[textbook.id]) await fetchFolders(textbook.id);
+      return;
     }
+    setExpandedTextbooks(prev => new Set([...prev, textbook.id]));
+    if (!folders[textbook.id]) await fetchFolders(textbook.id);
+  };
+
+  /**
+   * 교재 행 클릭 — 고르고 펼친다. **접지 않는다.**
+   * 옛 동작(클릭=토글)은 이미 펼쳐진 교재를 고르려고 누르면 접혀 버려서,
+   * 그 아래 '폴더 추가' 가 같이 사라졌다("고3 모의고사는 왜 폴더 추가가 안 되냐"의 정체).
+   */
+  const selectTextbook = async (textbook: Textbook) => {
+    setExpandedTextbooks(prev => new Set([...prev, textbook.id]));
+    if (!folders[textbook.id]) await fetchFolders(textbook.id);
     setSelectedTextbook(textbook);
     setSelectedFolder(null);
     ctxSetTextbook(textbook);
     ctxSetFolder(null);
   };
 
-  const selectFolder = (folder: ProblemFolder) => {
-    const list = folders[folder.textbook_id] ?? folderList;
+  const selectFolder = (folder: ProblemFolder, listOverride?: ProblemFolder[]) => {
+    const list = listOverride ?? folders[folder.textbook_id] ?? folderList;
     setSelectedFolder(folder);
     ctxSetFolder(folder, pathOf(list, folder));
     // 고르면 펼쳐준다 — 안 그러면 하위 폴더를 보려고 화살표를 따로 눌러야 해서 불편하다.
@@ -331,15 +346,15 @@ const TextbookManagementNew = () => {
 
   /** 깊이 상관없이 폴더를 만든다. parentId=null 이면 교재 바로 아래. */
   const handleCreateFolder = async () => {
-    if (!selectedTextbook || !folderDialog) return;
-    const parentId = folderDialog.parentId;
+    if (!folderDialog) return;
+    const { textbookId, parentId } = folderDialog;
     const { data, error } = await supabase
       .from('problem_folders')
       .insert({
         name: folderForm.name,
         description: folderForm.description,
         sort_order: folderForm.sort_order,
-        textbook_id: selectedTextbook.id,
+        textbook_id: textbookId,
         parent_id: parentId,
       })
       .select()
@@ -356,10 +371,16 @@ const TextbookManagementNew = () => {
     toast({ title: '성공', description: '폴더가 생성되었습니다.' });
     setFolderForm({ name: '', description: '', sort_order: 1 });
     setFolderDialog(null);
-    await fetchFolders(selectedTextbook.id);
+    const list = await fetchFolders(textbookId);
     if (data) {
+      const owner = textbooks.find(t => t.id === textbookId);
+      if (owner && selectedTextbook?.id !== textbookId) {
+        setSelectedTextbook(owner);
+        ctxSetTextbook(owner);
+        setExpandedTextbooks(prev => new Set([...prev, textbookId]));
+      }
       if (parentId) setExpandedFolders(prev => new Set([...prev, parentId]));
-      selectFolder(data);
+      selectFolder(data, list);
     }
   };
 
@@ -614,7 +635,7 @@ const TextbookManagementNew = () => {
               onClick={e => {
                 e.stopPropagation();
                 setFolderForm({ name: '', description: '', sort_order: kids.length + 1 });
-                setFolderDialog({ parentId: folder.id, parentName: folder.name });
+                setFolderDialog({ textbookId: folder.textbook_id, parentId: folder.id, parentName: folder.name });
               }}
             >
               <Plus className="h-3 w-3 flex-shrink-0" />
@@ -630,7 +651,7 @@ const TextbookManagementNew = () => {
                   ? (list.find(f => f.id === folder.parent_id)?.name ?? '상위 폴더')
                   : (selectedTextbook?.name ?? '교재');
                 setFolderForm({ name: '', description: '', sort_order: siblings.length + 1 });
-                setFolderDialog({ parentId: folder.parent_id, parentName });
+                setFolderDialog({ textbookId: folder.textbook_id, parentId: folder.parent_id, parentName });
               }}
             >
               <Plus className="h-3 w-3 flex-shrink-0" />
@@ -674,13 +695,19 @@ const TextbookManagementNew = () => {
                   {/* 교재 행 */}
                   <div
                     className={`flex items-center gap-1 px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors group ${isSelected && !selectedFolder ? 'bg-primary/10 text-primary' : ''}`}
-                    onClick={() => toggleTextbook(textbook)}
+                    onClick={() => selectTextbook(textbook)}
                   >
-                    {isExpanded ? (
-                      <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                    )}
+                    <button
+                      className="p-0 flex-shrink-0 text-muted-foreground"
+                      onClick={e => toggleTextbookExpand(textbook, e)}
+                      title={isExpanded ? '접기' : '펼치기'}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      )}
+                    </button>
                     <BookOpen className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                     {renamingId === textbook.id ? (
                       <input
@@ -720,23 +747,25 @@ const TextbookManagementNew = () => {
                         renderFolderRow(f, textbookFolders, 1)
                       )}
 
-                      {/* 최상위로 빼는 드롭 영역 겸 '폴더 추가' */}
-                      {isSelected && (
-                        <div
-                          onDragOver={e => { if (draggingFolderId) { e.preventDefault(); setDropTargetId('__root__'); } }}
-                          onDragLeave={() => setDropTargetId(prev => prev === '__root__' ? null : prev)}
-                          onDrop={e => { e.preventDefault(); handleFolderDrop(null); }}
-                          className={`flex items-center gap-1 pl-7 pr-3 py-1 cursor-pointer text-muted-foreground hover:text-primary transition-colors ${dropTargetId === '__root__' ? 'ring-2 ring-primary ring-inset bg-primary/5' : ''}`}
-                          title={draggingFolderId ? '여기에 놓으면 교재 바로 아래(최상위)로 나옵니다' : undefined}
-                          onClick={() => {
-                            setFolderForm({ name: '', description: '', sort_order: childrenOf(textbookFolders, null).length + 1 });
-                            setFolderDialog({ parentId: null, parentName: textbook.name });
-                          }}
-                        >
-                          <Plus className="h-3 w-3 flex-shrink-0" />
-                          <span className="text-xs">폴더 추가</span>
-                        </div>
-                      )}
+                      {/* 최상위로 빼는 드롭 영역 겸 '폴더 추가'.
+                          펼친 교재면 늘 보여준다 — 선택된 교재에만 띄우면
+                          다른 교재에 폴더를 만들 방법이 없다.
+                          드래그 드롭만 선택된 교재로 한정한다(handleFolderDrop 이
+                          선택된 교재의 폴더 목록에서 대상을 찾기 때문). */}
+                      <div
+                        onDragOver={isSelected ? (e => { if (draggingFolderId) { e.preventDefault(); setDropTargetId('__root__'); } }) : undefined}
+                        onDragLeave={isSelected ? (() => setDropTargetId(prev => prev === '__root__' ? null : prev)) : undefined}
+                        onDrop={isSelected ? (e => { e.preventDefault(); handleFolderDrop(null); }) : undefined}
+                        className={`flex items-center gap-1 pl-7 pr-3 py-1 cursor-pointer text-muted-foreground hover:text-primary transition-colors ${isSelected && dropTargetId === '__root__' ? 'ring-2 ring-primary ring-inset bg-primary/5' : ''}`}
+                        title={isSelected && draggingFolderId ? '여기에 놓으면 교재 바로 아래(최상위)로 나옵니다' : undefined}
+                        onClick={() => {
+                          setFolderForm({ name: '', description: '', sort_order: childrenOf(textbookFolders, null).length + 1 });
+                          setFolderDialog({ textbookId: textbook.id, parentId: null, parentName: textbook.name });
+                        }}
+                      >
+                        <Plus className="h-3 w-3 flex-shrink-0" />
+                        <span className="text-xs">폴더 추가</span>
+                      </div>
                     </div>
                   )}
                 </div>
