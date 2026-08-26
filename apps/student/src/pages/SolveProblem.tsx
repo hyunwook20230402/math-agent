@@ -18,9 +18,13 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@shared/lib/api';
-import { checkAnswer } from '@shared/lib/answerNormalizer';
+import { checkAnswer, normalizeAnswer } from '@shared/lib/answerNormalizer';
+import { MathText } from '@shared/ui/MathText';
 import type { DistributionWithDetails } from '@shared/types/database';
 import StuckHelperModal from '@/components/tutor/StuckHelperModal';
+
+// 보기 번호 표기. 교사가 보기 내용을 채운 문제에서 ① x+2 처럼 앞에 붙인다.
+const CHOICE_MARKS = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
 
 interface Problem {
   id: string;
@@ -497,23 +501,37 @@ const SolveProblem = () => {
             <label className="block text-sm font-medium mb-2">답안</label>
             {currentProblem.answer_type === 'multiple_choice' ? (
               <div className="space-y-2">
-                {/* choices가 있으면 사용하고, 없으면 1~5번 생성 */}
-                {(currentProblem.choices && currentProblem.choices.length > 0 
-                  ? currentProblem.choices 
-                  : ['1번', '2번', '3번', '4번', '5번']
-                ).map((choice, index) => (
-                  <label key={index} className="flex items-center space-x-2 cursor-pointer p-2 rounded hover:bg-muted">
-                    <input
-                      type="radio"
-                      name={`problem-${currentProblem.id}`}
-                      value={choice}
-                      checked={answers[currentProblem.id] === choice}
-                      onChange={(e) => handleAnswerChange(e.target.value)}
-                      className="h-4 w-4"
-                    />
-                    <span className="text-sm">{choice}</span>
-                  </label>
-                ))}
+                {/* 라디오 값은 언제나 **보기 번호**다. 보기 내용을 값으로 쓰면
+                    정답 판정(normalizeAnswer)이 문자열에서 첫 숫자를 뽑는 탓에
+                    "x+2" 가 2번으로 읽혀 오채점된다.
+                    보기 내용(choices)은 교사가 직접 채운 경우에만 있고 — 지면에 보기가
+                    인쇄된 문제는 비어 있어 번호만 보여준다. */}
+                {Array.from(
+                  { length: currentProblem.choices?.length || 5 },
+                  (_, index) => {
+                    const value = String(index + 1);
+                    const text = currentProblem.choices?.[index]?.trim();
+                    // 옛 답안은 "1번" 으로 저장돼 있어 그대로 비교하면 선택이 안 보인다.
+                    const picked =
+                      normalizeAnswer(answers[currentProblem.id], 'multiple_choice') === value;
+                    return (
+                      <label key={index} className="flex items-center space-x-2 cursor-pointer p-2 rounded hover:bg-muted">
+                        <input
+                          type="radio"
+                          name={`problem-${currentProblem.id}`}
+                          value={value}
+                          checked={picked}
+                          onChange={(e) => handleAnswerChange(e.target.value)}
+                          className="h-4 w-4"
+                        />
+                        <span className="text-sm">
+                          {CHOICE_MARKS[index] ?? `${value}.`}
+                          {text ? <MathText text={text} /> : <span className="ml-1">{value}번</span>}
+                        </span>
+                      </label>
+                    );
+                  },
+                )}
               </div>
             ) : (
               <input

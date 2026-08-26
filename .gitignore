@@ -80,3 +80,6 @@ backend/pdf_pipeline/tmp_*.txt
 
 # Claude 세션 lock
 .claude/scheduled_tasks.lock
+
+# 원격에서 삭제한 개인 작업 디렉토리 (커밋 1c774f1) — 로컬에만 둔다
+/평가원 6월/

@@ -1,7 +1,10 @@
 """problem_staging 테이블 CRUD"""
+import logging
 import uuid
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_SERVICE_KEY
+
+logger = logging.getLogger(__name__)
 
 _client: Client | None = None
 
@@ -29,7 +32,7 @@ def insert_staging_problems(job_id: str, teacher_id: str, problems: list) -> lis
             "difficulty_score": p.get("difficulty_score", 2),
             "answer_type": p.get("answer_type", "short_answer"),
             "correct_answer": p.get("correct_answer", ""),
-            "choices": None,
+            "choices": p.get("choices"),
             "explanation": p.get("explanation"),
             "problem_text": p.get("problem_text", ""),
             "source_image_url": p.get("source_image_url"),
@@ -80,6 +83,31 @@ def update_staging_status(staging_id: str, status: str, updates: dict | None = N
         .execute()
     )
     return result.data[0] if result.data else {}
+
+
+# 상세 입력에서 고칠 수 있는 값 중 problems 로도 넘겨야 하는 것들.
+# `difficulty`·`title` 은 파생/별도 규칙이라 제외한다.
+_SYNC_TO_PROBLEMS = ("answer_type", "correct_answer", "choices",
+                     "difficulty_score", "unit", "explanation")
+
+
+def sync_promoted_problem(staging_row: dict, updates: dict | None) -> None:
+    """staging 을 고쳤을 때 이미 승격된 problems 행에도 같은 값을 반영한다.
+
+    승격(`promoted_to_problems=True`)된 뒤에는 `approve_to_problems` 가 멱등성 때문에
+    그 행을 다시 만들지 않는다. 그래서 이 동기화가 없으면 상세 입력에서 정답을 넣어도
+    학생에게 나가는 problems 행은 영영 빈 채로 남는다.
+    """
+    pid = staging_row.get("promoted_problem_id")
+    if not pid or not updates:
+        return
+    payload = {k: v for k, v in updates.items() if k in _SYNC_TO_PROBLEMS}
+    if not payload:
+        return
+    try:
+        get_client().table("problems").update(payload).eq("id", pid).execute()
+    except Exception as e:  # noqa: BLE001 — 동기화 실패로 staging 저장을 되돌리진 않는다
+        logger.warning("[sync] problems %s 갱신 실패: %s", pid, e)
 
 
 def get_staging_by_page(job_id: str, page_number: int) -> list:
@@ -173,7 +201,9 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
             "image_url": p.get("source_image_url"),
             "answer_type": p.get("answer_type", "short_answer"),
             "correct_answer": p.get("correct_answer", ""),
-            "choices": None,
+            # 교사가 직접 만든 보기가 있으면 그대로 넘긴다.
+            # (지면에 보기가 인쇄된 문제는 None — 학생 화면이 이미지를 보고 번호만 고른다.)
+            "choices": p.get("choices"),
             "explanation": p.get("explanation"),
             "structuring_status": "pending",
             # 해설/온톨로지 필드 (staging → problems 복사)

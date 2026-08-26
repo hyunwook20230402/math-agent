@@ -44,6 +44,9 @@ interface ProblemSet {
   description?: string;
 }
 
+// 보기 번호 표기. 교사가 보기 내용을 직접 채울 때 앞에 붙는다.
+const CHOICE_MARKS = ['①', '②', '③', '④', '⑤'];
+
 const AddProblemNew = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -71,6 +74,8 @@ const AddProblemNew = () => {
     difficulty_score: 2,
     problem_type: 'multiple_choice' as 'multiple_choice' | 'short_answer' | 'essay',
     correct_answer: '',
+    // 교사가 직접 만든 보기. 지면에 보기가 인쇄된 문제는 빈 배열로 둔다.
+    choices: [] as string[],
     explanation: '',
     image_url: '',
     solution_image_url: '',
@@ -434,6 +439,7 @@ const AddProblemNew = () => {
         difficulty_score: (problem as any).difficulty_score || 5,
         problem_type: (problem.answer_type as 'multiple_choice' | 'short_answer' | 'essay') || 'multiple_choice',
         correct_answer: correctAnswer,
+        choices: Array.isArray((problem as any).choices) ? (problem as any).choices : [],
         explanation: problem.explanation || '',
         image_url: problem.image_url || '',
         solution_image_url: problem.solution_image_url || '',
@@ -629,7 +635,9 @@ const AddProblemNew = () => {
         solution_image_url: solutionUrl || null,
         answer_type: formData.problem_type,
         correct_answer: formData.correct_answer,
-        choices: null,
+        // 채운 보기가 하나라도 있으면 저장한다. 전부 비었으면 null —
+        // 학생 화면이 문제 이미지의 보기를 그대로 쓰고 번호만 고르게 된다.
+        choices: formData.choices.some(c => c.trim()) ? formData.choices : null,
         explanation: formData.explanation || null,
       };
 
@@ -686,6 +694,7 @@ const AddProblemNew = () => {
           difficulty_score: 2,
           problem_type: 'multiple_choice',
           correct_answer: '1',
+          choices: [],
           explanation: '',
           image_url: '',
           solution_image_url: '',
@@ -999,9 +1008,30 @@ const AddProblemNew = () => {
                     <option value="4">4번</option>
                     <option value="5">5번</option>
                   </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    보기 내용은 문제 이미지에서 확인합니다
-                  </p>
+                  {/* 답이 수식이라 지면에 보기가 없는 문제(예: "나머지를 구하시오")를
+                      객관식으로 낼 때 보기를 직접 만든다. 비워 두면 지금까지처럼
+                      문제 이미지의 보기를 그대로 쓰고 번호만 고른다. */}
+                  <div className="mt-3">
+                    <Label className="text-sm">보기 내용 (선택)</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      비워 두면 문제 이미지의 보기를 그대로 씁니다. 채우면 학생 화면에 이 내용이 보입니다.
+                    </p>
+                    {CHOICE_MARKS.map((mark, i) => (
+                      <div key={i} className="flex items-center gap-2 mt-1">
+                        <span className="text-sm w-4 text-muted-foreground shrink-0">{mark}</span>
+                        <Input
+                          value={formData.choices[i] ?? ''}
+                          onChange={(e) => setFormData(prev => {
+                            const next = [...prev.choices];
+                            while (next.length < CHOICE_MARKS.length) next.push('');
+                            next[i] = e.target.value;
+                            return { ...prev, choices: next.some(c => c.trim()) ? next : [] };
+                          })}
+                          placeholder={`${i + 1}번 보기 (예: x+2)`}
+                        />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 

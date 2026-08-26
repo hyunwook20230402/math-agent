@@ -31,6 +31,7 @@ from storage.supabase_client import (
     get_staging_by_job,
     get_staging_by_page,
     update_staging_status,
+    sync_promoted_problem,
     update_staging_image,
     update_staging_bbox,
     delete_staging,
@@ -102,6 +103,13 @@ class StagingUpdate(BaseModel):
     correct_answer: Optional[str] = None
     explanation: Optional[str] = None
     unit: Optional[str] = None
+    # 난이도. 예전엔 이 필드가 없어서 상세 입력 화면의 난이도 드롭다운이 **조용히 무시**됐다
+    # (화면은 바뀌는데 저장이 안 됨). `difficulty` 는 파생 컬럼이라 쓰지 않는다.
+    difficulty_score: Optional[int] = None
+    # 보기 내용(객관식). 지면에 보기가 인쇄돼 있으면 이미지로 충분해서 보통 None 이지만,
+    # "나머지를 구하시오" 처럼 답이 수식인 문제는 교사가 보기를 직접 만들어 객관식으로
+    # 낼 수 있어야 한다. 그때 ["x+2","x+3",...] 를 받는다.
+    choices: Optional[list] = None
 
 
 class ApproveRequest(BaseModel):
@@ -560,10 +568,14 @@ async def update_staging(staging_id: str, body: StagingUpdate):
     문제가 사라진 것처럼 보인다. (재크롭 등으로 staging id 가 바뀐 뒤 옛 화면에서
     누르면 바로 이 상황이 된다.)
     """
-    updates = body.model_dump(exclude_none=True, exclude={"status"})
+    # `difficulty` 는 DB 파생 컬럼이라 쓰면 에러가 난다 — 들어와도 버린다.
+    updates = body.model_dump(exclude_none=True, exclude={"status", "difficulty"})
     result = update_staging_status(staging_id, body.status, updates if updates else None)
     if not result:
         raise HTTPException(404, "해당 문제를 찾을 수 없습니다. 화면을 새로고침해주세요.")
+    # 이미 등록(승격)된 문제면 problems 쪽도 같이 고친다. 안 그러면 상세 입력에서 정답·난이도를
+    # 고쳐도 학생에게 나가는 problems 행은 옛 값 그대로다 — 화면상 저장은 됐는데 아무 효과가 없다.
+    sync_promoted_problem(result, updates)
     return result
 
 

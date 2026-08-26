@@ -76,6 +76,8 @@ interface StagingProblem {
   difficulty: 'very_easy' | 'easy' | 'medium' | 'hard' | 'very_hard' | null;
   answer_type: 'multiple_choice' | 'short_answer';
   correct_answer: string;
+  /** 교사가 직접 만든 보기. 지면에 보기가 인쇄된 문제는 비어 있다. */
+  choices: string[] | null;
   explanation: string | null;
   unit: string;
   source_image_url: string | null;
@@ -87,6 +89,8 @@ interface StagingProblem {
 }
 
 const selectClassName = "flex h-8 w-full rounded-md border border-input bg-background px-3 py-1 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2";
+
+const CHOICE_MARKS = ['①', '②', '③', '④', '⑤'];
 
 const confidenceBadgeColor = (c: number) => {
   if (c >= 0.8) return 'bg-green-100 text-green-700';
@@ -222,6 +226,7 @@ const ProblemDetail = () => {
       difficulty_score: p.difficulty_score ?? 2,
       answer_type: p.answer_type,
       correct_answer: p.correct_answer || '',
+      choices: Array.isArray(p.choices) ? p.choices : [],
       explanation: p.explanation || '',
       unit: p.unit || '',
     });
@@ -537,6 +542,36 @@ const ProblemDetail = () => {
                   />
                 )}
               </div>
+
+              {/* 보기 내용 — 답이 수식이라 지면에 보기가 없는 문제를 객관식으로 낼 때 쓴다.
+                  ("나머지를 구하시오" 처럼 답이 일차식이면 주관식 칸에 못 담는다.)
+                  지면에 보기(①~⑤)가 인쇄된 문제는 비워 두면 학생 화면이 번호만 보여준다. */}
+              {editValues.answer_type === 'multiple_choice' && (
+                <div>
+                  <Label className="text-sm">보기 내용 (선택)</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    비워 두면 문제 이미지의 보기를 그대로 씁니다. 채우면 학생 화면에 이 내용이 보입니다.
+                  </p>
+                  {CHOICE_MARKS.map((mark, i) => (
+                    <div key={i} className="flex items-center gap-2 mt-1">
+                      <span className="text-sm w-4 text-muted-foreground shrink-0">{mark}</span>
+                      <Input
+                        value={editValues.choices?.[i] ?? ''}
+                        onChange={e => setEditValues(prev => {
+                          const next = [...(prev.choices ?? [])];
+                          while (next.length < CHOICE_MARKS.length) next.push('');
+                          next[i] = e.target.value;
+                          // 전부 비면 빈 배열로 — 지면 보기를 쓰는 문제로 되돌린다.
+                          return { ...prev, choices: next.some(c => c.trim()) ? next : [] };
+                        })}
+                        placeholder={`${i + 1}번 보기 (예: x+2)`}
+                        className="h-8"
+                        onKeyDown={e => e.key === 'Enter' && handleSave()}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div>
                 <Label className="text-sm">난이도</Label>
