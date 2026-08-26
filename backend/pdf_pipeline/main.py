@@ -6,7 +6,8 @@ import json
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from functools import partial
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ from pipeline.file_converter import extract_images_from_pdf
 from pipeline.image_cropper import crop_and_save
 from pipeline.answer_type_detector import detect_answer_types
 from pipeline.text_anchor_segmenter import (
-    find_anchors, find_anchors_from_spans, segment_problems,
+    find_anchors, find_anchors_from_spans, segment_problems, infer_labels,
 )
 from pipeline.solution_masker import strip_solutions
 from pipeline.ocr_anchor_provider import (
@@ -271,6 +272,8 @@ async def _run_extraction(
                         return None
                 regions = segment_problems(doc, anchors)
                 strip_solutions(doc, regions)   # 학생 배포물이라 풀이가 섞이면 안 된다
+                # 지면에 인쇄된 번호를 붙여 둔다 — 빠른정답표와 맞추는 기준이다.
+                infer_labels(regions)
                 if not regions:
                     return None
                 if grays is not None:
@@ -310,6 +313,7 @@ async def _run_extraction(
 
                     results.append({
                         "number": num,
+                        "source_label": r.get("source_label", ""),
                         "cropped_path": str(Path(crop_dir) / f"page{pnum:03d}_prob{num:03d}.png"),
                         "page": pnum,
                         "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2,
@@ -427,6 +431,7 @@ async def _run_extraction(
                     num, "multiple_choice" if category == "내신" else "short_answer")
             entry = {
                 "problem_number": num,
+                "source_label": item.get("source_label") or None,
                 "source_image_url": item["source_image_url"],
                 "source_pdf": str(pdf_path),
                 "source_page": item["page"],
@@ -609,6 +614,126 @@ def _extract_nodes_for_problems(problems: list[dict]):
         except Exception as e:
             logger.warning(f"[노드 자동추출] ✗ problem_id={prob.get('id')} 예외: {e}")
     logger.info(f"[노드 자동추출] 완료 — 성공 {ok}/{len(targets)}")
+
+
+# ══════════════════════════════════════════════════════════════════
+# 빠른정답 PDF → 정답 자동 입력
+#
+# 교재의 빠른정답표를 한 번 읽어 `answer_keys` 에 담아 두고, 크롭한 문제의
+# **지면번호(source_label)** 로 맞춰 정답을 채운다. 한 번 읽으면 같은 교재의
+# 다른 단원은 PDF 없이 바로 채워진다.
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/answer-key/{textbook_id}")
+async def upload_answer_key(textbook_id: str, file: UploadFile = File(...)):
+    """빠른정답 PDF 를 읽어 교재의 정답표로 저장한다. 이미 있는 번호는 새 값으로 갱신."""
+    from pipeline.answer_key_reader import read_answer_key
+    from storage.supabase_client import upsert_answer_keys
+
+    if not file.filename:
+        raise HTTPException(400, "파일명이 없습니다.")
+    real = _decode_upload_filename(file.filename)
+    if Path(real).suffix.lower() != ".pdf":
+        raise HTTPException(400, "PDF 만 지원합니다.")
+
+    save_dir = _unique_dir(Path(UPLOAD_DIR) / "answer_keys", _sanitize_name(real))
+    save_dir.mkdir(parents=True, exist_ok=True)
+    path = save_dir / real
+    path.write_bytes(await file.read())
+
+    # VL 을 12번 부르느라 몇 분 걸린다 — 이벤트 루프를 막지 않게 스레드로 뺀다.
+    from concurrent.futures import ThreadPoolExecutor as _Pool
+    loop = asyncio.get_event_loop()
+    with _Pool(max_workers=1) as ex:
+        rows = await loop.run_in_executor(ex, partial(read_answer_key, str(path)))
+    if not rows:
+        raise HTTPException(422, "정답을 한 개도 읽지 못했습니다. 빠른정답 PDF 가 맞는지 확인해주세요.")
+
+    saved = upsert_answer_keys(textbook_id, rows, source_pdf=real)
+    return {
+        "count": len(saved),
+        "needs_review": sum(1 for r in saved if r.get("needs_review")),
+        "labels": [r["label"] for r in saved[:5]],
+    }
+
+
+def _review_note(hit: Optional[dict], label: str, classify) -> str:
+    """검수 표에 띄울 '왜 확인이 필요한가'."""
+    if hit is None:
+        return "지면번호가 없어 못 맞춤" if not label else "정답표에 없는 번호"
+    if not hit.get("needs_review"):
+        return ""
+    return classify(hit.get("answer", "")).get("note") or "두 번 읽어 다름"
+
+
+@app.get("/api/staging/{job_id}/answer-preview")
+async def answer_preview(job_id: str):
+    """이 job 의 문제들에 채워 넣을 정답 미리보기 (저장은 안 한다)."""
+    from storage.supabase_client import get_answer_keys
+    from pipeline.answer_key_reader import classify
+
+    staged = get_staging_by_job(job_id)
+    if not staged:
+        raise HTTPException(404, "이 작업의 문제를 찾을 수 없습니다.")
+    textbook_id = next((s.get("textbook_id") for s in staged if s.get("textbook_id")), None)
+    if not textbook_id:
+        raise HTTPException(400, "교재가 지정되지 않은 작업입니다.")
+
+    keys = {k["label"]: k for k in get_answer_keys(textbook_id)}
+    rows = []
+    for s in staged:
+        if s.get("status") == "rejected":
+            continue
+        label = (s.get("source_label") or "").strip()
+        hit = keys.get(label) if label else None
+        rows.append({
+            "staging_id": s["id"],
+            "problem_number": s.get("problem_number"),
+            "source_label": label,
+            "image_url": s.get("source_image_url"),
+            "current_answer": s.get("correct_answer") or "",
+            "answer": (hit or {}).get("answer", ""),
+            "answer_type": (hit or {}).get("answer_type", s.get("answer_type") or "short_answer"),
+            "needs_review": bool((hit or {}).get("needs_review")),
+            # 확인 사유는 DB 에 안 담는다(정답 문자열만 보면 다시 나오는 값이라).
+            # 되살릴 수 없는 건 "두 번 읽어 다름" 뿐이라 그때만 그렇게 적는다.
+            "note": _review_note(hit, label, classify),
+            "matched": hit is not None,
+        })
+    return {
+        "total": len(rows),
+        "matched": sum(1 for r in rows if r["matched"]),
+        "needs_review": sum(1 for r in rows if r["matched"] and r["needs_review"]),
+        "answer_key_size": len(keys),
+        "rows": rows,
+    }
+
+
+class AnswerApplyItem(BaseModel):
+    staging_id: str
+    answer: str
+    answer_type: str = "short_answer"
+
+
+class AnswerApplyRequest(BaseModel):
+    items: List[AnswerApplyItem]
+
+
+@app.post("/api/staging/{job_id}/answer-apply")
+async def answer_apply(job_id: str, body: AnswerApplyRequest):
+    """검수한 정답을 staging 에 적용한다. 이미 등록된 문제는 problems 까지 반영."""
+    applied, missing = 0, 0
+    for it in body.items:
+        if not it.answer.strip():
+            continue
+        updates = {"correct_answer": it.answer.strip(), "answer_type": it.answer_type}
+        row = update_staging_status(it.staging_id, "approved", updates)
+        if not row:
+            missing += 1
+            continue
+        sync_promoted_problem(row, updates)
+        applied += 1
+    return {"applied": applied, "missing": missing}
 
 
 @app.post("/api/staging/{job_id}/approve-all")

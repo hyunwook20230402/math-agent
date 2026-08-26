@@ -282,6 +282,51 @@ def find_anchors_from_spans(spans: List[dict], page_width: float) -> Optional[di
     return result
 
 
+def normalize_label(text: str) -> str:
+    """앵커 표기에서 '지면에 인쇄된 번호' 만 남긴다. 예: "1." → "1", "0243" → "0243".
+
+    빠른정답표의 번호와 맞추는 열쇠라 **자릿수를 보존**한다(쎈은 0243 처럼 0 을 채운다).
+    """
+    return (text or "").strip().strip(".)· ")
+
+
+def infer_labels(regions: List[dict]) -> int:
+    """지면번호를 못 읽은 영역을 앞뒤 번호로 채운다. 채운 개수를 돌려준다.
+
+    문제번호는 읽기 순서대로 1씩 증가하므로, 앞뒤가 열려 있고 그 사이 빈칸 수가 딱 맞으면
+    셈으로 채울 수 있다. 스캔본에서 번호가 배지에 가려 안 읽히는 경우가 그렇다
+    (실측: 쎈 120개 중 4개가 대표문제 배지라 안 읽혔고, 전부 이 규칙으로 복원된다).
+    맞아떨어지지 않으면 억지로 채우지 않고 빈 채로 둔다.
+    """
+    ordered = sorted(regions, key=lambda r: (r["page"], r["column"], r["anchor_y"]))
+    for r in ordered:
+        r["source_label"] = normalize_label(r.get("anchor_text", ""))
+
+    filled = 0
+    i = 0
+    while i < len(ordered):
+        if ordered[i]["source_label"]:
+            i += 1
+            continue
+        start = i
+        while i < len(ordered) and not ordered[i]["source_label"]:
+            i += 1
+        prev_txt = ordered[start - 1]["source_label"] if start > 0 else ""
+        next_txt = ordered[i]["source_label"] if i < len(ordered) else ""
+        if not prev_txt.isdigit() or not next_txt.isdigit():
+            continue
+        gap = i - start
+        if int(next_txt) - int(prev_txt) != gap + 1:
+            continue                      # 번호가 연속이 아니면 추측하지 않는다
+        width = len(prev_txt)             # 0243 처럼 0 을 채운 자릿수를 유지
+        for k in range(gap):
+            ordered[start + k]["source_label"] = f"{int(prev_txt) + k + 1:0{width}d}"
+            filled += 1
+    if filled:
+        logger.info("[anchor] 못 읽은 지면번호 %d개를 앞뒤로 채움", filled)
+    return filled
+
+
 def _column_of(x: float, columns: List[float]) -> int:
     return min(range(len(columns)), key=lambda i: abs(columns[i] - x))
 

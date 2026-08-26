@@ -145,6 +145,21 @@ cd backend/pdf_pipeline && venv/Scripts/python.exe -m scripts.crop_regression
   4종(교육청 2·수능특강·바이블)이 anchors/regions/rect 전부 동일해야 통과.
 - 수치만 맞고 내용이 잘릴 수 있으니 **크롭 PNG 를 반드시 눈으로 본다**.
 
+### 빠른정답은 스캔본이라 VL 로 읽는다 (2026-08-27)
+
+교재 빠른정답 PDF 는 **텍스트 레이어가 0자**다(실측: 쎈 공통수학1 6쪽 전부). 그래서
+기존 `solution_parser.extract_quick_answers`(PyMuPDF 텍스트 + `"N. [정답] X"` 형식)로는
+한 글자도 못 읽는다 — 그건 해설지용이라 이 판형과 무관하다. `answer_key_reader` 가 담당한다.
+
+- **단(column) 단위로 자른다** — 한 쪽에 2단이고 한 단이 한 대단원이다. 쪽을 통째로 넣으면
+  항목이 빽빽해 누락 위험이 크다. 단 검출은 `ocr_anchor_provider.detect_columns` 재사용.
+- **두 번 읽어 대조한다** — 정답은 틀리면 학생이 맞는 답을 쓰고도 오답이 된다.
+  실측: 164개 중 다른 것 4개였고 **전부 공백 차이**였다(`(1) -1  (2) 74` vs `(1) -1 (2) 74`).
+  공백을 지우고 비교하면 164/164 일치. 다른 것만 검수 표에 표시한다.
+- **매칭은 지면번호(`source_label`)로** 한다. 순번(problem_number)은 크롭 순서라 교재 번호와
+  다르다. 크롭이 이미 앵커로 읽어 둔 값을 저장해 쓴다(못 읽은 것은 `infer_labels` 가 보간).
+- 실측: 교재 전체 1316개를 6분에 읽고, 대상 단원 120/120 매칭, 손볼 것 5개.
+
 ### 이미 올라간 job 을 다시 자를 때
 
 `python -m scripts.recrop_job <job_id> --keep-pages N [--apply]`.

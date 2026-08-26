@@ -10,10 +10,11 @@ import { scoreToLevel } from '@shared/lib/utils';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { toast } from '@shared/hooks/use-toast';
-import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap, Crop, Workflow } from 'lucide-react';
+import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap, Crop, Workflow, ListChecks } from 'lucide-react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { MathInput } from '@shared/ui/MathInput';
+import { AnswerKeyModal } from '@/components/AnswerKeyModal';
 import { SolutionNodeEditorModal } from '@/components/SolutionNodeEditorModal';
 
 const PIPELINE_URL =
@@ -85,6 +86,7 @@ interface StagingProblem {
   solution_image_url: string | null;
   solution_job_id: string | null;
   promoted_problem_id: string | null;
+  textbook_id: string | null;
   match_confidence: number | null;
   status: string;
 }
@@ -194,6 +196,7 @@ const ProblemDetail = () => {
   const [nodeEditTarget, setNodeEditTarget] = useState<{ id: string; title: string } | null>(null);
 
   const [taggingProblemId, setTaggingProblemId] = useState<string | null>(null);
+  const [answerKeyOpen, setAnswerKeyOpen] = useState(false);
 
   useEffect(() => {
     if (jobId) loadProblems();
@@ -357,6 +360,13 @@ const ProblemDetail = () => {
           </div>
         </div>
 
+        <div className="flex items-center gap-2">
+        {/* 정답을 하나씩 타이핑하는 대신 교재의 빠른정답표로 한 번에 채운다. */}
+        <Button variant="outline" size="sm" onClick={() => setAnswerKeyOpen(true)}>
+          <ListChecks className="h-4 w-4 mr-1" />
+          빠른정답으로 채우기
+        </Button>
+
         <Button
           variant="outline"
           size="sm"
@@ -382,7 +392,17 @@ const ProblemDetail = () => {
         >
           교재 목록으로
         </Button>
+        </div>
       </div>
+
+      {answerKeyOpen && jobId && (
+        <AnswerKeyModal
+          jobId={jobId}
+          textbookId={problems.find(p => p.textbook_id)?.textbook_id ?? null}
+          onClose={() => setAnswerKeyOpen(false)}
+          onApplied={loadProblems}
+        />
+      )}
 
       <div className="flex flex-1 overflow-hidden">
         {/* 좌측: 문제 번호 목록 */}

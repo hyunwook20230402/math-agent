@@ -27,6 +27,8 @@ def insert_staging_problems(job_id: str, teacher_id: str, problems: list) -> lis
             "job_id": job_id,
             "teacher_id": teacher_id,
             "problem_number": p.get("problem_number"),
+            # 지면에 인쇄된 번호. 빠른정답표와 맞추는 기준이라 그대로 보존한다.
+            "source_label": p.get("source_label"),
             "title": _build_title(p),
             "unit": p.get("unit", "미분류"),
             "difficulty_score": p.get("difficulty_score", 2),
@@ -194,6 +196,7 @@ def approve_to_problems(job_id: str, teacher_id: str) -> list[dict]:
             # 박혀 있어 화면이 길어지므로 무시한다. 예: "평가원 6월 26년 1번".
             "title": _build_title(p),
             "problem_number": p.get("problem_number", 1),
+            "source_label": p.get("source_label"),
             "difficulty_score": p.get("difficulty_score", 2),
             "correct_rate": p.get("correct_rate"),
             "category": p.get("category", "기타"),
@@ -542,3 +545,56 @@ def update_staging_solution(
         .execute()
     )
     return result.data[0] if result.data else {}
+
+
+# ── 교재별 빠른정답표 ────────────────────────────────────────────────
+
+def upsert_answer_keys(textbook_id: str, rows: list, source_pdf: str | None = None) -> list:
+    """읽어 온 정답을 교재 정답표에 넣는다. 같은 (교재, 번호) 는 새 값으로 갱신.
+
+    UNIQUE(textbook_id, label) 이 걸려 있어 on_conflict 로 한 번에 처리한다.
+    """
+    if not rows:
+        return []
+    client = get_client()
+    payload = [{
+        "textbook_id": textbook_id,
+        "label": r["label"],
+        "answer": r.get("answer", ""),
+        "answer_type": r.get("answer_type", "short_answer"),
+        "needs_review": bool(r.get("needs_review")),
+        "source_pdf": source_pdf,
+    } for r in rows]
+
+    saved: list = []
+    # 한 번에 수천 건을 보내면 요청이 커져 실패한다 — 500개씩 나눠 넣는다.
+    for i in range(0, len(payload), 500):
+        chunk = payload[i:i + 500]
+        res = (
+            client.table("answer_keys")
+            .upsert(chunk, on_conflict="textbook_id,label")
+            .execute()
+        )
+        saved.extend(res.data or [])
+    return saved
+
+
+def get_answer_keys(textbook_id: str) -> list:
+    """교재의 정답표 전체."""
+    out: list = []
+    client = get_client()
+    step = 1000                     # PostgREST 기본 상한을 넘기지 않게 나눠 읽는다
+    start = 0
+    while True:
+        res = (
+            client.table("answer_keys")
+            .select("label,answer,answer_type,needs_review")
+            .eq("textbook_id", textbook_id)
+            .range(start, start + step - 1)
+            .execute()
+        )
+        batch = res.data or []
+        out.extend(batch)
+        if len(batch) < step:
+            return out
+        start += step
