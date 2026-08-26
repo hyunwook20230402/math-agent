@@ -631,11 +631,21 @@ const AddProblemNew = () => {
         correct_answer: formData.correct_answer,
         choices: null,
         explanation: formData.explanation || null,
-        // 어느 교재·폴더에서 눌러 들어왔는지 반영. 예전엔 이 두 줄이 없어서
-        // 폴더에서 '문제 등록'을 해도 교재 루트에도 안 잡히고 어디에도 안 보였다.
-        textbook_id: selectedTextbook?.id ?? null,
-        folder_id: selectedFolder?.id ?? null,
       };
+
+      // 어느 교재·폴더에서 눌러 들어왔는지 반영. 예전엔 이게 없어서 폴더에서 '문제 등록'을
+      // 해도 교재 루트에도 안 잡히고 어디에도 안 보였다.
+      //
+      // ⚠️ **편집 모드에선 값이 있을 때만 덮어쓴다.** null 로 밀면 문제가 폴더에서 빠져
+      // 목록에서 사라진다 — 사용자는 '수정' 만 눌렀는데 문제가 없어진 것처럼 보인다
+      // (실측: 쎈 1번이 이렇게 사라졌다). 폴더를 바꾸는 건 '폴더 이동' 기능의 몫이지
+      // 문제 수정의 부작용이면 안 된다. 등록 모드는 지금 위치를 그대로 반영한다.
+      if (!isEditMode || selectedTextbook?.id) {
+        problemData.textbook_id = selectedTextbook?.id ?? null;
+      }
+      if (!isEditMode || selectedFolder?.id) {
+        problemData.folder_id = selectedFolder?.id ?? null;
+      }
 
       let data, error;
 

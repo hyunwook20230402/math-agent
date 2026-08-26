@@ -553,9 +553,17 @@ async def get_staging_problems(job_id: str):
 
 @app.patch("/api/staging/{staging_id}")
 async def update_staging(staging_id: str, body: StagingUpdate):
-    """개별 staging 문제 상태/내용 수정"""
+    """개별 staging 문제 상태/내용 수정.
+
+    없는 id 면 404 를 낸다. 옛 코드는 아무것도 못 고쳐도 200 `{}` 를 돌려줘서,
+    프론트가 성공으로 알고 화면에서 카드를 지워 버렸다 — DB 는 그대로인데 사용자 눈엔
+    문제가 사라진 것처럼 보인다. (재크롭 등으로 staging id 가 바뀐 뒤 옛 화면에서
+    누르면 바로 이 상황이 된다.)
+    """
     updates = body.model_dump(exclude_none=True, exclude={"status"})
     result = update_staging_status(staging_id, body.status, updates if updates else None)
+    if not result:
+        raise HTTPException(404, "해당 문제를 찾을 수 없습니다. 화면을 새로고침해주세요.")
     return result
 
 
@@ -665,6 +673,14 @@ async def update_bboxes(job_id: str, body: UpdateBboxesRequest):
     prev_count = sum(1 for s in all_staging if (s.get("page_number") or 0) < body.page_number)
     page_start_num = prev_count + 1
 
+    # 손으로 새로 그린 박스도 같은 교재·폴더에 속해야 한다. 이걸 안 넘기면 그 문제만
+    # textbook_id/folder_id 가 NULL 로 등록돼 **폴더 목록에서 영영 안 보인다**
+    # (실측: 쎈 job 에서 사용자가 직접 추가한 5개가 이렇게 사라졌다).
+    # 메모리의 job dict 은 서버 재기동에 날아가므로 같은 job 의 기존 행에서 가져온다.
+    owner = next((s for s in all_staging if s.get("folder_id") or s.get("textbook_id")), {})
+    default_textbook_id = job.get("textbook_id") or owner.get("textbook_id")
+    default_folder_id = job.get("folder_id") or owner.get("folder_id")
+
     crop_dir = str(Path(job["file_path"]).parent / "cropped")
     Path(crop_dir).mkdir(parents=True, exist_ok=True)
 
@@ -703,7 +719,7 @@ async def update_bboxes(job_id: str, body: UpdateBboxesRequest):
             # 신규 추가
             category = job.get("category", "모의고사")
             answer_type = "multiple_choice" if new_number <= 15 else "short_answer"
-            new_staging = insert_staging_problems(job_id, job["teacher_id"], [{
+            entry = {
                 "problem_number": new_number,
                 "source_image_url": new_image_url,
                 "source_pdf": job.get("file_path", ""),
@@ -716,7 +732,12 @@ async def update_bboxes(job_id: str, body: UpdateBboxesRequest):
                 "bbox": bbox_data,
                 "source_page_image_url": body.source_page_image_url,
                 "page_number": body.page_number,
-            }])
+            }
+            if default_textbook_id:
+                entry["textbook_id"] = default_textbook_id
+            if default_folder_id:
+                entry["folder_id"] = default_folder_id
+            new_staging = insert_staging_problems(job_id, job["teacher_id"], [entry])
             results.extend(new_staging)
 
     page_img.close()

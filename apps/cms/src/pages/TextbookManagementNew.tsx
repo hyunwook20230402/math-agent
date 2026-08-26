@@ -442,9 +442,20 @@ const TextbookManagementNew = () => {
     if (selectedProblemIds.size === 0) return;
     const ids = Array.from(selectedProblemIds);
     // 폴더가 한 컬럼(folder_id)으로 통합돼 깊이에 상관없이 이 한 줄이면 된다.
+    // 다만 **교재도 같이 맞춘다** — 옮긴 폴더가 다른 교재 소속이면 folder_id 만 바꿔서는
+    // textbook_id 가 옛 교재를 가리킨 채 남아, 브레드크럼이 엉뚱한 교재를 띄운다
+    // (실측: 쎈 120문제가 folder=쎈 / textbook=내신 기출 로 어긋나 있었다).
+    const target = moveTarget
+      ? Object.values(folders).flat().find(f => f.id === moveTarget)
+      : null;
+    const patch: { folder_id: string | null; textbook_id?: string } = {
+      folder_id: moveTarget || null,
+    };
+    if (target) patch.textbook_id = target.textbook_id;
+
     const { error } = await supabase
       .from('problems')
-      .update({ folder_id: moveTarget || null })
+      .update(patch)
       .in('id', ids);
 
     if (error) {
