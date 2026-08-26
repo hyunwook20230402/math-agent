@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
 import { SolutionNodeEditorModal } from '@/components/SolutionNodeEditorModal';
+import { MathInput } from '@shared/ui/MathInput';
+import 'katex/dist/katex.min.css';
 
 interface Textbook {
   id: string;
@@ -1014,20 +1016,21 @@ const AddProblemNew = () => {
                   <div className="mt-3">
                     <Label className="text-sm">보기 내용 (선택)</Label>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      비워 두면 문제 이미지의 보기를 그대로 씁니다. 채우면 학생 화면에 이 내용이 보입니다.
+                      비워 두면 문제 이미지의 보기를 그대로 씁니다. LaTeX 로 수식을 쓸 수 있고,
+                      오른쪽에 학생 화면과 같은 모습이 바로 보입니다.
                     </p>
                     {CHOICE_MARKS.map((mark, i) => (
                       <div key={i} className="flex items-center gap-2 mt-1">
-                        <span className="text-sm w-4 text-muted-foreground shrink-0">{mark}</span>
-                        <Input
+                        <span className="text-sm w-4 text-muted-foreground shrink-0 self-start mt-1.5">{mark}</span>
+                        <MathInput
                           value={formData.choices[i] ?? ''}
-                          onChange={(e) => setFormData(prev => {
+                          onChange={(nextVal) => setFormData(prev => {
                             const next = [...prev.choices];
                             while (next.length < CHOICE_MARKS.length) next.push('');
-                            next[i] = e.target.value;
+                            next[i] = nextVal;
                             return { ...prev, choices: next.some(c => c.trim()) ? next : [] };
                           })}
-                          placeholder={`${i + 1}번 보기 (예: x+2)`}
+                          placeholder={`${i + 1}번 보기 (예: x+2, \frac{1}{2})`}
                         />
                       </div>
                     ))}

@@ -19,7 +19,8 @@ import {
 } from 'lucide-react';
 import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@shared/lib/api';
 import { checkAnswer, normalizeAnswer } from '@shared/lib/answerNormalizer';
-import { MathText } from '@shared/ui/MathText';
+import { renderShortMath } from '@shared/lib/mathRender';
+import 'katex/dist/katex.min.css';
 import type { DistributionWithDetails } from '@shared/types/database';
 import StuckHelperModal from '@/components/tutor/StuckHelperModal';
 
@@ -526,7 +527,9 @@ const SolveProblem = () => {
                         />
                         <span className="text-sm">
                           {CHOICE_MARKS[index] ?? `${value}.`}
-                          {text ? <MathText text={text} /> : <span className="ml-1">{value}번</span>}
+                          {text
+                            ? <span className="ml-1" dangerouslySetInnerHTML={{ __html: renderShortMath(text) }} />
+                            : <span className="ml-1">{value}번</span>}
                         </span>
                       </label>
                     );

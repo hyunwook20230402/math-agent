@@ -13,6 +13,7 @@ import { toast } from '@shared/hooks/use-toast';
 import { ArrowLeft, Loader2, Save, Check, Tag, X, Bot, Zap, Crop, Workflow } from 'lucide-react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import { MathInput } from '@shared/ui/MathInput';
 import { SolutionNodeEditorModal } from '@/components/SolutionNodeEditorModal';
 
 const PIPELINE_URL =
@@ -550,22 +551,22 @@ const ProblemDetail = () => {
                 <div>
                   <Label className="text-sm">보기 내용 (선택)</Label>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    비워 두면 문제 이미지의 보기를 그대로 씁니다. 채우면 학생 화면에 이 내용이 보입니다.
+                    비워 두면 문제 이미지의 보기를 그대로 씁니다. LaTeX 로 수식을 쓸 수 있고,
+                    오른쪽에 학생 화면과 같은 모습이 바로 보입니다.
                   </p>
                   {CHOICE_MARKS.map((mark, i) => (
                     <div key={i} className="flex items-center gap-2 mt-1">
-                      <span className="text-sm w-4 text-muted-foreground shrink-0">{mark}</span>
-                      <Input
+                      <span className="text-sm w-4 text-muted-foreground shrink-0 self-start mt-1.5">{mark}</span>
+                      <MathInput
                         value={editValues.choices?.[i] ?? ''}
-                        onChange={e => setEditValues(prev => {
-                          const next = [...(prev.choices ?? [])];
-                          while (next.length < CHOICE_MARKS.length) next.push('');
-                          next[i] = e.target.value;
+                        onChange={next => setEditValues(prev => {
+                          const arr = [...(prev.choices ?? [])];
+                          while (arr.length < CHOICE_MARKS.length) arr.push('');
+                          arr[i] = next;
                           // 전부 비면 빈 배열로 — 지면 보기를 쓰는 문제로 되돌린다.
-                          return { ...prev, choices: next.some(c => c.trim()) ? next : [] };
+                          return { ...prev, choices: arr.some(c => c.trim()) ? arr : [] };
                         })}
-                        placeholder={`${i + 1}번 보기 (예: x+2)`}
-                        className="h-8"
+                        placeholder={`${i + 1}번 보기 (예: x+2, \frac{1}{2})`}
                         onKeyDown={e => e.key === 'Enter' && handleSave()}
                       />
                     </div>
