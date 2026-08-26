@@ -286,6 +286,29 @@ def _column_of(x: float, columns: List[float]) -> int:
     return min(range(len(columns)), key=lambda i: abs(columns[i] - x))
 
 
+# 쪽 높이의 이 비율을 넘는 이미지는 한 문제의 그림일 수 없다 — 배경 래스터/전면 스캔이다.
+# 실측: 스캔본(쎈)은 쪽마다 595x842pt 전면 이미지가 깔려 있어 이걸 내용으로 세면
+# 크롭이 단 전체로 부풀고 x0=-4, x1=597(쪽 밖)까지 나갔다.
+# 디지털 PDF 4종에는 이런 이미지가 하나도 없다(수능특강 0/11, 바이블 0/184, 교육청 0/28).
+_MAX_FIGURE_HEIGHT_RATIO = 0.5
+
+
+def _has_vector_content(page: fitz.Page) -> bool:
+    """이 쪽에 좌표를 믿을 수 있는 텍스트·도형이 있는가.
+
+    `_content_rect` 는 벡터 좌표로 크롭을 조이는 도구다. 스캔본은 그게 하나도 없어
+    우연히 걸린 장식 이미지 하나가 크롭을 통째로 지배해 버린다
+    (실측: 쎈 0171 이 15pt×52pt 조각으로 붕괴). 그런 쪽은 조이지 말고
+    호출부의 `tighten_by_ink`(실제 잉크 기준)에 맡긴다.
+    """
+    if page.get_text().strip():
+        return True
+    try:
+        return bool(page.get_drawings())
+    except Exception:       # noqa: BLE001 — 도형 파싱 실패는 '없음' 으로 본다
+        return False
+
+
 def _content_rect(page: fitz.Page, region: fitz.Rect, bounds: fitz.Rect) -> Optional[fitz.Rect]:
     """region 안의 실제 내용(텍스트·도형·이미지)만 감싸는 사각형.
 
@@ -325,8 +348,12 @@ def _content_rect(page: fitz.Page, region: fitz.Rect, bounds: fitz.Rect) -> Opti
             consider(fitz.Rect(dr["rect"]), contained=True)
     except Exception:  # 일부 PDF 는 도형 파싱이 실패한다 — 텍스트만으로 진행
         pass
+    max_fig_h = page.rect.height * _MAX_FIGURE_HEIGHT_RATIO
     for im in page.get_image_info():
-        consider(fitz.Rect(im["bbox"]))
+        r = fitz.Rect(im["bbox"])
+        if r.height > max_fig_h:
+            continue      # 배경 래스터 — 문제의 그림이 아니다
+        consider(r)
 
     if not parts:
         return None
@@ -348,6 +375,14 @@ def segment_problems(
     한 문제 = 자기 앵커 y 부터 **같은 단의 다음 앵커 y** 까지(없으면 단 하단까지).
     가로는 그 단의 x 범위.
 
+    앵커가 `col_x0`/`col_x1`(그 쪽 그 단의 실제 x 범위)을 들고 오면 그것을 우선한다 —
+    펼침면 교재는 쪽마다 좌우 여백이 반전돼 문서 전체를 하나의 단 모델로 자를 수 없다
+    (실측: 쎈 짝수쪽 좌단 65pt / 홀수쪽 28pt). 안 들고 오면 기존 전역 `columns` 를 쓰므로
+    디지털 PDF 의 동작은 그대로다.
+
+    `anchors["cuts"]`(섹션 헤더 y 목록)이 있으면 그 위에서도 영역을 끊는다 — 안 그러면
+    유형 헤더가 바로 앞 문제의 크롭에 딸려 들어간다(사용자가 손으로 잘라낸 부분).
+
     Returns:
         [{"number","page","rect":fitz.Rect,"anchor_text"}...] — 읽기 순서(좌단 위→아래, 우단 위→아래)
     """
@@ -356,28 +391,57 @@ def segment_problems(
     # 각 단의 오른쪽 경계 = 다음 단의 시작(마지막 단은 페이지 끝)
     col_right = [(cols[i + 1] if i + 1 < len(cols) else page_w) for i in range(len(cols))]
 
+    cuts: Dict[Tuple[int, int], List[float]] = defaultdict(list)
+    for c in anchors.get("cuts", []):
+        cuts[(c["page"], c["col"])].append(c["y"])
+
     buckets: Dict[Tuple[int, int], List[dict]] = defaultdict(list)
     for a in anchors["anchors"]:
-        buckets[(a["page"], _column_of(a["x"], cols))].append(a)
+        # 앵커가 자기 단 번호를 알고 있으면(색 라벨 경로) 그것을 쓴다.
+        ci = a.get("col")
+        buckets[(a["page"], ci if ci is not None else _column_of(a["x"], cols))].append(a)
 
     regions: List[dict] = []
     for (pno, ci), items in buckets.items():
         page = doc[pno]
         page_h = page.rect.height
+        tighten = _has_vector_content(page)
         col_bottom = page_h * bottom_ratio
         # 이 단에 허용된 가로 범위 — 앞 단 끝 ~ 이 단 끝. 번호 배지·그림이
         # 단 왼쪽 밖으로 삐져나오는 판형(바이블)이 있어 여유를 준다.
-        left_bound = col_right[ci - 1] if ci > 0 else 0.0
-        bounds = fitz.Rect(left_bound, 0, min(page_w, col_right[ci] - 2), page_h)
+        measured = [a for a in items if a.get("col_x0") is not None]
+        # 단의 본문 하단을 실측해서 온 경우 그것을 쓴다 — 기본값(_MARGIN_BOTTOM)은
+        # '이 아래 숫자는 문제번호가 아니다' 를 위한 값이라 본문 하단보다 짧아서,
+        # 각 단의 마지막 문제가 잘린다.
+        bottoms = [a["col_y1"] for a in items if a.get("col_y1") is not None]
+        if bottoms:
+            col_bottom = min(page_h, max(bottoms))
+        if measured:
+            # 이 쪽 이 단의 실측 범위 — 문제번호 라벨에서 나온 값이라 이미 여백이 들어 있다.
+            # 여기에 x_pad 를 더 벌리면 안 된다: 8pt 를 더 나가면 단 사이 세로 괘선이
+            # 다시 범위 안에 들어와 `tighten_by_ink` 가 거기에 고정된다(실측 p9 #64).
+            left_bound = max(0.0, min(a["col_x0"] for a in measured))
+            right_bound = min(page_w, max(a["col_x1"] for a in measured))
+            rect_x0 = left_bound
+        else:
+            left_bound = col_right[ci - 1] if ci > 0 else 0.0
+            right_bound = min(page_w, col_right[ci] - 2)
+            rect_x0 = max(left_bound, (cols[ci] if ci < len(cols) else left_bound) - x_pad)
+        bounds = fitz.Rect(left_bound, 0, right_bound, page_h)
+        headers = sorted(cuts.get((pno, ci), []))
 
         items.sort(key=lambda a: a["y"])
         for j, a in enumerate(items):
             y0 = max(0.0, a["y"] - y_pad)
             y1 = (items[j + 1]["y"] - y_pad) if j + 1 < len(items) else col_bottom
+            # 이 문제와 다음 앵커 사이에 섹션 헤더가 있으면 거기서 끊는다.
+            nxt_header = next((h for h in headers if h > a["y"] + y_pad), None)
+            if nxt_header is not None and nxt_header < y1:
+                y1 = nxt_header - y_pad
             if y1 - y0 < 20:      # 너무 얇으면 문제가 아니다
                 continue
-            rect = fitz.Rect(max(left_bound, cols[ci] - x_pad), y0, bounds.x1, y1)
-            tight = _content_rect(page, rect, bounds)
+            rect = fitz.Rect(rect_x0, y0, bounds.x1, y1)
+            tight = _content_rect(page, rect, bounds) if tighten else None
             if tight is not None:
                 rect = fitz.Rect(tight.x0 - 4, max(y0, tight.y0 - 4),
                                  tight.x1 + 4, min(y1, tight.y1 + 6))

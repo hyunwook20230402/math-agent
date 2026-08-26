@@ -5,7 +5,14 @@
 ### CMS / 검수 UI
 - CMS 탭 기반 레이아웃 (교재 목록, 문제 검수, 상세 입력)
 - 교재 폴더 관리 (계층 구조, 드래그 이동)
-- PDF 교재 문제 자동 추출 (YOLO 단일화, OCR 레거시 제거 — 커밋 `0f633eb`)
+- PDF 교재 문제 자동 추출 — **문제번호 앵커 기반 분할**(YOLO 는 폴백). 디지털 PDF 는 텍스트
+  span 좌표, 스캔본은 **색 라벨로 위치 + OCR 로 번호**(2026-08-26 개편). 실측: 쎈 17쪽
+  120/120(옛 방식 70~75), 교사 수정본과 15/15 일치(평균 오차 5.3pt), 디지털 4종 회귀 0.
+  상세·함정은 `dev-rules.md` "문제 PDF 크롭".
+- **2차 개선 (2026-08-26)** — 교사가 검수한 120개를 정답으로 삼아 반복 오류 제거. 단 경계를
+  잉크가 아니라 **문제번호 라벨**에서 잡고(세로 괘선 회피), 탈락 라벨(☆사고의 기술)을 다음
+  문제의 시작으로 병합. 실적: 손봐야 할 박스 50→1개, 내용 손실 2→0건, 디지털 4종 회귀 0.
+  회귀 검사: `python -m scripts.crop_regression` (고정 데이터 `tests/fixtures/ssen_user_boxes.json`).
 - bbox 편집기 (크롭 검수 UI, 수동 편집 전용)
 - SolutionReview 같은 번호 묶기 + 그룹 확정 UI + 번호 인라인 편집
 - 재태깅 UI (개별/일괄 재실행) + LaTeX 수식 렌더링 (KaTeX)
@@ -24,6 +31,10 @@
 - **해설 태깅 = Call A(메타)만** (2026-06-20, 4차) — 옛 단계별풀이(Call B 2-Pass)와 4필드(solution_summary/pitfall/solution_steps/common_mistakes)는 추출·저장·검증·DB컬럼까지 전부 제거. `solution_tagger.py` 는 Call A 한 번으로 메타(unit/difficulty/concept_tags/skill_tags/correct_rate)만 뽑는다. 풀이 그래프는 별도 추출기 `rag_node_extractor.py`(노드 1회 통합)가 담당.
 - **태깅 검증 폐기 (2026-06-22)** — 옛 2-layer 검증(`tag_validator.py` + `_apply_suggested_fixes`)은 제거. 파일·호출부·CMS 검증 배너 삭제. `problem_staging` 의 `validation_status/score/issues` 컬럼은 DB 보존이나 항상 NULL. 메타는 Call A 결과를 그대로 저장. ("검수완료 - 전체 AI" → 메타 gpt-4o + 백그라운드 노드 추출(난이도 분기: Lv1~2 gpt-4o / Lv3~4 gpt-5.2) 만 수행.)
 - YOLO11n 기본 가중치 (`promote_model` 의존 제거 — 커밋 `56ecdd0`). 재학습은 11m + Optuna (`dev-rules.md` 참조)
+- **답안유형 검출 범위 확대 (2026-08-26)** — 옛 코드는 `내신` 만 보기기호(①~⑤)를 읽고 나머지는
+  `short_answer` 고정이었다. 이제 `모의고사`(번호 규칙)를 뺀 모든 카테고리가 검출기를 탄다.
+  ⚠️ 단 `answer_type_detector` 는 **텍스트 레이어를 읽으므로 스캔본(쎈)에선 여전히 None** →
+  주관식 폴백. 스캔본 객관식 판정은 미해결(시각 검출 시도 결과 정확도 8/16 — 별건).
 
 ### 막힌 지점 도우미 — 풀이 그래프 위치추적 RAG (`backend/pdf_pipeline`) ✅ 구현
 - **deeptutor(LangGraph 대화튜터) 폐기 (2026-06-18)** — `backend/deeptutor/` 삭제. 막힌 지점 도우미만 pdf_pipeline 으로 이전·개선.

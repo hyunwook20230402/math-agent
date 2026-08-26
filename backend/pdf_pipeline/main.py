@@ -22,7 +22,9 @@ from pipeline.text_anchor_segmenter import (
     find_anchors, find_anchors_from_spans, segment_problems,
 )
 from pipeline.solution_masker import strip_solutions
-from pipeline.ocr_anchor_provider import ocr_number_spans, tighten_by_ink
+from pipeline.ocr_anchor_provider import (
+    collect_color_labels, resolve_label_anchors, ocr_number_spans, tighten_by_ink,
+)
 from pipeline.yolo_detector import load_model as yolo_load, detect_problems as yolo_detect, release_model as yolo_release, model_exists as yolo_model_exists
 from storage.supabase_client import (
     insert_staging_problems,
@@ -199,20 +201,41 @@ async def _run_extraction(
         crop_dir = str(Path(pdf_path).parent / "cropped")
         Path(crop_dir).mkdir(parents=True, exist_ok=True)
 
-        def _ocr_spans_and_gray(doc, ocr_dpi: int = 200):
-            """스캔본에서 OCR 로 번호 span 을 얻는다. (spans, 페이지별 grayscale) 반환."""
+        def _scan_anchors(doc, ocr_dpi: int = 200):
+            """스캔본에서 앵커를 얻는다. (anchors|None, spans, 페이지별 grayscale) 반환.
+
+            1순위는 **색 라벨** — 이 판형들은 문제번호가 채도 높은 색이라 위치를 정확히
+            집을 수 있고, OCR 이 못 읽는 대표문제 배지까지 잡힌다(실측 쎈 120/120).
+            색이 없는 흑백 스캔이면 spans 만 채워 돌려주고 호출부가 옛 경로를 탄다.
+            """
             import fitz as _fitz
             import numpy as _np
 
-            spans, grays = [], {}
-            for pno in range(doc.page_count):
+            def _render(pno):
                 page = doc[pno]
                 pix = page.get_pixmap(matrix=_fitz.Matrix(ocr_dpi / 72, ocr_dpi / 72))
-                rgb = _np.frombuffer(pix.samples, dtype=_np.uint8).reshape(
+                return page, _np.frombuffer(pix.samples, dtype=_np.uint8).reshape(
                     pix.height, pix.width, pix.n)[:, :, :3]
+
+            labels, cuts, spans, grays = [], [], [], {}
+            for pno in range(doc.page_count):
+                page, rgb = _render(pno)
                 grays[pno] = _np.dot(rgb[..., :3], [0.299, 0.587, 0.114]).astype(_np.uint8)
+                pl, pc = collect_color_labels(pno, rgb, page.rect.width, page.rect.height)
+                labels.extend(pl)
+                cuts.extend(pc)
+
+            resolved = resolve_label_anchors(labels)
+            if resolved:
+                cols = sorted({round(a["col_x0"], 1) for a in resolved})
+                return ({"font": "ocr", "size": 12.0, "columns": cols,
+                         "anchors": resolved, "cuts": cuts}, spans, grays)
+
+            logger.info("[extract] 색 라벨 없음 → 스트립 OCR 폴백")
+            for pno in range(doc.page_count):
+                page, rgb = _render(pno)
                 spans.extend(ocr_number_spans(pno, rgb, page.rect.width, page.rect.height))
-            return spans, grays
+            return None, spans, grays
 
         def _run_text_anchors():
             """문제번호 좌표로 자르는 경로 (디지털 PDF).
@@ -232,9 +255,10 @@ async def _run_extraction(
                 if not anchors:
                     # 텍스트 레이어가 없는 스캔본(쎈 등) — OCR 로 번호만 읽어
                     # 아래 분할 로직을 그대로 태운다.
-                    logger.info("[extract] 텍스트 레이어 없음 → OCR 앵커 시도")
-                    spans, grays = _ocr_spans_and_gray(doc)
-                    anchors = find_anchors_from_spans(spans, doc[0].rect.width)
+                    logger.info("[extract] 텍스트 레이어 없음 → 스캔본 앵커 시도")
+                    anchors, spans, grays = _scan_anchors(doc)
+                    if not anchors:
+                        anchors = find_anchors_from_spans(spans, doc[0].rect.width)
                     if not anchors:
                         return None
                 regions = segment_problems(doc, anchors)
@@ -367,19 +391,20 @@ async def _run_extraction(
         # staging 저장 (LLM 구조화 건너뜀)
         jobs[job_id]["status"] = "saving"
 
-        # 내신은 학교마다 문항 구성이 달라 번호 규칙으로 답안유형을 못 맞춘다.
-        # → 지면의 보기기호(①~⑤)를 실제로 읽어 판정한다. 스캔본이라 못 읽으면 None.
+        # 모의고사만 번호 규칙(1~15 객관식)으로 답안유형이 정해진다. 나머지 교재는
+        # 문항 구성이 제각각이라 규칙이 없으므로 지면의 보기기호(①~⑤)를 실제로 읽어 판정한다.
+        # (쎈은 옛 코드에서 전부 주관식으로 고정돼 절반가량이 틀리게 등록됐다.)
         detected_types: Dict[int, str] = {}
-        if category == "내신":
+        if category != "모의고사":
             detected_types = detect_answer_types(str(pdf_path), all_cropped) or {}
             if detected_types:
                 n_mc = sum(1 for v in detected_types.values() if v == "multiple_choice")
                 logger.info(
-                    "[answer_type] 내신 보기기호 검출 — 객관식 %d / 주관식 %d",
-                    n_mc, len(detected_types) - n_mc,
+                    "[answer_type] %s 보기기호 검출 — 객관식 %d / 주관식 %d",
+                    category, n_mc, len(detected_types) - n_mc,
                 )
             else:
-                logger.info("[answer_type] 내신 보기기호 검출 불가 → 객관식 기본값 사용")
+                logger.info("[answer_type] %s 보기기호 검출 불가 → 기본값 사용", category)
 
         staging_data = []
         for item in uploaded:
@@ -387,11 +412,11 @@ async def _run_extraction(
             # 모의고사: 문제 번호 기반 유형 자동 설정 (1~15: 5지선다, 16~30: 단답형)
             if category == "모의고사":
                 answer_type = "multiple_choice" if num <= 15 else "short_answer"
-            elif category == "내신":
-                # 검출값 우선, 못 읽은 문항은 객관식(내신은 객관식 위주)으로 둔다.
-                answer_type = detected_types.get(num, "multiple_choice")
             else:
-                answer_type = "short_answer"
+                # 검출값 우선. 못 읽은 문항은 내신만 객관식(객관식 위주)으로,
+                # 나머지 교재는 주관식으로 둔다 — 옛 기본값을 그대로 유지한다.
+                answer_type = detected_types.get(
+                    num, "multiple_choice" if category == "내신" else "short_answer")
             entry = {
                 "problem_number": num,
                 "source_image_url": item["source_image_url"],
