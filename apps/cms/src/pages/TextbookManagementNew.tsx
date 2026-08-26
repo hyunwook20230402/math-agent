@@ -306,6 +306,17 @@ const TextbookManagementNew = () => {
 
   const selectFolder = (folder: ProblemFolder, listOverride?: ProblemFolder[]) => {
     const list = listOverride ?? folders[folder.textbook_id] ?? folderList;
+    // 폴더를 고르면 그 폴더가 속한 교재도 같이 고른다.
+    // 화살표로 펼치기만 하고(선택 안 함) 안쪽 폴더를 누르면 selectedTextbook 이 비어 있어
+    // 본문이 "교재를 선택하세요" 로 남는다 — 헤더엔 문제 수가 뜨는데 목록은 안 나온다.
+    if (selectedTextbook?.id !== folder.textbook_id) {
+      const owner = textbooks.find(t => t.id === folder.textbook_id);
+      if (owner) {
+        setSelectedTextbook(owner);
+        ctxSetTextbook(owner);
+        setExpandedTextbooks(prev => new Set([...prev, owner.id]));
+      }
+    }
     setSelectedFolder(folder);
     ctxSetFolder(folder, pathOf(list, folder));
     // 고르면 펼쳐준다 — 안 그러면 하위 폴더를 보려고 화살표를 따로 눌러야 해서 불편하다.
