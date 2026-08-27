@@ -77,6 +77,7 @@
 | Call A (메타) | OpenAI | `META_MODEL` (기본 gpt-4o). 해설 태깅은 Call A 한 번뿐(Call B 제거, 4차) |
 | 노드 추출 (풀이 그래프) | OpenAI | **난이도 분기**: Lv1~2→gpt-4o(`NODE_MODEL_EASY`) / Lv3~4·불명→gpt-5.2(`NODE_MODEL_HARD`). `call_vl(model=...)` 명시 주입 — OPENAI_MODEL env 무관 |
 | 막힌 지점 도우미 (튜터) | OpenAI | **gpt-5.2**(`OPENAI_MODEL`, 품질 우선 유지). 위치추적 effort=medium / 힌트생성 effort=low(자유텍스트). VL timeout 50초 |
+| 빠른정답 읽기 | OpenAI | **gpt-5.2**(`ANSWER_KEY_MODEL`). `call_vl(model=...)` 명시 주입 — OPENAI_MODEL env 무관. 실측상 gpt-4o 는 2배 느리고 출력 1.8배, gpt-4o-mini 는 입력 25배 + LaTeX 깨짐 → **싼 모델로 교체 금지**(`dev-rules.md`) |
 | Embed | Ollama | bge-m3 (1024d 고정) |
 
 - VL 은 OpenAI(2026-06-19 gemma4 폐기). 옛 시간대 분기(`provider_selector`)·옛 Call B 난이도 provider 분기(`_route_call_b_provider`)는 제거됨.

@@ -20,6 +20,7 @@ import {
   Search,
   FolderInput,
   Workflow,
+  ListChecks,
 } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
 import { formatDifficultyScore, getDifficultyColor } from '@shared/lib/utils';
@@ -27,6 +28,7 @@ import { useTextbook } from '@/context/TextbookContext';
 import type { Textbook, Chapter, Subchapter } from '@shared/types/database';
 import PdfUploadDialog from '@/components/PdfUploadDialog';
 import { SolutionNodeEditorModal } from '@/components/SolutionNodeEditorModal';
+import { AnswerKeyModal } from '@/components/AnswerKeyModal';
 
 const gradeOptions = [
   { value: '중학교 1학년', label: '중학교 1학년' },
@@ -101,6 +103,11 @@ const TextbookManagementNew = () => {
   // 선택된 교재를 보고 만들면 엉뚱한 교재 밑에 폴더가 생긴다.
   const [folderDialog, setFolderDialog] = useState<
     { textbookId: string; parentId: string | null; parentName: string } | null
+  >(null);
+
+  // 빠른정답 모달. folderId 가 있으면 그 회차/시험 답지로, 없으면 교재 전체 답지로 담는다.
+  const [answerKeyTarget, setAnswerKeyTarget] = useState<
+    { textbookId: string; textbookName: string; folderId: string | null; folderName: string | null } | null
   >(null);
 
   // 삭제 확인 모달
@@ -818,6 +825,27 @@ const TextbookManagementNew = () => {
                 PDF 가져오기
               </Button>
             )}
+            {/* 빠른정답 — 범위는 '지금 선 자리' 를 따른다.
+                폴더를 고르고 있으면 그 회차/시험, 교재만 골랐으면 교재 전체.
+                (모의고사·내신은 회차마다 1~30번이 겹쳐서 교재 단위로 담으면 앞 회차를 덮어쓴다.) */}
+            {selectedTextbook && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setAnswerKeyTarget({
+                  textbookId: selectedTextbook.id,
+                  textbookName: selectedTextbook.name,
+                  folderId: selectedFolder?.id ?? null,
+                  folderName: selectedFolder?.name ?? null,
+                })}
+                title={selectedFolder
+                  ? `빠른정답 PDF 로 정답 채우기 — 기본 범위: ${selectedFolder.name}`
+                  : '빠른정답 PDF 로 정답 채우기 — 기본 범위: 교재 전체'}
+              >
+                <ListChecks className="h-4 w-4 mr-1.5" />
+                빠른정답
+              </Button>
+            )}
             {selectedProblemIds.size > 0 && selectedTextbook && (
               <Button
                 variant="outline"
@@ -1191,6 +1219,16 @@ const TextbookManagementNew = () => {
           onOpenChange={setIsPdfDialogOpen}
           textbook={selectedTextbook}
           folder={selectedFolder}
+        />
+      )}
+
+      {answerKeyTarget && (
+        <AnswerKeyModal
+          textbookId={answerKeyTarget.textbookId}
+          textbookName={answerKeyTarget.textbookName}
+          folderId={answerKeyTarget.folderId}
+          folderName={answerKeyTarget.folderName}
+          onClose={() => setAnswerKeyTarget(null)}
         />
       )}
 

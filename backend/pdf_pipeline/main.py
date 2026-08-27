@@ -624,35 +624,103 @@ def _extract_nodes_for_problems(problems: list[dict]):
 # 다른 단원은 PDF 없이 바로 채워진다.
 # ══════════════════════════════════════════════════════════════════
 
-@app.post("/api/answer-key/{textbook_id}")
-async def upload_answer_key(textbook_id: str, file: UploadFile = File(...)):
-    """빠른정답 PDF 를 읽어 교재의 정답표로 저장한다. 이미 있는 번호는 새 값으로 갱신."""
-    from pipeline.answer_key_reader import read_answer_key
-    from storage.supabase_client import upsert_answer_keys
+def _answer_key_paths(real_name: str) -> Path:
+    save_dir = _unique_dir(Path(UPLOAD_DIR) / "answer_keys", _sanitize_name(real_name))
+    save_dir.mkdir(parents=True, exist_ok=True)
+    return save_dir / real_name
 
+
+async def _stash_upload(file: UploadFile) -> tuple:
+    """업로드된 PDF 를 저장하고 (경로, 원래이름, sha256) 을 돌려준다."""
+    import hashlib
     if not file.filename:
         raise HTTPException(400, "파일명이 없습니다.")
     real = _decode_upload_filename(file.filename)
     if Path(real).suffix.lower() != ".pdf":
         raise HTTPException(400, "PDF 만 지원합니다.")
+    blob = await file.read()
+    path = _answer_key_paths(real)
+    path.write_bytes(blob)
+    return path, real, hashlib.sha256(blob).hexdigest()
 
-    save_dir = _unique_dir(Path(UPLOAD_DIR) / "answer_keys", _sanitize_name(real))
-    save_dir.mkdir(parents=True, exist_ok=True)
-    path = save_dir / real
-    path.write_bytes(await file.read())
 
-    # VL 을 12번 부르느라 몇 분 걸린다 — 이벤트 루프를 막지 않게 스레드로 뺀다.
+async def _read_off_loop(fn):
+    """VL 을 여러 번 부르느라 몇 분 걸린다 — 이벤트 루프를 막지 않게 스레드로 뺀다."""
     from concurrent.futures import ThreadPoolExecutor as _Pool
     loop = asyncio.get_event_loop()
     with _Pool(max_workers=1) as ex:
-        rows = await loop.run_in_executor(ex, partial(read_answer_key, str(path)))
+        return await loop.run_in_executor(ex, fn)
+
+
+@app.get("/api/answer-key/{textbook_id}")
+async def answer_key_status(textbook_id: str):
+    """이 교재에 저장된 정답표 현황. 또 돈을 쓸지 판단하는 근거다."""
+    from storage.supabase_client import get_answer_key_summary
+    return get_answer_key_summary(textbook_id)
+
+
+@app.post("/api/answer-key/{textbook_id}/probe")
+async def probe_answer_key(textbook_id: str, file: UploadFile = File(...),
+                           page: int = Form(1)):
+    """한 쪽만 시험 삼아 읽어 본다 — **저장하지 않는다.**
+
+    처음 보는 판형(다른 교재·모의고사 답지)에 통째로 돈을 쓰기 전에, 번호와 정답이
+    제대로 잡히는지 눈으로 확인하기 위한 단계다. 비용은 전체의 1/20 수준(1~2회 호출).
+    """
+    from pipeline.answer_key_reader import read_answer_key, plan_read
+
+    path, real, digest = await _stash_upload(file)
+    plan = plan_read(str(path))
+    if page < 1 or page > plan["pages"]:
+        raise HTTPException(400, f"1~{plan['pages']} 쪽 사이로 정해주세요.")
+
+    # 시험 읽기는 1회만(대조 없음) — 판형 확인이 목적이지 정답 확정이 아니다.
+    rows = await _read_off_loop(
+        partial(read_answer_key, str(path), pages=[page - 1], cross_check=False))
+    return {
+        "source_pdf": real,
+        "source_hash": digest,
+        "page": page,
+        "plan": plan,
+        "count": len(rows),
+        "items": rows[:60],
+    }
+
+
+@app.post("/api/answer-key/{textbook_id}")
+async def upload_answer_key(textbook_id: str, file: UploadFile = File(...),
+                            folder_id: Optional[str] = Form(None),
+                            force: bool = Form(False)):
+    """빠른정답 PDF 를 읽어 정답표로 저장한다. 같은 (스코프, 번호) 는 새 값으로 갱신.
+
+    folder_id 를 주면 그 폴더(모의고사 회차·내신 학교) 답지로 담는다. 안 주면 교재 전체
+    답지다 — 쎈처럼 번호가 책 전체에서 유일한 교재는 이쪽이라 다른 단원도 공짜로 채워진다.
+    """
+    from pipeline.answer_key_reader import read_answer_key
+    from storage.supabase_client import upsert_answer_keys, get_answer_key_summary
+
+    scope = (folder_id or "") or None
+    path, real, digest = await _stash_upload(file)
+
+    # 같은 파일을 또 읽지 않는다 — 한 번에 VL 수십 회 + 몇 분이 든다.
+    if not force:
+        for g in get_answer_key_summary(textbook_id).get("scopes", []):
+            if g.get("folder_id") == scope and digest in (g.get("source_hashes") or []):
+                raise HTTPException(409, (
+                    f"이 PDF 는 이미 읽어 두었습니다 — 정답 {g['count']}개"
+                    f"({g.get('label_min')}~{g.get('label_max')}). 다시 읽으려면 '그래도 읽기' 를 눌러주세요."
+                ))
+
+    rows = await _read_off_loop(partial(read_answer_key, str(path)))
     if not rows:
         raise HTTPException(422, "정답을 한 개도 읽지 못했습니다. 빠른정답 PDF 가 맞는지 확인해주세요.")
 
-    saved = upsert_answer_keys(textbook_id, rows, source_pdf=real)
+    saved = upsert_answer_keys(textbook_id, rows, source_pdf=real,
+                               folder_id=scope, source_hash=digest)
     return {
         "count": len(saved),
         "needs_review": sum(1 for r in saved if r.get("needs_review")),
+        "folder_id": scope,
         "labels": [r["label"] for r in saved[:5]],
     }
 
@@ -664,6 +732,44 @@ def _review_note(hit: Optional[dict], label: str, classify) -> str:
     if not hit.get("needs_review"):
         return ""
     return classify(hit.get("answer", "")).get("note") or "두 번 읽어 다름"
+
+
+def _index_answer_keys(keys: list) -> tuple:
+    """정답표를 (정확 일치 사전, 숫자 별칭 사전) 으로 만든다.
+
+    왜 별칭이 필요한가: 답지와 문제지의 번호 표기가 다를 수 있다. 실측(낙생고 내신)에서
+    답지는 `01`~`22` 인데 문제지는 `1`~`22` 다. 문자열 완전 일치만 하면 **한 개도 안 맞는다**.
+
+    ⚠️ 모호하면 별칭을 아예 안 쓴다. 쎈은 문제번호가 `0001` 인데 학습플래너에도 `01`
+    (대단원)이 있어 둘 다 숫자로는 1 이다. 그냥 별칭을 만들면 서로 덮어써서 **엉뚱한 정답**
+    이 들어간다. 같은 숫자에 서로 다른 라벨이 2개 이상 걸리면 그 숫자는 통째로 버린다.
+    """
+    exact = {k["label"]: k for k in keys}
+    groups: dict = {}
+    for label, k in exact.items():
+        if label.isascii() and label.isdigit():
+            groups.setdefault(str(int(label)), []).append(k)
+    alias = {n: v[0] for n, v in groups.items() if len(v) == 1}
+    return exact, alias
+
+
+def _lookup_answer(exact: dict, alias: dict, label: str) -> Optional[dict]:
+    """정확 일치 우선, 없으면 숫자로 한 번 더. (`0243` 은 정확히 맞으므로 별칭을 안 탄다.)"""
+    if not label:
+        return None
+    hit = exact.get(label)
+    if hit is None and label.isascii() and label.isdigit():
+        hit = alias.get(str(int(label)))
+    return hit
+
+
+def _job_scope(staged: list) -> Optional[str]:
+    """이 job 의 문제들이 앉아 있는 폴더. 섞여 있거나 없으면 None(=교재 전체).
+
+    모의고사·내신은 회차/학교마다 1~30 번이 겹치므로, 답지를 그 폴더에 매어야 한다.
+    """
+    folders = {s.get("folder_id") for s in staged if s.get("folder_id")}
+    return folders.pop() if len(folders) == 1 else None
 
 
 @app.get("/api/staging/{job_id}/answer-preview")
@@ -679,13 +785,16 @@ async def answer_preview(job_id: str):
     if not textbook_id:
         raise HTTPException(400, "교재가 지정되지 않은 작업입니다.")
 
-    keys = {k["label"]: k for k in get_answer_keys(textbook_id)}
+    # 폴더 답지가 있으면 그것이 교재 전체 답지를 이긴다(get_answer_keys 가 합쳐 준다).
+    folder_id = _job_scope(staged)
+    keys_list = get_answer_keys(textbook_id, folder_id)
+    exact, alias = _index_answer_keys(keys_list)
     rows = []
     for s in staged:
         if s.get("status") == "rejected":
             continue
         label = (s.get("source_label") or "").strip()
-        hit = keys.get(label) if label else None
+        hit = _lookup_answer(exact, alias, label)
         rows.append({
             "staging_id": s["id"],
             "problem_number": s.get("problem_number"),
@@ -704,7 +813,9 @@ async def answer_preview(job_id: str):
         "total": len(rows),
         "matched": sum(1 for r in rows if r["matched"]),
         "needs_review": sum(1 for r in rows if r["matched"] and r["needs_review"]),
-        "answer_key_size": len(keys),
+        "answer_key_size": len(exact),
+        "textbook_id": textbook_id,
+        "folder_id": folder_id,
         "rows": rows,
     }
 

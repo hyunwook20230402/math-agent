@@ -547,23 +547,38 @@ def update_staging_solution(
     return result.data[0] if result.data else {}
 
 
-# ── 교재별 빠른정답표 ────────────────────────────────────────────────
+# ── 빠른정답표 (스코프: 교재 전체 또는 폴더=회차/시험) ──────────────────
+#
+# 왜 스코프가 필요한가: 쎈 같은 교재는 번호가 책 전체에서 유일하지만(0001~1316),
+# 모의고사·내신은 한 교재 안에 회차/학교가 폴더로 들어 있고 번호가 1~30 으로 겹친다.
+# 교재 단위로만 담으면 25년 6월 답지가 24년 답지를 덮어쓴다(029 마이그레이션 참조).
+#
+#   folder_id 있음 → 그 회차/시험 답지        folder_id 없음 → 교재 전체 답지
+#
+# DB 의 유일성은 GENERATED 컬럼 scope_id = COALESCE(folder_id, textbook_id) 로 건다.
 
-def upsert_answer_keys(textbook_id: str, rows: list, source_pdf: str | None = None) -> list:
-    """읽어 온 정답을 교재 정답표에 넣는다. 같은 (교재, 번호) 는 새 값으로 갱신.
+_ANSWER_KEY_FIELDS = "label,answer,answer_type,needs_review,folder_id"
 
-    UNIQUE(textbook_id, label) 이 걸려 있어 on_conflict 로 한 번에 처리한다.
+
+def upsert_answer_keys(textbook_id: str, rows: list, source_pdf: str | None = None,
+                       folder_id: str | None = None,
+                       source_hash: str | None = None) -> list:
+    """읽어 온 정답을 정답표에 넣는다. 같은 (스코프, 번호) 는 새 값으로 갱신.
+
+    folder_id 를 주면 그 폴더(모의고사 회차·내신 학교) 답지로, 안 주면 교재 전체 답지로 담는다.
     """
     if not rows:
         return []
     client = get_client()
     payload = [{
         "textbook_id": textbook_id,
+        "folder_id": folder_id,
         "label": r["label"],
         "answer": r.get("answer", ""),
         "answer_type": r.get("answer_type", "short_answer"),
         "needs_review": bool(r.get("needs_review")),
         "source_pdf": source_pdf,
+        "source_hash": source_hash,
     } for r in rows]
 
     saved: list = []
@@ -572,24 +587,30 @@ def upsert_answer_keys(textbook_id: str, rows: list, source_pdf: str | None = No
         chunk = payload[i:i + 500]
         res = (
             client.table("answer_keys")
-            .upsert(chunk, on_conflict="textbook_id,label")
+            .upsert(chunk, on_conflict="scope_id,label")
             .execute()
         )
         saved.extend(res.data or [])
     return saved
 
 
-def get_answer_keys(textbook_id: str) -> list:
-    """교재의 정답표 전체."""
+def _fetch_answer_keys(textbook_id: str, select: str = _ANSWER_KEY_FIELDS) -> list:
+    """이 교재에 딸린 답지 전부(교재 전체 + 모든 폴더). PostgREST 상한을 넘게 나눠 읽는다.
+
+    ⚠️ 나눠 읽을 땐 반드시 정렬을 건다. ORDER BY 없이 range 로 페이지를 넘기면 순서가
+    보장되지 않아 **경계에서 행이 빠지거나 겹친다**. 정답표는 한 줄만 새도 그 문제가
+    통째로 안 채워지므로 유일한 PK(id) 로 고정한다.
+    """
     out: list = []
     client = get_client()
-    step = 1000                     # PostgREST 기본 상한을 넘기지 않게 나눠 읽는다
+    step = 1000
     start = 0
     while True:
         res = (
             client.table("answer_keys")
-            .select("label,answer,answer_type,needs_review")
+            .select(select)
             .eq("textbook_id", textbook_id)
+            .order("id")
             .range(start, start + step - 1)
             .execute()
         )
@@ -598,3 +619,56 @@ def get_answer_keys(textbook_id: str) -> list:
         if len(batch) < step:
             return out
         start += step
+
+
+def get_answer_keys(textbook_id: str, folder_id: str | None = None) -> list:
+    """이 스코프에서 쓸 정답표.
+
+    folder_id 를 주면 **그 폴더 답지가 교재 전체 답지를 이긴다**. 덕분에
+      · 쎈처럼 교재 전체로 한 번 넣어둔 답지는 어느 단원 폴더에서도 그대로 쓰이고,
+      · 모의고사는 그 회차 답지만 정확히 붙는다.
+    폴더 답지가 없는 번호는 교재 전체 답지로 자연히 폴백된다.
+    """
+    rows = _fetch_answer_keys(textbook_id)
+    merged: dict = {}
+    for r in rows:                          # 1) 교재 전체 답지를 깔고
+        if not r.get("folder_id"):
+            merged[r["label"]] = r
+    if folder_id:                           # 2) 그 위에 폴더 답지를 덮는다
+        for r in rows:
+            if r.get("folder_id") == folder_id:
+                merged[r["label"]] = r
+    return list(merged.values())
+
+
+def get_answer_key_summary(textbook_id: str) -> dict:
+    """이 교재에 저장된 답지 현황 — 또 돈을 쓸지 판단하는 근거.
+
+    스코프(교재 전체 / 폴더별)마다 개수·번호 범위·출처 PDF·갱신 시각을 준다.
+    """
+    rows = _fetch_answer_keys(textbook_id, "label,folder_id,needs_review,source_pdf,source_hash,updated_at")
+    scopes: dict = {}
+    for r in rows:
+        key = r.get("folder_id") or ""      # "" = 교재 전체
+        g = scopes.setdefault(key, {
+            "folder_id": r.get("folder_id"), "count": 0, "needs_review": 0,
+            "labels": [], "source_pdf": r.get("source_pdf"),
+            "source_hashes": set(), "updated_at": r.get("updated_at"),
+        })
+        g["count"] += 1
+        g["needs_review"] += 1 if r.get("needs_review") else 0
+        g["labels"].append(r["label"])
+        if r.get("source_hash"):
+            g["source_hashes"].add(r["source_hash"])
+        if (r.get("updated_at") or "") > (g["updated_at"] or ""):
+            g["updated_at"] = r.get("updated_at")
+
+    out = []
+    for g in scopes.values():
+        labels = sorted(g.pop("labels"), key=lambda x: (len(x), x))
+        g["label_min"] = labels[0] if labels else None
+        g["label_max"] = labels[-1] if labels else None
+        g["source_hashes"] = sorted(g["source_hashes"])
+        out.append(g)
+    out.sort(key=lambda g: (g["folder_id"] is not None, -g["count"]))
+    return {"total": len(rows), "scopes": out}
