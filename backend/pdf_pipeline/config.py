@@ -17,6 +17,13 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:26b")
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/tmp/pdf_pipeline")
 
+# 문자 발송(솔라피). 셋 중 하나라도 비면 handlers/sms_sender 가 모의발송으로 떨어진다
+# — 계정 준비 전에도 화면과 로그는 그대로 돌아간다. 발신번호는 솔라피에 사전 등록 필요.
+SOLAPI_API_KEY = os.getenv("SOLAPI_API_KEY", "")
+SOLAPI_API_SECRET = os.getenv("SOLAPI_API_SECRET", "")
+SOLAPI_SENDER_PHONE = os.getenv("SOLAPI_SENDER_PHONE", "")
+ACADEMY_NAME = os.getenv("ACADEMY_NAME", "수학학원")
+
 # 임베딩 (튜터 RAG 쿼리 임베딩 — pipeline/embedder.py 와 동일 env 를 공유해 차원 1024 통일)
 EMBED_OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")

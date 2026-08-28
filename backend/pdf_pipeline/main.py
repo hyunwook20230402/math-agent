@@ -47,6 +47,7 @@ from pipeline.structurizer import (
 from pipeline.embedder import generate_embedding, release_model as release_embedder
 from routers.tutor import router as tutor_router
 from routers.nodes import router as nodes_router
+from routers.messages import router as messages_router
 
 # ── 업로드 파일명/폴더 유틸 ─────────────────────────────────────
 def _decode_upload_filename(name: str) -> str:
@@ -89,6 +90,7 @@ app.add_middleware(
 # 막힌 지점 도우미(풀이 그래프 위치추적 RAG) — POST /api/tutor/hint
 app.include_router(tutor_router, prefix="/api/tutor", tags=["tutor"])
 app.include_router(nodes_router, prefix="/api/cms/problems", tags=["cms-nodes"])
+app.include_router(messages_router, prefix="/api/messages", tags=["messages"])
 
 # 작업 진행 상황 저장 (메모리, 재시작 시 초기화)
 jobs: Dict[str, dict] = {}
@@ -464,6 +466,39 @@ async def _run_extraction(
 
 
 # --- API 엔드포인트 ---
+
+@app.post("/api/pdf/sections")
+async def pdf_sections(file: UploadFile = File(...)):
+    """교재 PDF 를 '단계' 구간으로 나눠 돌려준다 (쎈 A/B/C단계 등).
+
+    왜: 한 단원 PDF 에 B단계와 C단계가 이어져 있어, 통째로 크롭하면 한 폴더에 섞인다.
+    구간을 알려 주면 업로드 창이 시작/끝 쪽을 채워 그 단계만 자를 수 있다(크롭은 이미
+    쪽 범위를 지킨다).
+
+    배너 검출은 로컬 계산이라 **비용이 0** 이다. 배너가 1개 이하면 빈 목록을 준다 —
+    나눌 게 없으니 화면은 지금처럼 손으로 쪽을 넣으면 된다.
+    """
+    from pipeline.stage_sections import detect_sections
+
+    if not file.filename:
+        raise HTTPException(400, "파일명이 없습니다.")
+    real = _decode_upload_filename(file.filename)
+    if Path(real).suffix.lower() != ".pdf":
+        return {"sections": []}          # HWP 등은 조용히 넘어간다(업로드는 계속 가능)
+
+    tmp_dir = Path(UPLOAD_DIR) / "_sections"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    path = tmp_dir / f"{uuid.uuid4().hex}.pdf"
+    path.write_bytes(await file.read())
+    try:
+        sections = await _read_off_loop(partial(detect_sections, str(path)))
+    except Exception as e:  # noqa: BLE001 — 구간 검출 실패로 업로드를 막지 않는다
+        logger.warning("[sections] 검출 실패: %s", e)
+        sections = []
+    finally:
+        path.unlink(missing_ok=True)
+    return {"sections": sections}
+
 
 @app.post("/api/upload")
 async def upload_file(

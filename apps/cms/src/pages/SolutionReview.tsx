@@ -679,7 +679,11 @@ export default function SolutionReview() {
         }
         return;
       }
-      setExportedAt(new Date().toISOString().slice(0, 19).replace('T', ' '));
+      // ⚠️ toISOString() 은 UTC 라 화면에 9시간 전(자정~오전 9시엔 **전날**)으로 찍힌다.
+      //    바로 위 확인창은 서버가 준 값을 쓰므로 같은 작업의 시각이 두 곳에서 달라 보였다.
+      setExportedAt(
+        new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Seoul' }).slice(0, 19)
+      );
       setExportInfo({ train: data.train, val: data.val });
       const warnings: string[] = Array.isArray(data.warnings) ? data.warnings : [];
       if (warnings.length > 0) {

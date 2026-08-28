@@ -395,8 +395,8 @@ const TeacherDashboard = () => {
                     <ClipboardList className="h-5 w-5 text-primary" />
                     <h3 className="font-semibold">배포 내역 보기</h3>
                   </div>
-                  <p className="text-sm text-muted-foreground mb-4">이전에 배포한 과제 내역과 결과를 확인합니다.</p>
-                  <Button variant="outline" className="w-full" onClick={() => navigate('/teacher/distributions')}>
+                  <p className="text-sm text-muted-foreground mb-4">배포하기 화면 하단에서 학생별 최근 배포 내역을 확인합니다.</p>
+                  <Button variant="outline" className="w-full" onClick={() => navigate('/teacher/distribute')}>
                     <Eye className="h-4 w-4 mr-2" />
                     배포 내역 보기
                   </Button>

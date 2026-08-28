@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@shared/hooks/useAuth';
 import { Button } from '@shared/ui/button';
@@ -13,12 +13,20 @@ import {
   CheckCircle, 
   XCircle, 
   Clock, 
-  BookOpen,
   Send,
   AlertCircle
 } from 'lucide-react';
-import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@shared/lib/api';
+import { distributionApi, studentAnswerApi, wrongAnswerApi, wrongAnswerReviewApi } from '@shared/lib/api';
 import { checkAnswer, normalizeAnswer } from '@shared/lib/answerNormalizer';
+// 회차 규칙은 대시보드와 **같은 원본**을 쓴다. 버튼을 감추는 것만으로는 못 막는다 —
+// 제출 뒤 브라우저 뒤로가기로 이 화면이 그대로 다시 열리기 때문(canAttemptToday 주석 참조).
+import {
+  canAttemptToday,
+  buildReviewStages,
+  AUTO_REVIEW_KINDS,
+  toDateStr,
+  type ProblemAttemptStat,
+} from '@shared/lib/reviewSchedule';
 import { renderShortMath } from '@shared/lib/mathRender';
 import 'katex/dist/katex.min.css';
 import type { DistributionWithDetails } from '@shared/types/database';
@@ -45,7 +53,9 @@ const SolveProblem = () => {
   const { profile } = useAuth();
   const [searchParams] = useSearchParams();
   
-  const [loading, setLoading] = useState(false);
+  // 진입하자마자 배포를 불러오므로 처음부터 true — false 로 두면 데이터가 오기 전에
+  // "문제를 찾을 수 없습니다" 화면이 먼저 번쩍인다.
+  const [loading, setLoading] = useState(true);
   const [distribution, setDistribution] = useState<DistributionWithDetails | null>(null);
   const [problems, setProblems] = useState<Problem[]>([]);
   const [currentProblemIndex, setCurrentProblemIndex] = useState(0);
@@ -55,36 +65,69 @@ const SolveProblem = () => {
   const [attemptCounts, setAttemptCounts] = useState<{ [key: string]: number }>({});
   const [timeSpent, setTimeSpent] = useState(0);
   const [isWrongAnswersOnly, setIsWrongAnswersOnly] = useState(false);
+  // 이번 화면에서 student_answers 저장에 **성공한** 문제 → 정답여부.
+  // 제출이 부분 실패한 뒤 다시 제출할 때 중복 insert(=회차 두 칸 뛰기)를 막는다.
+  const recordedRef = useRef<{ [problemId: string]: boolean }>({});
+  // 제출이 진행 중인가. loading 은 다른 effect 가 되돌릴 수 있어 이중 제출을 못 막는다.
+  const submittingRef = useRef(false);
+  // 문제별 전체 시도 요약(배포 무관) — "오늘 또 풀어도 되는가" 판정의 근거.
+  const [attemptStats, setAttemptStats] = useState<{ [problemId: string]: ProblemAttemptStat }>({});
+  const [statsLoaded, setStatsLoaded] = useState(false);
 
   // 배포 날짜를 URL 파라미터로 변환하는 함수
+  // ⚠️ toISOString() 은 UTC 라 KST 오전 배포가 전날로 밀린다 — 대시보드 날짜 필터가
+  //    그 값을 그대로 쓰므로, 돌아갔을 때 **엉뚱한 날짜**가 선택된다. 로컬 기준으로 뽑는다.
   const getDistributionDateParam = () => {
     if (!distribution?.distribution_date) return '';
-    const date = new Date(distribution.distribution_date);
-    return date.toISOString().split('T')[0]; // YYYY-MM-DD 형식
+    return toDateStr(new Date(distribution.distribution_date));
   };
 
   // 컴포넌트 마운트 시 기존 시도 횟수 로드
+  //
+  // ⚠️ deps 에 problems 가 있어 **두 번 발사된다**(problems=[] 일 때 1차, 채워진 뒤 2차).
+  //    취소 플래그가 없으면 늦게 도착한 1차가 정상 값을 `{}` 로 덮어써 attempt_number 가
+  //    NaN → null 이 되고 NOT NULL(23502)로 **제출이 통째로 실패**한다(검토에서 확인).
   useEffect(() => {
-    const loadAttemptCounts = async () => {
-      if (!profile?.id || !distributionId) return;
-      
+    if (!profile?.id || !distributionId || problems.length === 0) return;
+    let cancelled = false;
+
+    (async () => {
       try {
         const existingAnswers = await studentAnswerApi.getStudentAnswers(profile.id, distributionId);
+        if (cancelled) return;
         const counts: { [key: string]: number } = {};
-        
         problems.forEach(problem => {
-          const problemAnswers = existingAnswers.filter(answer => answer.problem_id === problem.id);
-          counts[problem.id] = problemAnswers.length;
+          counts[problem.id] = existingAnswers.filter(a => a.problem_id === problem.id).length;
         });
-        
         setAttemptCounts(counts);
       } catch (error) {
         console.error('시도 횟수 로드 실패:', error);
       }
-    };
-    
-    loadAttemptCounts();
+    })();
+
+    return () => { cancelled = true; };
   }, [profile?.id, distributionId, problems]);
+
+  // 문제별 **전체** 시도 요약 — 하루에 복습 한 회차 가드의 근거(배포 무관, 선생님 표와 같은 기준).
+  useEffect(() => {
+    if (!profile?.id) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const stats = await studentAnswerApi.getProblemAttemptStats(profile.id);
+        if (cancelled) return;
+        setAttemptStats(stats);
+      } catch (error) {
+        // 못 읽으면 가드를 걸 수 없다. 막기보다 통과시킨다 — 학생이 숙제를 못 하는 게 더 나쁘다.
+        console.warn('시도 요약 조회 실패 (하루 한 회차 가드 미적용):', error);
+      } finally {
+        if (!cancelled) setStatsLoaded(true);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [profile?.id]);
 
   useEffect(() => {
     if (distributionId && profile) {
@@ -167,11 +210,34 @@ const SolveProblem = () => {
 
   const handleAnswerChange = (answer: string) => {
     const currentProblem = problems[currentProblemIndex];
+    // 부분 실패 후 재제출 때, 이미 저장된 문제는 다시 안 보낸다(중복 = 회차 두 칸 뛰기).
+    // 그래서 여기서 고쳐도 반영될 수 없다 — 조용히 버리지 말고 막고 알린다.
+    if (currentProblem.id in recordedRef.current) {
+      toast({
+        title: "이미 저장된 답이에요",
+        description: "이 문제는 저장이 끝나 고칠 수 없어요. 다음 회차에 다시 풀게 됩니다.",
+        variant: "default"
+      });
+      return;
+    }
     setAnswers(prev => ({
       ...prev,
       [currentProblem.id]: answer
     }));
   };
+
+  /**
+   * 답안이 실제로 채워졌는가.
+   *
+   * ⚠️ 옛 검사는 `!answers[id]` 였다 — 공백 한 칸(`" "`)은 **truthy 라 그냥 통과**해서
+   *    빈 답이 제출되고 오답으로 박제됐다. 주관식은 반드시 trim 해서 본다.
+   *    (객관식 값은 언제나 보기 번호 문자열이라 trim 해도 무해하다.)
+   */
+  const isAnswered = (problemId: string) => (answers[problemId] ?? '').trim() !== '';
+
+  /** 아직 안 푼 문제의 화면상 번호(1-based). 제출 가능 여부와 안내 문구의 근거. */
+  const getUnansweredIndexes = () =>
+    problems.reduce<number[]>((acc, p, i) => (isAnswered(p.id) ? acc : [...acc, i]), []);
 
   const handleNext = () => {
     if (currentProblemIndex < problems.length - 1) {
@@ -187,64 +253,95 @@ const SolveProblem = () => {
 
   const handleSubmit = async () => {
     if (!profile || !distributionId) return;
+    // 이중 제출 차단. loading 은 다른 effect(재마운트·auth 갱신)가 되돌릴 수 있어 못 믿는다.
+    if (submittingRef.current) return;
 
-    const unansweredProblems = problems.filter(problem => !answers[problem.id]);
-    if (unansweredProblems.length > 0) {
+    // 제출은 **전부 답한 경우에만**. 객관식은 고르고 주관식은 채워야 한다.
+    // 버튼도 막아 두지만(아래 disabled) 여기서 한 번 더 본다 — 화면 조건이 바뀌어도
+    // 빈 답이 student_answers 에 박히면 그게 곧 오답 이력이 되고 회차가 한 칸 넘어간다.
+    if (problems.length === 0) return;
+
+    // 오늘 몫을 이미 끝낸 문제는 제출을 막는다(뒤로가기로 이 화면에 다시 들어온 경우).
+    if (blockedToday) {
       toast({
-        title: "미답 문제",
-        description: `${unansweredProblems.length}개의 문제가 답안되지 않았습니다.`,
-        variant: "destructive"
+        title: "오늘 몫은 이미 마쳤어요",
+        description: "복습은 하루에 한 번씩 나눠 풀어야 효과가 있어요. 내일 다시 만나요!",
+        variant: "default"
       });
       return;
     }
 
+    const unanswered = getUnansweredIndexes();
+    if (unanswered.length > 0) {
+      toast({
+        title: "아직 다 못 풀었어요",
+        description:
+          `${unanswered.length}문제가 비어 있습니다 — ` +
+          `${unanswered.slice(0, 8).map(i => `문제 ${i + 1}`).join(', ')}` +
+          `${unanswered.length > 8 ? ' 외' : ''}. 모두 답해야 제출할 수 있어요.`,
+        variant: "destructive"
+      });
+      setCurrentProblemIndex(unanswered[0]);   // 첫 빈 문제로 데려다 준다
+      return;
+    }
+
+    submittingRef.current = true;
     setLoading(true);
     try {
-      // 답안 제출 및 결과 계산
-      const results: { [key: string]: boolean } = {};
-      const answerPromises = problems.map(async (problem) => {
+      // ★이미 저장에 성공한 문제는 다시 안 보낸다.
+      //   student_answers 는 append-only 라 **한 행 = 한 회차**다. 일부만 저장된 채 실패해서
+      //   학생이 다시 제출하면, 성공했던 문제만 행이 하나 더 쌓여 **회차가 두 칸 뛴다**
+      //   → 선생님 오답 표에 같은 날짜가 두 칸에 찍힌다.
+      const results: { [key: string]: boolean } = { ...recordedRef.current };
+      const pending = problems.filter(problem => !(problem.id in recordedRef.current));
+
+      const settled = await Promise.allSettled(pending.map(async (problem) => {
         // 정답 비교 - 형식 차이(①/"3번"/"3")를 흡수하도록 정규화 후 비교
         const check = checkAnswer(answers[problem.id], problem.correct_answer, problem.answer_type);
         // 정답 정보가 없는 문제(correct_answer 빈 값)는 오답으로 박제하지 않고 정답 처리
         // (학생 책임 아님 — CMS 에서 정답 채워지면 재채점 가능). 오답 노트에도 안 넣음.
         const isCorrect = check.hasCorrectAnswer ? check.isCorrect : true;
 
-        results[problem.id] = isCorrect;
-
-        // 학생 답안 저장
+        // 이게 성공해야 회차가 오른다 — 실패하면 아래 기록도 안 남아 재시도 대상이 된다
         await studentAnswerApi.submitAnswer({
           student_id: profile.id,
           problem_id: problem.id,
           answer: answers[problem.id],
           is_correct: isCorrect,
-          attempt_number: attemptCounts[problem.id] + 1, // 시도 횟수 증가
+          attempt_number: (attemptCounts[problem.id] ?? 0) + 1, // 없으면 NaN→null→23502 (기본 0)
           distribution_id: distributionId
         });
+        recordedRef.current[problem.id] = isCorrect;
+        results[problem.id] = isCorrect;
 
-        // 오답인 경우 오답 노트에 추가 (최신 오답만 유지)
-        if (!isCorrect) {
-          try {
+        // 오답 노트는 보조 기록 — 실패해도 제출은 성립한다(회차의 근거는 student_answers).
+        try {
+          if (!isCorrect) {
             await wrongAnswerApi.addWrongAnswer({
               student_id: profile.id,
               problem_id: problem.id,
               wrong_answer: answers[problem.id],
-              attempt_number: attemptCounts[problem.id] + 1 // 시도 횟수 포함
+              attempt_number: (attemptCounts[problem.id] ?? 0) + 1 // 시도 횟수 포함
             });
-          } catch (error) {
-            console.warn('오답 추가 실패:', error);
-            // 오답 추가 실패해도 전체 제출 프로세스는 계속 진행
-          }
-        } else {
-          // 정답인 경우 오답 노트에서 제거
-          try {
+          } else {
             await wrongAnswerApi.removeWrongAnswer(profile.id, problem.id);
-          } catch (error) {
-            console.warn('오답 제거 실패:', error);
           }
+        } catch (error) {
+          console.warn('오답 노트 갱신 실패:', error);
         }
-      });
+      }));
 
-      await Promise.all(answerPromises);
+      const failed = settled.filter(r => r.status === 'rejected');
+      if (failed.length > 0) {
+        console.error('답안 저장 실패:', failed.map(f => (f as PromiseRejectedResult).reason));
+        toast({
+          title: "일부 답안을 저장하지 못했어요",
+          description: `${failed.length}문제가 저장되지 않았습니다. 다시 제출해 주세요 — 이미 저장된 문제는 중복으로 저장되지 않습니다.`,
+          variant: "destructive"
+        });
+        return;   // finally 에서 loading 이 풀려 다시 제출할 수 있다
+      }
+
       setResults(results);
       setSubmitted(true);
 
@@ -255,6 +352,32 @@ const SolveProblem = () => {
         title: "제출 완료",
         description: `정답률: ${accuracy.toFixed(1)}% (${correctCount}/${problems.length})`
       });
+
+      // ★자동 채점이 끝났으니 **복습 배포 3개**(다음 수업·2주·4주)를 바로 만든다.
+      //   선생님이 손으로 예약하던 걸 대체한다. 담기는 문제는 **첫 시도에서 틀린 것**이고,
+      //   그 묶음은 나중에 맞혀도 안 바뀐다(RPC 가 DISTINCT ON 으로 첫 시도를 본다).
+      //
+      //   조건 둘: 원본 배포일 것(복습을 풀었다고 또 만들지 않는다) + 오답만 다시 푸는
+      //   화면이 아닐 것(그건 2회차라 이미 원본에서 만들어졌다).
+      //
+      //   ⚠️ **실패해도 제출은 성립시킨다.** 여기서 throw 하면 학생이 "제출 실패" 로 읽고
+      //   다시 누르는데, 그러면 student_answers 에 행이 더 쌓여 **회차가 두 칸 뛴다**
+      //   (위 recordedRef 주석의 그 사고). 못 만든 건 선생님 화면의 안전망이 잡는다.
+      if (!isWrongAnswersOnly && !distribution?.review_kind) {
+        try {
+          const created = await wrongAnswerReviewApi.autoCreateReviews({
+            distributionId,
+            studentId: profile.id,
+            // 기준일은 **오늘**(실제로 푼 날). 배포 예정일이 아니라 푼 날에서 회차를 깐다.
+            stages: buildReviewStages(toDateStr(new Date()), AUTO_REVIEW_KINDS),
+          });
+          if (created.length > 0) {
+            console.info(`[review] 복습 배포 ${created.length}건 생성`);
+          }
+        } catch (error) {
+          console.warn('복습 배포 자동 생성 실패:', error);
+        }
+      }
     } catch (error) {
       console.error('답안 제출 오류:', error);
       toast({
@@ -264,6 +387,7 @@ const SolveProblem = () => {
       });
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 
@@ -276,11 +400,42 @@ const SolveProblem = () => {
 
   const getCurrentProblem = () => problems[currentProblemIndex];
 
+  // ⚠️ 아래 파생 상수들은 렌더 때 바로 계산된다 — useState/useRef 선언 아래여야 한다(TDZ, dev-rules).
+  //
+  // 이 화면의 문제들 중 **오늘 더 풀 수 있는 게 하나도 없으면** 제출을 막는다.
+  // 대시보드에서 버튼을 감추는 것만으로는 못 막는다 — 제출 뒤 브라우저 뒤로가기 한 번이면
+  // 이 URL 이 그대로 다시 열려 같은 날 회차를 계속 올릴 수 있다(검토에서 3개 관점이 확인).
+  // 통계를 못 읽었으면(statsLoaded=false 또는 조회 실패) 막지 않는다 — 못 푸는 게 더 나쁘다.
+  const blockedToday =
+    statsLoaded &&
+    !submitted &&
+    problems.length > 0 &&
+    Object.keys(attemptStats).length > 0 &&
+    problems.every(p => !canAttemptToday(attemptStats[p.id]));
+
   if (loading) {
     return (
       <div className="container mx-auto px-4 py-6">
         <div className="flex items-center justify-center h-64">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        </div>
+      </div>
+    );
+  }
+
+  if (blockedToday) {
+    return (
+      <div className="container mx-auto px-4 py-6">
+        <div className="text-center max-w-md mx-auto">
+          <CheckCircle className="h-12 w-12 text-emerald-600 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold mb-2">수고하셨습니다</h2>
+          <p className="text-muted-foreground mb-4">
+            오늘 몫은 이미 마쳤어요. 복습은 며칠에 걸쳐 나눠 풀어야 오래 남아요 — 내일 다시 만나요!
+          </p>
+          <Button onClick={() => navigate('/student')}>
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            대시보드로 돌아가기
+          </Button>
         </div>
       </div>
     );
@@ -379,43 +534,24 @@ const SolveProblem = () => {
               </div>
             </div>
 
-            <div className="flex gap-2">
-              <Button 
-                variant="outline" 
-                className="flex-1"
-                onClick={() => {
-                  const dateParam = getDistributionDateParam();
-                  const url = dateParam ? `/student?date=${dateParam}` : '/student';
-                  navigate(url);
-                }}
-              >
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                대시보드로
-              </Button>
-              <Button 
-                className="flex-1"
-                onClick={async () => {
-                  if (profile && distributionId) {
-                    try {
-                      // 도전 횟수 기록 추가
-                      await distributionAttemptApi.addAttempt(profile.id, distributionId, 'full_retry');
-                      console.log(`도전 기록 추가: full_retry - 배포 ${distributionId}`);
-                    } catch (error) {
-                      console.error('도전 기록 추가 실패:', error);
-                    }
-                  }
-                  
-                  setSubmitted(false);
-                  setResults({});
-                  setAnswers({});
-                  setCurrentProblemIndex(0);
-                  setTimeSpent(0);
-                }}
-              >
-                <BookOpen className="h-4 w-4 mr-2" />
-                전체 다시 풀기
-              </Button>
-            </div>
+            {/*
+              여기 있던 "전체 다시 풀기" 는 뺐다. 그 자리에서 또 제출하면 student_answers 에
+              행이 하나 더 쌓여 **회차가 그냥 넘어간다** — 선생님 오답 표의 2·3·4회차 칸이
+              전부 같은 날짜로 채워져 "월요일 오답을 며칠에 걸쳐 다시 푼다"는 규칙이 무너진다.
+              다시 푸는 길은 대시보드의 "오답 숙제하기 (N회차)" 하나로 모은다.
+            */}
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                const dateParam = getDistributionDateParam();
+                const url = dateParam ? `/student?date=${dateParam}` : '/student';
+                navigate(url);
+              }}
+            >
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              대시보드로
+            </Button>
           </CardContent>
         </Card>
       </div>
@@ -424,6 +560,9 @@ const SolveProblem = () => {
 
   const currentProblem = getCurrentProblem();
   const progress = ((currentProblemIndex + 1) / problems.length) * 100;
+  // ⚠️ 렌더 때 바로 계산되는 파생 상수 — 반드시 useState/useRef 선언 **아래**에 둔다(TDZ, dev-rules).
+  const unansweredIndexes = getUnansweredIndexes();
+  const allAnswered = problems.length > 0 && unansweredIndexes.length === 0;
 
   return (
     <div className="container mx-auto px-4 py-6">
@@ -547,6 +686,26 @@ const SolveProblem = () => {
             )}
           </div>
 
+          {/* 아직 안 푼 문제 안내 — 제출 버튼이 왜 막혀 있는지 보이게 한다 */}
+          {unansweredIndexes.length > 0 && (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <span className="flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                아직 {unansweredIndexes.length}문제가 비어 있어요 (문제{' '}
+                {unansweredIndexes.slice(0, 5).map(i => i + 1).join(', ')}
+                {unansweredIndexes.length > 5 ? ' 외' : ''})
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => setCurrentProblemIndex(unansweredIndexes[0])}
+              >
+                이동
+              </Button>
+            </div>
+          )}
+
           {/* 네비게이션 */}
           <div className="flex justify-between pt-4">
             <Button
@@ -557,11 +716,13 @@ const SolveProblem = () => {
               <ArrowLeft className="h-4 w-4 mr-2" />
               이전
             </Button>
-            
+
             {currentProblemIndex === problems.length - 1 ? (
+              // 제출은 **전 문항**을 채웠을 때만. 마지막 문제 하나만 보던 옛 조건은
+              // 중간에 비운 문제를 그냥 통과시켰다.
               <Button
                 onClick={handleSubmit}
-                disabled={loading || !answers[currentProblem.id]}
+                disabled={loading || !allAnswered}
               >
                 <Send className="h-4 w-4 mr-2" />
                 제출하기
@@ -569,7 +730,7 @@ const SolveProblem = () => {
             ) : (
               <Button
                 onClick={handleNext}
-                disabled={!answers[currentProblem.id]}
+                disabled={!isAnswered(currentProblem.id)}
               >
                 다음
                 <ArrowRight className="h-4 w-4 ml-2" />

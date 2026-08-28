@@ -42,12 +42,26 @@ path: apps/cms/src
 
 배포 전 제거 권장.
 
-### 5. 리포트 포맷
+### 5. 선언 전 참조(TDZ) 스캔 — 백지 화면 방지
+
+`tsc` 도 빌드도 **못 잡는** 오류다. 파생 `const` 가 자기보다 아래에서 선언된
+`useState`/`useRef` 를 참조하면 렌더 때 `ReferenceError` 로 **화면이 통째로 백지**가 된다
+(2026-08-27 실제 사고, `dev-rules.md` "화면이 통째로 백지면").
+
+```bash
+python .claude/tsx_tdz_hook.py --scan apps/cms/src
+```
+
+`[TDZ] OK (N files, 0 hits)` 여야 통과. hits 가 있으면 그 파생 const 를 해당 상태 선언
+**아래**로 옮긴다. (`.tsx` 를 고칠 때마다 같은 검사가 PostToolUse 훅으로 자동 실행된다.)
+
+### 6. 리포트 포맷
 
 ```
 [Build]          OK  (0 errors, 3 warnings)
 [Radix Portal]   OK  (0 hits)
 [user.id 오용]   OK  (0 hits)
+[TDZ]            OK  (127 files, 0 hits)
 [console.log]    WARN (5 hits — 파일:line 나열)
 
 전체: 통과 가능 / 수정 권장

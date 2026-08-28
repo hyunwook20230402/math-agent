@@ -1,0 +1,254 @@
+/* 오답 시험지 A4 인쇄 스타일.
+   백엔드에서 PDF 를 만들지 않고 브라우저 인쇄를 쓰는 이유: 한글 폰트 임베딩과
+   크롭 재조판 부담이 큰 데 비해 이득이 없다. "PDF로 저장"으로 PDF 도 얻는다.
+
+   ★ 조판은 **고정 격자**다 — 한 쪽에 2·4·6문제(프리셋), 2열, 번호는 가로 우선.
+     .sheet-page 를 정확히 210×297mm 로 고정하고 .page-body 가 남는 높이를 `1fr`
+     행으로 균등 분할한다. 덕분에
+       · 첫 쪽 머리글 높이를 재거나 mm 로 못 박을 필요가 없다(1fr 이 알아서 흡수)
+       · `1 2 / 3 4 / 5 6` 흐름은 grid 기본 흐름(row)이 그냥 준다
+       · JS 로 높이를 재서 배치하던 코드가 통째로 사라진다
+     옛 방식(높이 측정 + 그리디 채우기)은 쪽마다 문항 수가 달라지고 번호가
+     세로로 흘렀다. CSS 다단(column-count)은 페이지 경계에서 브라우저마다 다르게
+     흘러 미리보기와 인쇄가 어긋나므로 역시 쓰지 않는다. */
+
+.sheet-root {
+  --sheet-margin: 12mm;   /* 지면 여백 */
+  --col-gap: 7mm;         /* 두 열 사이 */
+  --row-gap: 8mm;         /* 행 사이 (프리셋이 주입) */
+  --rows: 2;              /* 한 쪽의 행 수 (프리셋이 주입: 3 / 2 / 1) */
+  --work-min: 22mm;       /* 문제 아래 **최소** 풀이 공간 (프리셋이 주입) */
+
+  --ink: #111827;
+  --line: #111827;
+  --divider: #d4d9e0;
+}
+
+/* ── 한 장 (A4 고정) ───────────────────────────────────── */
+/* box-sizing 을 명시한다 — 기본값(content-box)이면 padding 이 210mm **밖에** 더해져
+   지면이 234×321mm 로 커진다. Tailwind preflight 에 기대지 않고 여기서 못 박는다. */
+.sheet-page,
+.sheet-page * {
+  box-sizing: border-box;
+}
+
+.sheet-page {
+  width: 210mm;
+  height: 297mm;
+  padding: var(--sheet-margin);
+  background: #fff;
+  color: var(--ink);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* 번호 색·단원 배지 배경이 인쇄에서 회색으로 죽지 않게 한다 */
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* 지면 본문 = 고정 격자. flex:1 이라 머리글이 있든 없든 남는 높이를 전부 갖는다.
+   `1fr` 행이므로 첫 쪽(머리글 있음)은 칸이 조금 낮아질 뿐 문항 수는 같다. */
+.page-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(var(--rows), 1fr);
+  gap: var(--row-gap) var(--col-gap);
+}
+
+/* 두 열 사이 세로 구분선. background 가 아니라 실제 요소의 border 로 그린다 —
+   배경 그래픽은 인쇄 설정에서 꺼질 수 있다. */
+.page-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  border-left: 0.6pt solid var(--divider);
+  pointer-events: none;
+}
+
+.page-foot {
+  position: absolute;
+  right: var(--sheet-margin);
+  bottom: calc(var(--sheet-margin) / 2);
+  font-size: 8pt;
+  color: #6b7280;
+}
+
+/* ── 머리글: 제목 + 채점표 ─────────────────────────────── */
+.sheet-header {
+  display: flex;
+  align-items: stretch;
+  border: 1.4pt solid var(--line);
+  margin-bottom: 4mm;
+  flex: none;
+}
+.sheet-header-title {
+  flex: 1;
+  padding: 3mm 4mm;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.sheet-header-title h1 {
+  font-size: 15pt;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.sheet-header-title p {
+  font-size: 8.5pt;
+  color: #4b5563;
+  margin-top: 1mm;
+}
+.sheet-scoretable {
+  display: flex;
+  border-left: 1.4pt solid var(--line);
+}
+.sheet-scoretable > div {
+  width: 22mm;
+  border-right: 0.8pt solid var(--line);
+  display: flex;
+  flex-direction: column;
+}
+.sheet-scoretable > div:last-child { border-right: 0; }
+.sheet-scoretable .cap {
+  font-size: 7.5pt;
+  text-align: center;
+  padding: 1.2mm 0;
+  border-bottom: 0.8pt solid var(--line);
+  background: #f3f4f6;
+  white-space: nowrap;
+}
+.sheet-scoretable .box { flex: 1; min-height: 9mm; }
+
+.sheet-subtitle {
+  font-size: 9pt;
+  color: #4b5563;
+  padding-bottom: 2mm;
+  margin-bottom: 3mm;
+  border-bottom: 0.8pt solid #9ca3af;
+  flex: none;
+}
+
+/* ── 문항 한 칸 ────────────────────────────────────────── */
+/* 머리(번호) / 문제 2행 + 아래쪽 `--work-min` 패딩.
+   풀이 공간을 **비율(예: 38%)이 아니라 최소값**으로 잡는 이유: 비율로 자르면
+   칸 아래에 빈자리가 남는데도 이미지가 상한에 걸려 줄어든다(실측: 좁게에서 59mm
+   문제가 50mm 로 축소). 최소값 방식이면 **자리가 있는 한 원래 크기를 지키고**
+   글자가 작아지지 않는다 — 정말 큰 문제만 줄어든다. */
+.print-item {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  padding-bottom: var(--work-min);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.item-head { margin-bottom: 1.5mm; }
+.item-no {
+  display: inline-block;
+  font-weight: 800;
+  font-size: 11pt;
+  color: #2563eb;
+  letter-spacing: 0.02em;
+}
+.item-src {
+  font-size: 7.5pt;
+  color: #6b7280;
+  font-weight: 500;
+  margin-left: 1.5mm;
+}
+.item-badge {
+  display: inline-block;
+  font-size: 7pt;
+  font-weight: 700;
+  color: #fff;
+  background: #f97316;
+  border-radius: 2mm;
+  padding: 0.4mm 1.6mm;
+  margin-left: 1.5mm;
+  vertical-align: 1px;
+}
+
+/* 문제 영역. ⚠️ 넘치면 **줄인다 — 절대 자르지 않는다**(잘린 문제는 못 쓴다).
+   object-fit: contain 이 비율을 지키며 축소하고, max-height 는 상한이라
+   작은 문제는 원래 크기 그대로 남는다. */
+.item-figure {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+}
+.item-figure img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  object-position: left top;
+  display: block;
+}
+.item-figure p {
+  font-size: 9.5pt;
+  line-height: 1.5;
+}
+
+/* ── 정답지 ────────────────────────────────────────────── */
+.answer-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  border-top: 1pt solid var(--line);
+  border-left: 1pt solid var(--line);
+  align-content: start;
+}
+.answer-grid > div {
+  border-right: 1pt solid var(--line);
+  border-bottom: 1pt solid var(--line);
+  padding: 1.6mm 2mm;
+  font-size: 9pt;
+  display: flex;
+  justify-content: space-between;
+  gap: 2mm;
+}
+.answer-grid .no { color: #6b7280; }
+.answer-grid .ans { font-weight: 700; }
+
+/* ── 인쇄 ──────────────────────────────────────────────── */
+/* 여백 0 — 지면 여백은 .sheet-page 의 padding 이 담당한다.
+   그래야 화면 미리보기(210×297mm 고정)와 인쇄가 정확히 같아진다. */
+@page {
+  size: A4 portrait;
+  margin: 0;
+}
+
+@media print {
+  .no-print { display: none !important; }
+  html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+
+  .sheet-page {
+    box-shadow: none !important;
+    margin: 0 !important;
+    break-after: page;
+    page-break-after: always;
+  }
+  .sheet-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  a[href]::after { content: none !important; }
+}
+
+/* ── 화면 미리보기 ─────────────────────────────────────── */
+@media screen {
+  .sheet-page {
+    margin: 0 auto 6mm;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.08);
+  }
+}

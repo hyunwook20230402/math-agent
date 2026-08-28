@@ -114,19 +114,26 @@ const AchievementPage = () => {
           : 0;
       });
 
-      // Generate weekly progress (mock data for now)
+      // 주간 성과 추이 (최근 4주)
+      //
+      // ⚠️ 경계를 **지금 시각**으로 잡으면 안 된다. setDate 는 시:분:초를 그대로 들고 가므로
+      //    i=0 구간이 [지금, 지금+6일] = 통째로 미래가 되어 **이번 주 막대가 항상 0** 이 된다.
+      //    (오늘 아무리 풀어도 안 찬다.) 또 6일 창을 7일 간격으로 놓아 버킷 사이에 24시간
+      //    구멍이 생겨 답안이 어느 막대에도 안 들어갔다.
+      //    → 로컬 자정 기준으로 [주시작, 다음주시작) 반열린 구간을 쓴다.
       const weeklyData: WeeklyProgress[] = [];
-      const now = new Date();
+      const tomorrowMidnight = new Date();
+      tomorrowMidnight.setHours(24, 0, 0, 0);      // 오늘을 포함하는 상한(로컬 자정)
       for (let i = 3; i >= 0; i--) {
-        const weekStart = new Date(now);
-        weekStart.setDate(now.getDate() - (i * 7));
-        
-        // Filter answers for this week
+        // 오늘로 끝나는 7일 창을 i주 전으로 민다 → 4칸이 빈틈·겹침 없이 28일을 덮는다
+        const weekEnd = new Date(tomorrowMidnight);
+        weekEnd.setDate(tomorrowMidnight.getDate() - (i * 7));
+        const weekStart = new Date(weekEnd);
+        weekStart.setDate(weekEnd.getDate() - 7);
+
         const weekAnswers = answersData.filter((answer: any) => {
           const answerDate = new Date(answer.submitted_at);
-          const weekEnd = new Date(weekStart);
-          weekEnd.setDate(weekStart.getDate() + 6);
-          return answerDate >= weekStart && answerDate <= weekEnd;
+          return answerDate >= weekStart && answerDate < weekEnd;
         });
         
         const weekAccuracy = weekAnswers.length > 0 

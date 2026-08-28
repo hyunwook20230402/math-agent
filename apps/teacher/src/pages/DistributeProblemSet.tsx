@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@shared/hooks/useAuth';
 import { Button } from '@shared/ui/button';
@@ -9,20 +9,16 @@ import { Checkbox } from '@shared/ui/checkbox';
 import { toast } from '@shared/hooks/use-toast';
 import { ArrowLeft, Send, Users, BookOpen, CalendarDays } from 'lucide-react';
 import { supabase } from '@shared/supabase/client';
-import { textbookApi, problemApi, problemSetApi, distributionApi, analyticsApi } from '@shared/lib/api';
+import { textbookApi, problemApi, problemSetApi, distributionApi, analyticsApi, problemFolderApi, wrongAnswerReviewApi } from '@shared/lib/api';
+import type { ProblemFolderRow } from '@shared/lib/api';
 import type { AchievementRow } from '@shared/lib/api';
+import { toDateStr, formatWithWeekday } from '@shared/lib/reviewSchedule';
 import DistributionCalendar, { type DistributionByDate } from '@/components/DistributionCalendar';
 
 interface Textbook {
   id: string;
   name: string;
   grade?: string;
-}
-
-interface Chapter {
-  id: string;
-  name: string;
-  sort_order: number;
 }
 
 interface ProblemRow {
@@ -55,8 +51,10 @@ const DistributeProblemSet = () => {
 
   const [textbooks, setTextbooks] = useState<Textbook[]>([]);
   const [selectedTextbookId, setSelectedTextbookId] = useState<string>('');
-  const [chapters, setChapters] = useState<Chapter[]>([]);
-  const [selectedChapterId, setSelectedChapterId] = useState<string>('');
+  // 027 통합 폴더(problem_folders). 옛 chapters 는 CMS·백엔드가 더 이상 채우지 않아
+  // 그대로 두면 2026-08-26 이후 등록한 교재가 여기서 통째로 안 보인다.
+  const [folders, setFolders] = useState<ProblemFolderRow[]>([]);
+  const [selectedFolderId, setSelectedFolderId] = useState<string>('');
   const [problems, setProblems] = useState<ProblemRow[]>([]);
   const [problemsLoading, setProblemsLoading] = useState(false);
   const [selectedProblemIds, setSelectedProblemIds] = useState<string[]>([]);
@@ -75,15 +73,30 @@ const DistributeProblemSet = () => {
   const [distributionsByMonth, setDistributionsByMonth] = useState<DistributionByDate[]>([]);
   const [monthDataLoading, setMonthDataLoading] = useState(false);
 
-  const today = new Date().toISOString().split('T')[0];
+  // ⚠️ toISOString 은 UTC 라 밤 9시 이후 하루 밀린다 — 로컬 기준으로 만든다.
+  const today = toDateStr(new Date());
+  // 시각·마감 필드는 없앴다(위 '배포 설정' 카드 주석 참조). 날짜 하나만 남는다.
   const [formData, setFormData] = useState({
     title: '',
     description: '',
-    startDate: today,    // 배포 시작 날짜 (달력 클릭으로도 갱신)
-    startTime: '09:00',  // 배포 시작 시간
-    dueDate: today,      // 배포 마감 날짜
-    dueTime: '23:59',    // 배포 마감 시간
+    startDate: today,    // 배포일 — 달력 클릭으로 정한다
   });
+
+  // 자동으로 채워 넣은 제목을 기억한다 — 선생님이 직접 고쳤는지 구분하려고.
+  const autoTitleRef = useRef<string>('');
+
+  /**
+   * 컨텐츠 제목의 표준 형식 — `교재명 > 상위폴더 > 폴더`.
+   * 예) `쎈_공통수학1_B,C단계 > B단계 > 나머지정리와 인수분해`
+   *
+   * 폴더 이름만 쓰면 학생에게 쌓였을 때 쎈 것인지 rpm 것인지 구별이 안 된다.
+   * 복습 배포 제목도 이 값을 그대로 물고 간다(037/038 create_review_distributions).
+   */
+  const buildContentTitle = (textbookId: string, folderId: string): string => {
+    const tb = textbooks.find((t) => t.id === textbookId);
+    const path = folderId ? problemFolderApi.pathNames(folders, folderId) : [];
+    return [tb?.name, ...path].filter(Boolean).join(' > ');
+  };
 
   // 학생별 배포 진입(?student=:id) 시 미리 선택
   const studentIdFromUrl = searchParams.get('student');
@@ -141,6 +154,38 @@ const DistributeProblemSet = () => {
     return () => { cancelled = true; };
   }, [selectedStudent, currentMonth]);
 
+  // 달력에서 과제를 다른 날짜로 끌어다 놓았을 때.
+  // 결석·보강으로 회차가 밀리면 선생님이 여기서 바로 옮긴다.
+  const moveDistribution = async (distributionId: string, newDate: string) => {
+    const before = distributionsByMonth;
+    // 낙관적 업데이트 — 실패하면 되돌린다
+    setDistributionsByMonth((prev) =>
+      prev.map((d) =>
+        d.distribution_id === distributionId
+          ? { ...d, distribution_date: `${newDate}T${new Date(d.distribution_date).toTimeString().slice(0, 8)}` }
+          : d
+      )
+    );
+    try {
+      await wrongAnswerReviewApi.rescheduleReview(distributionId, newDate);
+      const moved = before.find((d) => d.distribution_id === distributionId);
+      toast({
+        title: '날짜 이동',
+        description: `${moved?.title ?? '과제'} → ${newDate}`,
+      });
+      // 다른 달로 옮겼으면 현재 달 목록에서 빠져야 하므로 다시 읽는다
+      if (selectedStudent) {
+        const data = await distributionApi.getDistributionsByStudentAndMonth(
+          selectedStudent, currentMonth.year, currentMonth.month,
+        );
+        setDistributionsByMonth(data);
+      }
+    } catch (e: any) {
+      setDistributionsByMonth(before);
+      toast({ title: '이동 실패', description: e.message, variant: 'destructive' });
+    }
+  };
+
   // 선택한 학생의 성취도(통계 칩)
   useEffect(() => {
     if (!selectedStudent) {
@@ -161,33 +206,33 @@ const DistributeProblemSet = () => {
     return () => { cancelled = true; };
   }, [selectedStudent]);
 
-  // 교재 선택 시 회차(chapter) 목록 로딩
+  // 교재 선택 시 폴더(회차) 목록 로딩
   useEffect(() => {
-    setSelectedChapterId('');
+    setSelectedFolderId('');
     setProblems([]);
     setSelectedProblemIds([]);
     if (!selectedTextbookId) {
-      setChapters([]);
+      setFolders([]);
       return;
     }
-    const loadChapters = async () => {
+    const loadFolders = async () => {
       try {
-        const data = await textbookApi.getChaptersByTextbook(selectedTextbookId);
-        setChapters(data as Chapter[]);
+        const data = await problemFolderApi.getFoldersByTextbook(selectedTextbookId);
+        setFolders(data);
         if (data.length === 1) {
-          setSelectedChapterId(data[0].id);
+          setSelectedFolderId(data[0].id);
         }
       } catch (e) {
-        console.error('회차 목록 조회 오류:', e);
+        console.error('폴더 목록 조회 오류:', e);
         toast({ title: '오류', description: '회차 목록을 불러오지 못했습니다.', variant: 'destructive' });
       }
     };
-    loadChapters();
+    loadFolders();
   }, [selectedTextbookId]);
 
-  // 회차 선택 시 그 회차 문제 목록 로딩
+  // 회차(폴더) 선택 시 그 폴더 + 하위 폴더의 문제 목록 로딩
   useEffect(() => {
-    if (!selectedChapterId || !profile?.id) {
+    if (!selectedFolderId || !profile?.id) {
       setProblems([]);
       setSelectedProblemIds([]);
       return;
@@ -197,13 +242,25 @@ const DistributeProblemSet = () => {
         setProblemsLoading(true);
         const data = await problemApi.getProblems(profile.id, {
           textbookId: selectedTextbookId,
-          chapterId: selectedChapterId,
+          folderIds: problemFolderApi.descendantIds(folders, selectedFolderId),
         });
         setProblems(data as ProblemRow[]);
         setSelectedProblemIds([]);
-        const ch = chapters.find(c => c.id === selectedChapterId);
-        if (ch && !formData.title.trim()) {
-          setFormData(prev => ({ ...prev, title: `${ch.name}` }));
+
+        // 제목은 **교재부터의 폴더 경로 전체**로 찍는다 —
+        // '나머지정리와 인수분해' 만 찍으면 쎈 것인지 rpm 것인지 구별이 안 된다.
+        // 예) 쎈_공통수학1_B,C단계 > B단계 > 나머지정리와 인수분해
+        const auto = buildContentTitle(selectedTextbookId, selectedFolderId);
+        if (auto) {
+          setFormData(prev => (
+            // 선생님이 직접 고친 제목은 건드리지 않는다. 비어 있거나
+            // **직전에 자동으로 채운 값 그대로**일 때만 새 경로로 바꾼다
+            // (폴더를 바꿔 골랐는데 옛 제목이 남아 있으면 그게 더 헷갈린다).
+            !prev.title.trim() || prev.title === autoTitleRef.current
+              ? { ...prev, title: auto }
+              : prev
+          ));
+          autoTitleRef.current = auto;
         }
       } catch (e) {
         console.error('문제 목록 조회 오류:', e);
@@ -214,7 +271,7 @@ const DistributeProblemSet = () => {
     };
     loadProblems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChapterId, profile]);
+  }, [selectedFolderId, profile]);
 
   const fetchTextbooks = async () => {
     const data = await textbookApi.getTextbooks();
@@ -279,22 +336,24 @@ const DistributeProblemSet = () => {
       toast({ title: '오류', description: '배포 제목을 입력해주세요.', variant: 'destructive' });
       return;
     }
-    if (!formData.startDate || !formData.dueDate) {
-      toast({ title: '오류', description: '배포 시작/마감 날짜를 선택해주세요.', variant: 'destructive' });
+    if (!formData.startDate) {
+      toast({ title: '오류', description: '달력에서 배포일을 선택해주세요.', variant: 'destructive' });
       return;
     }
 
-    // 시작/마감 시각 ISO (로컬 시각 기준)
-    const startAt = `${formData.startDate}T${formData.startTime || '00:00'}:00`;
-    const dueAt = `${formData.dueDate}T${formData.dueTime || '23:59'}:00`;
-    if (new Date(dueAt).getTime() < new Date(startAt).getTime()) {
-      toast({ title: '오류', description: '마감 시각이 시작 시각보다 빠를 수 없습니다.', variant: 'destructive' });
-      return;
-    }
+    // 그날 00:00 부터 보이게 한다. 학생 노출 판정이 `distribution_date <= now()` 라
+    // 시각을 늦게 잡으면 그 시각 전까지 과제가 안 뜬다.
+    //
+    // ⚠️ **오프셋 없는 문자열(`2026-08-28T00:00:00`)을 그대로 보내면 안 된다.**
+    //    컬럼이 timestamptz 라 Postgres 가 **서버 시간대(UTC)** 로 읽어 `00:00Z` 로 박는다
+    //    → 한국 시간으로는 **그날 오전 9시**다. 실측: 8/28 배포가 8/28 08:46 에도 안 보였다
+    //    (학생 화면 "배포된 문제집 0개"). new Date(...) 는 오프셋 없는 날짜+시각을 **로컬**로
+    //    읽으므로, toISOString() 을 거치면 "KST 그날 자정" 이 정확히 저장된다.
+    const startAt = new Date(`${formData.startDate}T00:00:00`).toISOString();
 
     setLoading(true);
     try {
-      const chapter = chapters.find(c => c.id === selectedChapterId);
+      const chapter = folders.find(f => f.id === selectedFolderId);
       const setName = formData.title.trim() || `${chapter?.name ?? '문제'} - ${formData.startDate}`;
 
       // 1. 배포용 문제세트 자동 생성 (사용자에게 노출 안 함, folder_id=null)
@@ -308,7 +367,8 @@ const DistributeProblemSet = () => {
       // 2. 선택한 문제를 세트에 추가
       await problemSetApi.addProblemsToSet(problemSet.id, selectedProblemIds);
 
-      // 3. 배포 생성 (distribution_date=시작 시각, due_at=마감 시각)
+      // 3. 배포 생성. due_at 은 안 넣는다 — 학생 화면이 안 읽어 기한 개념이 없다
+      //    (사용자 결정: "시작일과 마감일 없애도 된다, 언제든 자유롭게 이동").
       const { data: distribution, error: distError } = await supabase
         .from('distributions')
         .insert({
@@ -317,7 +377,7 @@ const DistributeProblemSet = () => {
           teacher_id: profile.id,
           description: formData.description,
           distribution_date: startAt,
-          due_at: dueAt,
+          due_at: null,
           is_active: true,
         })
         .select()
@@ -389,6 +449,11 @@ const DistributeProblemSet = () => {
 
   const canDistribute = !!selectedStudent && selectedProblemIds.length > 0 && !!formData.title.trim();
 
+  // 달력에서 고른 배포일. 요일까지 보여야 "다음 수업이 맞나" 를 눈으로 확인할 수 있다.
+  const startDateLabel = formData.startDate
+    ? `${formatWithWeekday(formData.startDate)}`
+    : '날짜 미선택';
+
   return (
     <div className="container mx-auto px-4 py-6 max-w-6xl pb-28">
       {/* 헤더 */}
@@ -449,37 +514,38 @@ const DistributeProblemSet = () => {
         </CardContent>
       </Card>
 
-      {/* 2열 본문: 좌측 큰 달력 / 우측 문제 선택 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 좌측: 배포 날짜 선택 (달력) */}
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CalendarDays className="h-5 w-5" />
-              배포 날짜 선택
-            </CardTitle>
-            <CardDescription>
-              날짜를 클릭해 배포 시작일을 정하세요. 칸 안의 메모는 이 학생에게 이미 보낸 과제입니다.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <DistributionCalendar
-              selectedDate={formData.startDate}
-              onSelectDate={(date) => setFormData({ ...formData, startDate: date, dueDate: date })}
-              distributions={distributionsByMonth}
-              currentMonth={currentMonth}
-              onMonthChange={(year, month) => setCurrentMonth({ year, month })}
-              loading={monthDataLoading}
-            />
-            {!selectedStudent && (
-              <p className="text-xs text-muted-foreground mt-3 text-center">
-                학생을 선택하면 그 학생에게 배포한 과제가 달력에 표시됩니다.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+      {/* 달력은 **전체 폭**으로 둔다. 옆에 카드를 두면 셀이 76px 밖에 안 나와
+          칸 안의 메모가 안 읽힌다(사용자 지적). 문제 선택은 그 아래로 내렸다. */}
+      <Card className="h-fit mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CalendarDays className="h-5 w-5" />
+            배포 날짜 선택
+          </CardTitle>
+          <CardDescription>
+            날짜를 클릭해 배포 시작일을 정하세요. 칸 안의 메모는 이 학생에게 이미 보낸 과제입니다.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DistributionCalendar
+            selectedDate={formData.startDate}
+            onSelectDate={(date) => setFormData({ ...formData, startDate: date })}
+            distributions={distributionsByMonth}
+            currentMonth={currentMonth}
+            onMonthChange={(year, month) => setCurrentMonth({ year, month })}
+            loading={monthDataLoading}
+            onMoveDistribution={moveDistribution}
+          />
+          {!selectedStudent && (
+            <p className="text-xs text-muted-foreground mt-3 text-center">
+              학생을 선택하면 그 학생에게 배포한 과제가 달력에 표시됩니다.
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
-        {/* 우측: 문제 세트 선택 (교재 → 회차 → 문제) */}
+      <div className="grid grid-cols-1 gap-6">
+        {/* 문제 세트 선택 (교재 → 회차 → 문제) */}
         <Card className="h-fit">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -506,20 +572,25 @@ const DistributeProblemSet = () => {
             </div>
 
             {/* 회차 선택 */}
-            {selectedTextbookId && chapters.length > 0 && (
+            {selectedTextbookId && folders.length > 0 && (
               <div className="mb-4">
-                <Label htmlFor="chapter" className="mb-1.5 block">회차</Label>
+                <Label htmlFor="folder" className="mb-1.5 block">회차 / 폴더</Label>
                 <select
-                  id="chapter"
-                  value={selectedChapterId}
-                  onChange={(e) => setSelectedChapterId(e.target.value)}
+                  id="folder"
+                  value={selectedFolderId}
+                  onChange={(e) => setSelectedFolderId(e.target.value)}
                   className="w-full h-10 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 >
                   <option value="">회차를 선택하세요</option>
-                  {chapters.map((ch) => (
-                    <option key={ch.id} value={ch.id}>{ch.name}</option>
+                  {problemFolderApi.flatten(folders).map(({ folder, depth }) => (
+                    <option key={folder.id} value={folder.id}>
+                      {'  '.repeat(depth)}{depth > 0 ? '└ ' : ''}{folder.name}
+                    </option>
                   ))}
                 </select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  폴더를 고르면 그 아래 폴더의 문제까지 함께 보입니다
+                </p>
               </div>
             )}
 
@@ -529,7 +600,7 @@ const DistributeProblemSet = () => {
                 <BookOpen className="h-12 w-12 mx-auto mb-3" />
                 <p>교재를 먼저 선택하세요</p>
               </div>
-            ) : !selectedChapterId ? (
+            ) : !selectedFolderId ? (
               <div className="text-center py-8 text-muted-foreground">
                 <BookOpen className="h-12 w-12 mx-auto mb-3" />
                 <p>회차를 선택하세요</p>
@@ -575,13 +646,22 @@ const DistributeProblemSet = () => {
         </Card>
       </div>
 
-      {/* 하단: 배포 설정 (제목/설명 + 시작/마감 시간) */}
+      {/* 하단: 배포 설정.
+          시작/마감 **시각** 입력은 뺐다 —
+            · 날짜는 위 달력이 정한다(입력칸이 있으면 두 곳에서 같은 값을 고치게 된다)
+            · 마감(due_at)은 **학생 화면이 읽지 않는다**(apps/student 에 참조 0건). 기한이 지나도
+              과제가 사라지지 않으니 값만 쌓이는 칸이었다. 이제 NULL 로 둔다.
+            · 시각은 00:00 고정 — 그날이 되면 하루 종일 보인다. 예전엔 09:00 이라
+              아침에 배포하면 9시까지 학생 화면에 안 떴다. */}
       <Card className="mt-6">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CalendarDays className="h-5 w-5" />
             배포 설정
           </CardTitle>
+          <CardDescription>
+            배포일은 위 달력에서 고릅니다 — 지금은 <span className="font-medium text-foreground">{startDateLabel}</span>
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -600,58 +680,57 @@ const DistributeProblemSet = () => {
                 id="description"
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="배포 설명(선택)"
+                placeholder="학생 과제 카드에 표시됩니다(선택)"
               />
             </div>
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 시작 시간 */}
-            <div className="space-y-2">
-              <Label>시작 시간 *</Label>
-              <div className="flex gap-2">
-                <Input
-                  type="date"
-                  value={formData.startDate}
-                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                  className="flex-1"
-                />
-                <Input
-                  type="time"
-                  value={formData.startTime}
-                  onChange={(e) => setFormData({ ...formData, startTime: e.target.value })}
-                  className="w-32"
-                />
-              </div>
-            </div>
-            {/* 마감 시간 */}
-            <div className="space-y-2">
-              <Label>마감 시간 *</Label>
-              <div className="flex gap-2">
-                <Input
-                  type="date"
-                  value={formData.dueDate}
-                  onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
-                  className="flex-1"
-                />
-                <Input
-                  type="time"
-                  value={formData.dueTime}
-                  onChange={(e) => setFormData({ ...formData, dueTime: e.target.value })}
-                  className="w-32"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 마감 < 시작 경고 */}
-          {formData.startDate && formData.dueDate &&
-            new Date(`${formData.dueDate}T${formData.dueTime || '23:59'}:00`).getTime() <
-            new Date(`${formData.startDate}T${formData.startTime || '00:00'}:00`).getTime() && (
-            <p className="text-sm text-red-500">마감 시각이 시작 시각보다 빠를 수 없습니다.</p>
-          )}
         </CardContent>
       </Card>
+
+      {/* 배포 내역 — 옛 /teacher/distributions 페이지를 여기로 합쳤다.
+          같은 데이터(get_student_achievement)를 이미 쓰고 있어 별도 페이지가 필요 없다. */}
+      {selectedStudent && achievements && achievements.length > 0 && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CalendarDays className="h-5 w-5" />
+              {selectedStudentName} 최근 배포 내역
+            </CardTitle>
+            <CardDescription>이전에 배포한 과제와 진행 상황입니다</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs text-muted-foreground">
+                    <th className="py-2 pr-3">과제</th>
+                    <th className="py-2 pr-3 text-center">전체 문항</th>
+                    <th className="py-2 pr-3 text-center">푼 문항</th>
+                    <th className="py-2 pr-3 text-center">정답률</th>
+                    <th className="py-2 pr-3 text-center">상태</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {achievements.slice(0, 20).map((a) => {
+                    const total = a.total_problems || 0;
+                    const done = a.attempted || 0;
+                    const state = done === 0 ? '미시작' : done >= total && total > 0 ? '완료' : '진행 중';
+                    return (
+                      <tr key={a.distribution_id} className="border-b">
+                        <td className="py-2 pr-3 max-w-[280px] truncate">{a.distribution_title}</td>
+                        <td className="py-2 pr-3 text-center">{total}</td>
+                        <td className="py-2 pr-3 text-center">{done}</td>
+                        <td className="py-2 pr-3 text-center font-medium">{a.accuracy}%</td>
+                        <td className="py-2 pr-3 text-center text-xs text-muted-foreground">{state}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* 고정 하단 바: 요약 + 배포 버튼 */}
       <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -667,9 +746,7 @@ const DistributeProblemSet = () => {
             </span>
             <span className="flex items-center gap-1.5">
               <CalendarDays className="h-4 w-4" />
-              {formData.startDate
-                ? `${new Date(formData.startDate).toLocaleDateString('ko-KR')} ${formData.startTime} ~ ${formData.dueTime}`
-                : '일정 미설정'}
+              {formData.startDate ? `${startDateLabel} 배포` : '날짜 미선택'}
             </span>
           </div>
           <Button onClick={distribute} disabled={loading || !canDistribute} size="lg" className="shrink-0 px-6">

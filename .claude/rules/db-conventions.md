@@ -16,6 +16,20 @@
 - 새 조인/계층 테이블 만들 때 "한 조합에 1행"이면 **처음부터 UNIQUE 제약**을 건다(나중에 중복 쌓이면
   제약 추가 전에 중복 정리부터 해야 해서 번거롭다).
 
+## ⚠️ PostgREST 함정 둘 (2026-08-27, 답지 조회·폴더 정렬에서 실제로 겪음)
+
+**① `.range()` 페이징은 `.order()` 와 짝으로 건다.** 정렬을 안 주면 Postgres 는 페이지마다
+순서를 다르게 줄 수 있어 **경계에서 행이 빠지거나 겹친다**. 500행씩 끊어 읽는
+`_fetch_answer_keys`(`storage/supabase_client.py`)가 `.order("id")` 를 거는 이유다 —
+답지 1,316행처럼 한 페이지를 넘는 조회에서 실제로 위험하다. 조용히 몇 개가 사라지므로
+"정답이 몇 개 비네" 로만 보이고 원인을 짚기 어렵다.
+
+**② 바꿀 컬럼만 담아 `upsert` 하면 INSERT 로 취급된다.** PostgREST 는 보낸 컬럼만으로
+INSERT 를 시도하므로 나머지 NOT NULL 컬럼에서 터진다 — 실측:
+`sort_order` 만 담아 보냈다가 `null value in column "textbook_id" ... violates not-null
+constraint`(23502)로 **요청 전체가 실패**했다. 몇 행 안 되면 **바뀐 것만 개별 `update`**,
+많으면 행 전체를 담아 보낸다. (상세는 `dev-rules.md` "폴더 순서는 드래그로".)
+
 ## ID 사용 규칙 — 핵심
 
 모든 외래키(`teacher_id`, `student_id` 등)는 **`profiles.id`** 참조. `auth.users.id` 직접 사용 금지.

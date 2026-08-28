@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { supabase } from '@shared/supabase/client';
 import { useAuth } from '@shared/hooks/useAuth';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
@@ -10,6 +11,14 @@ import type { Textbook, ProblemFolder } from '@shared/types/database';
 
 const PIPELINE_URL =
   (import.meta.env.VITE_TUTOR_API_URL as string | undefined) || 'http://localhost:8001';
+
+/** 교재 PDF 안의 '단계' 구간 (쎈 B단계 / C단계 …). thumb 은 그 구간 첫 쪽의 배너 그림. */
+interface Section {
+  page_start: number;
+  page_end: number;
+  banner_page: number | null;
+  thumb: string;
+}
 
 interface PdfUploadDialogProps {
   open: boolean;
@@ -30,6 +39,13 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, folder }: PdfUploadDial
   const [jobStatus, setJobStatus] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // 단계 구간 — 파일을 고르면 백엔드가 배너를 찾아 알려준다(로컬 계산이라 무료).
+  const [sections, setSections] = useState<Section[]>([]);
+  const [detecting, setDetecting] = useState(false);
+  const [pickedSection, setPickedSection] = useState<number | null>(null);
+  // 지금 고른 폴더가 속한 단계(예: 'B'). 조상 폴더 이름에서 찾는다.
+  const [stageLetter, setStageLetter] = useState<string | null>(null);
+
   const statusLabel: Record<string, string> = {
     queued: '대기 중',
     extracting: '텍스트 추출 중',
@@ -40,6 +56,61 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, folder }: PdfUploadDial
     saving: '저장 중',
     done: '완료',
     error: '오류',
+  };
+
+  // 고른 폴더의 조상 중 'B단계' 같은 이름을 찾는다.
+  // 사용자는 보통 `B단계 > 나머지정리와 인수분해` 처럼 **자식 폴더**를 고르므로,
+  // 폴더 이름만 봐서는 단계를 알 수 없어 위로 거슬러 올라간다.
+  useEffect(() => {
+    if (!open || !folder) { setStageLetter(null); return; }
+    let cancelled = false;
+    (async () => {
+      let cur: { name: string; parent_id: string | null } | null = folder;
+      for (let i = 0; i < 6 && cur; i++) {
+        const m = cur.name.match(/^([A-Za-z])\s*단계$/);
+        if (m) { if (!cancelled) setStageLetter(m[1].toUpperCase()); return; }
+        if (!cur.parent_id) break;
+        const { data } = await supabase
+          .from('problem_folders').select('name,parent_id').eq('id', cur.parent_id).maybeSingle();
+        cur = data;
+      }
+      if (!cancelled) setStageLetter(null);
+    })();
+    return () => { cancelled = true; };
+  }, [open, folder?.id]);
+
+  const pickSection = (i: number, list: Section[] = sections) => {
+    setPickedSection(i);
+    setPageStart(String(list[i].page_start));
+    setPageEnd(String(list[i].page_end));
+  };
+
+  const chooseFile = async (f: File | null) => {
+    setFile(f);
+    setSections([]);
+    setPickedSection(null);
+    setPageStart('');
+    setPageEnd('');
+    if (!f) return;
+
+    setDetecting(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const res = await fetch(`${PIPELINE_URL}/api/pdf/sections`, { method: 'POST', body: fd });
+      if (!res.ok) return;                       // 구간 검출 실패는 조용히 넘어간다
+      const found: Section[] = (await res.json()).sections ?? [];
+      setSections(found);
+      // 구간이 딱 둘이고 이 폴더가 B/C단계면 순서대로 미리 골라 둔다(그림이 같이 보이니
+      // 틀렸으면 바로 바꿀 수 있다). 그 밖의 경우는 추측하지 않는다.
+      if (found.length === 2 && (stageLetter === 'B' || stageLetter === 'C')) {
+        pickSection(stageLetter === 'B' ? 0 : 1, found);
+      }
+    } catch {
+      /* 검출은 편의 기능이라 실패해도 업로드를 막지 않는다 */
+    } finally {
+      setDetecting(false);
+    }
   };
 
   const handleUpload = async () => {
@@ -123,6 +194,8 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, folder }: PdfUploadDial
     setPdfType('문제');
     setPageStart('');
     setPageEnd('');
+    setSections([]);
+    setPickedSection(null);
     setJobStatus(null);
     setErrorMessage(null);
     setUploading(false);
@@ -136,11 +209,12 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, folder }: PdfUploadDial
         className="fixed inset-0 bg-black/80"
         onClick={() => { if (!uploading) { onOpenChange(false); resetForm(); } }}
       />
-      <div className="relative z-[10000] bg-background border rounded-lg shadow-lg w-full max-w-md p-6 space-y-4">
+      <div className="relative z-[10000] bg-background border rounded-lg shadow-lg w-full max-w-md max-h-[88vh] overflow-y-auto p-6 space-y-4">
         <div className="space-y-3">
           <h2 className="text-lg font-semibold">PDF에서 문제 가져오기</h2>
           <p className="text-sm text-muted-foreground">
             교재: <span className="font-medium text-foreground">{textbook.name}</span>
+            {folder && <> · 폴더: <span className="font-medium text-foreground">{folder.name}</span></>}
           </p>
         </div>
 
@@ -179,7 +253,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, folder }: PdfUploadDial
               <input
                 type="file"
                 accept=".pdf"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
+                onChange={(e) => chooseFile(e.target.files?.[0] || null)}
                 className="hidden"
                 id="pdf-upload-dialog"
               />
@@ -194,6 +268,50 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, folder }: PdfUploadDial
             </div>
           </div>
 
+          {/* ── 단계 구간 ────────────────────────────────────────────
+              한 단원 PDF 에 B단계·C단계가 이어져 있으면 통째로 자를 때 한 폴더에 섞인다.
+              배너가 있는 쪽을 찾아 구간을 보여주고, 고르면 아래 쪽 범위가 채워진다.
+              배너 글자(B/C)는 입체 그림이라 기계가 못 읽으므로 **그림을 보고 고른다.** */}
+          {detecting && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Loader2 className="h-3 w-3 animate-spin" />단계 구간을 찾는 중…
+            </p>
+          )}
+
+          {sections.length > 1 && (
+            <div className="rounded-lg border p-3 space-y-2">
+              <p className="text-sm font-medium">
+                이 PDF 는 {sections.length}개 단계로 나뉩니다
+                {stageLetter && <> — 이 폴더는 <b>{stageLetter}단계</b>입니다</>}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                넣을 구간을 고르세요. 고른 구간의 쪽만 잘립니다.
+              </p>
+              <div className="space-y-1.5">
+                {sections.map((s, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => pickSection(i)}
+                    disabled={uploading}
+                    className={`w-full flex items-center gap-3 rounded-md border p-1.5 text-left transition-colors ${
+                      pickedSection === i ? 'border-primary bg-primary/5' : 'hover:bg-muted'
+                    }`}
+                  >
+                    <img src={s.thumb} alt="" className="h-10 w-32 object-cover object-left rounded border bg-white" />
+                    <span className="text-sm">
+                      {s.page_start}~{s.page_end}쪽
+                      <span className="block text-xs text-muted-foreground">
+                        {s.page_end - s.page_start + 1}쪽 분량
+                      </span>
+                    </span>
+                    {pickedSection === i && <span className="ml-auto text-xs text-primary font-medium">선택됨</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>시작 페이지 (선택)</Label>
@@ -202,7 +320,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, folder }: PdfUploadDial
                 min="1"
                 placeholder="1"
                 value={pageStart}
-                onChange={(e) => setPageStart(e.target.value)}
+                onChange={(e) => { setPageStart(e.target.value); setPickedSection(null); }}
               />
             </div>
             <div>
@@ -212,7 +330,7 @@ const PdfUploadDialog = ({ open, onOpenChange, textbook, folder }: PdfUploadDial
                 min="1"
                 placeholder="전체"
                 value={pageEnd}
-                onChange={(e) => setPageEnd(e.target.value)}
+                onChange={(e) => { setPageEnd(e.target.value); setPickedSection(null); }}
               />
             </div>
           </div>

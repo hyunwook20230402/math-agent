@@ -12,6 +12,15 @@ export interface Database {
           avatar_url: string | null;
           created_at: string;
           updated_at: string;
+          teacher_id: string | null;   // 학생 -> 담당 선생님(profiles.id)
+          grade: string | null;
+          school: string | null;
+          parent_phone: string | null;  // 030 — 문자 발송 기본 수신처(숫자만)
+          student_phone: string | null; // 030
+          class_name: string | null;          // 036 — 반 이름(선택)
+          enroll_source: string | null;       // 036 — 등록경로 코드(ENROLL_SOURCE_LABEL)
+          enroll_source_note: string | null;  // 036 — 등록경로 부연
+          enroll_reason: string | null;       // 036 — 등록이유(자유 입력)
         };
         Insert: {
           id?: string;
@@ -22,6 +31,15 @@ export interface Database {
           avatar_url?: string | null;
           created_at?: string;
           updated_at?: string;
+          teacher_id?: string | null;
+          grade?: string | null;
+          school?: string | null;
+          parent_phone?: string | null;
+          student_phone?: string | null;
+          class_name?: string | null;
+          enroll_source?: string | null;
+          enroll_source_note?: string | null;
+          enroll_reason?: string | null;
         };
         Update: {
           id?: string;
@@ -32,6 +50,15 @@ export interface Database {
           avatar_url?: string | null;
           created_at?: string;
           updated_at?: string;
+          teacher_id?: string | null;
+          grade?: string | null;
+          school?: string | null;
+          parent_phone?: string | null;
+          student_phone?: string | null;
+          class_name?: string | null;
+          enroll_source?: string | null;
+          enroll_source_note?: string | null;
+          enroll_reason?: string | null;
         };
       };
       problems: {

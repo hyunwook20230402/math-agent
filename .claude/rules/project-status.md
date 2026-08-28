@@ -18,6 +18,17 @@
 - 재태깅 UI (개별/일괄 재실행) + LaTeX 수식 렌더링 (KaTeX)
 - 해설 이미지 라이트박스 + 편집 모드 UI 개편
 - **풀이 노드 편집기** (2026-06-20, 4차) — 교재 화면(`TextbookManagementNew.tsx`) 문제 카드의 "풀이 노드" 버튼 → `SolutionNodeEditorModal.tsx`(순수 HTML/CSS 모달). 노드 조회·수정·추가·삭제·AI 재추출. 수식은 기존 LaTeX 편집/렌더 부품 재사용. 옛 해설 4섹션(요약/오답포인트/단계별풀이/자주하는실수)은 제거됨.
+- **빠른정답 PDF 로 정답 자동 입력** (2026-08-27) — 교재 관리(교재·폴더 행의 ☑)와 상세 입력
+  두 곳에서 답지 PDF 를 넣는다. **첫 쪽만 시험 읽기(probe)** 로 판형·견적을 확인한 뒤 전체를
+  읽고, 검수 표(지면번호·썸네일·정답)에서 확인 후 일괄 적용. 같은 PDF 재업로드는
+  `source_hash` 로 되묻는다. 매칭 기준은 순번이 아니라 **지면번호(`source_label`)**.
+  상세·판형별 함정은 `dev-rules.md` "빠른정답", 사용법은 `problem-registration.md`.
+- **PDF 업로드 창의 단계 구간 선택** — 파일을 고르면 단계 배너를 찾아 `1~13쪽`·`14~17쪽`
+  같은 구간을 **배너 그림과 함께** 보여준다. 누르면 시작/끝 쪽이 채워지므로 B단계 폴더에는
+  B단계만 크롭된다. 배너 글자는 안 읽고(OCR 불가) 사람이 그림을 보고 고른다.
+- **폴더 드래그 순서 변경** (2026-08-27) — 한 줄을 삼등분해 위/아래 가장자리는 순서 바꾸기,
+  가운데는 그 폴더 안으로. 놓을 때 형제 `sort_order` 를 1부터 다시 매긴다(값 중복 해소).
+  **교재 경계는 못 넘는다** — 다른 교재 위에서는 드롭 표시선도 안 뜬다.
 
 ### 파이프라인
 - 해설지 PDF 파이프라인 (정답 파싱 + 해설 크롭 + AI 태깅)
@@ -35,6 +46,17 @@
   `short_answer` 고정이었다. 이제 `모의고사`(번호 규칙)를 뺀 모든 카테고리가 검출기를 탄다.
   ⚠️ 단 `answer_type_detector` 는 **텍스트 레이어를 읽으므로 스캔본(쎈)에선 여전히 None** →
   주관식 폴백. 스캔본 객관식 판정은 미해결(시각 검출 시도 결과 정확도 8/16 — 별건).
+- **빠른정답 읽기** (2026-08-27) — `pipeline/answer_key_reader.py`. 교재 답지는 텍스트 레이어가
+  없거나(스캔본) 있어도 **PUA·DRM 로 깨져** 있어 **단(column) 단위 이미지로 VL 이 읽는다**.
+  정답 오독은 학생 오채점으로 이어지므로 **두 번 읽어 대조**(`cross_check`)하고 다른 것만
+  검수 표에 표시한다. 모델은 `ANSWER_KEY_MODEL`(gpt-5.2) **명시 주입** — 튜터 모델 변경에
+  안 딸려간다. 판형 4종 실측: 교육청 23/23·낙생고 22/22·야탑고 21/21·쎈 120/120.
+- **단계 배너 검출** — `pipeline/stage_sections.py` + `POST /api/pdf/sections`. 왼쪽 위 색
+  덩어리의 **이어진 높이**로 단계 시작 쪽을 찾는다(배너 6.4% vs 문제번호 라벨 1.0~2.1%).
+  **VL 을 안 부른다 → 비용 0.** 배너가 1개 이하면 빈 목록(수동 입력으로 폴백).
+- **`scripts/split_folder_by_label.py`** — 지면번호 범위로 폴더를 갈라 담는다.
+  `problems` 와 `problem_staging` 을 **둘 다** 갱신한다(CMS 의 폴더 이동은 `problems` 만
+  고쳐서 답지 스코프가 어긋난다).
 
 ### 막힌 지점 도우미 — 풀이 그래프 위치추적 RAG (`backend/pdf_pipeline`) ✅ 구현
 - **deeptutor(LangGraph 대화튜터) 폐기 (2026-06-18)** — `backend/deeptutor/` 삭제. 막힌 지점 도우미만 pdf_pipeline 으로 이전·개선.
@@ -54,17 +76,79 @@
   - **UI(19차)** — 입력 영역의 "다음 힌트 →"·"아예 모르겠어요 — 처음부터 도와주세요" 버튼 제거(입력창+전송 버튼만).
   - **★8~18차 화면 실패의 진짜 원인(19차 발견)**: 옛 uvicorn 이 포트 8001 점유 → 새 서버 조용히 바인딩 실패 → 수정이 화면 미반영. `/server-check` 로 진단·정리. ("화면 실패" = 코드 아닌 서버부터, `dev-rules.md` ★체크리스트.)
 
+### 선생님 앱(teacher, 8082) 대개편 (2026-08-27)
+
+상단 탭 6개로 재편: **대시보드 / 배포하기 / 오답 관리 / 학습보고서 / 출석 / 메시지**
+(CMS 는 탭에서 빼고 헤더 우측 작은 버튼만 유지). `TeacherTabNavigation.tsx`(CMS 탭 패턴 복제)
++ `RequireTeacher.tsx`(그전까지 **학생 계정으로도 선생님 화면이 통째로 열렸다**).
+
+- **학생 등록** `/teacher/students` (036) — 이름·학년·학교(필수) + **반 이름 · 등록경로 ·
+  등록이유** + 학부모/학생 연락처. **등록경로는 코드로 저장**(`instagram/youtube/referral/blog/
+  karrot/etc`, 라벨은 `ENROLL_SOURCE_LABEL`) — 자유 입력이면 표기가 갈려 경로별로 못 센다.
+  DB `ck_profiles_enroll_source` 가 같은 목록을 강제. 반 이름은 **이미 쓴 반 목록 + 새로 입력**.
+  등록 폼과 목록의 편집 패널이 **같은 `StudentFields` 컴포넌트**를 쓴다 — 두 벌로 두면 한쪽에만
+  칸이 생겨 갈라진다(예전에 편집이 연락처만 됐던 이유). 기존 학생도 전체 항목 수정 가능.
+- **오답 관리** `/teacher/wrong-answers` — 학생별 오답 목록(**진행도 n/5**·오답 횟수·회차별
+  날짜 5칸) + **복습 예약(숙제/다음수업/2주/4주)** + **보충 배포** + **A4 시험지 인쇄**.
+  기본 정렬 번호순, 기본 필터 "5회 미달".
+  필터 4종: 기간 / **첫 오답일** / 상태 / 다음 회차 예정일. **첫 오답일**은
+  **달력에서 고른다**(`FirstWrongDayPicker.tsx`) — 처음엔 날짜 목록 select 였는데 수업이 쌓이면
+  항목이 계속 늘어 한눈에 안 들어온다. 달력은 항목 수와 무관하게 크기가 일정하다.
+  **오답이 없는 날은 못 고르고**(`disabled`), 고를 수 있는 날엔 칸 안에 문제 수를 같이 찍는다
+  (`27` 아래 작게 `17`). 달 이동은 오답이 있는 달 범위로 제한(`fromMonth`/`toMonth`) — 빈 달을
+  헤매지 않게. 하루치를 통째로 보는 게 실제 작업 단위라서 넣었다.
+  묶는 기준은 `toDateStr(new Date(first_wrong_at))` 로 **표의 `첫 오답` 열과 같은 로컬 날짜**다
+  (실측 17/17 일치 — 여기서 어긋나면 "8/27 오답인데 왜 안 보임" 이 된다).
+  오답 원천은 **`student_answers`(append-only)** 다. `wrong_answers` 는 정답 시 DELETE 로
+  이력이 소실되고 `updated_at` 컬럼이 없어 UPDATE 가 무음 실패하므로 **신규 코드에서 안 쓴다**.
+- **오답은 무조건 총 5회**(최초 1회 + 복습 4회, 정답 여부 무관). 학원 현실(결석·숙제 미이행·보강)
+  때문에 날짜가 아니라 **횟수**를 추적한다 — 진행도 `total_attempts`, 선생님 신호 `under_target`,
+  빈 회차는 `kind='makeup'` 보충 배포로 메운다. 상세 `dev-rules.md` "오답 복습 = 날짜가 아니라 횟수".
+- **복습 배포 자동 생성 (2026-08-28)** — 5회는 그대로지만 **배포는 4개**다:
+  원본(1회차 + 그 안에서 2회차 당일 재풀이) + **자동 생성 3개**(다음수업 빨 / 2주 주 / 4주 노).
+  학생이 과제를 다 풀어 자동 채점되는 순간 `auto_create_reviews_for_distribution`(035)이
+  **첫 시도에서 틀린 문제**로 3개를 만든다(멱등). **[복습 예약] 버튼은 화면에서 제거**
+  (모달·API 는 보존). 못 만든 경우는 `find_missing_review_batches` 가 오답 관리 배너로 알린다.
+  색 팔레트는 `REVIEW_KIND_STYLE`(reviewSchedule.ts) 한 곳 — 배포하기 달력 칩·겹침 색점에 쓴다.
+- **복습 예약 = 미래 날짜 배포를 미리 생성**(스케줄러 없음). 그날이 되면 학생 화면에 뜬다.
+  밀리면 예약 현황 date input 또는 **배포하기 달력 드래그**로 옮긴다(월 경계 이동 지원).
+  생성은 `create_review_distributions` RPC 한 방(부분 실패로 유령 예약이 남지 않게).
+  미래 배포 숨김은 프론트(`getStudentDistributions(_, {hideScheduled:true})`,
+  `getDistributionById` 날짜 가드)와 **RPC 양쪽**에 있어야 한다(031).
+- **학생이 회차를 직접 진행한다 — "오답 숙제하기 (N회차)"** (2026-08-28). 학생 대시보드
+  문제집 카드의 버튼 3개(전체 다시 풀기 / 오답만 다시 풀기 / 오답 분석)를 이 버튼 하나로
+  바꿨다. 월요일에 틀린 것을 그날 바로 숙제로 내보내려는 것 — 선생님이 예약을 걸지 않아도
+  회차가 돈다. 상세 `dev-rules.md` "학생 오답 숙제".
+- **학습보고서** `/teacher/reports` — 학생×월. 배포 내역 / 오답 추이(recharts 첫 실사용) /
+  출석률 / 선생님 피드백 → **학부모에게 문자 발송**. 저장 시 `snapshot` jsonb 에 집계를
+  박제한다(나중에 재풀이해도 보낸 보고서가 안 흔들리게).
+- **출석** `/teacher/attendance` — 날짜별 1일 1회, 출석/지각/결석 토글(즉시 upsert) +
+  학부모 문자([지각·결석 일괄 알림] 포함).
+- **메시지** `/teacher/messages` — 수신자 다중 선택 + `#{학생이름}` 치환 + 미리보기(byte/LMS)
+  + 전송 로그. 백엔드 `routers/messages.py`.
+- **삭제**: `DistributionPage`(존재하지 않는 컬럼에 insert — 실제로 깨져 있었다),
+  `AnalysisPage`(진입점 없는 고아), `ProblemSetManagement`/`FolderManagement`(`folderApi`
+  미import 로 렌더 즉시 크래시), `AddProblem`, `NotFound`. 배포 내역은 **배포하기 하단 섹션**으로.
+- **배포하기 폴더 이전(실버그 수정)** — `chapters` 를 보고 있어 027 폴더 개편 이후 등록한
+  교재가 회차 목록에 **아예 안 떴다**. `problem_folders` + `folderIds`(하위 폴더 포함)로 전환.
+- Radix Portal 위반 0건(`StudentAnalysis` 의 기간 Popover 도 native date input 으로 교체).
+
 ### DB 마이그레이션
 - ✅ **baseline 리셋(2026-06-20)** — 드리프트 해소. 엉킨 001~016 은 `_archive/` 로 치우고, 현재 원격 DB 구조를 `baseline_20260620.sql` 한 장으로 스냅샷(테이블 18 + FK·UNIQUE·인덱스·트리거 + RPC 2개). 이후 변경은 `017_` 부터 순번. 상세 `supabase/migrations/README.md`
   - baseline 에 포함: `solution_nodes`(uses/whys 포함) + RPC `search_solution_nodes_for_hint`, `difficulty_score`/`correct_rate`, `problem_sets` 3지표 avg/p75/max + `recalc_set_difficulty` RPC.
   - `017_fix_recalc_set_difficulty_column.sql` — baseline 이후 첫 변경(세트 난이도 함수 버그 수정).
+  - `028_answer_keys.sql` / `029_answer_key_scope.sql` — 빠른정답표(`answer_keys`). 유일성은
+    교재가 아니라 **스코프**로 건다: `scope_id GENERATED ALWAYS AS (COALESCE(folder_id,
+    textbook_id))` + `uq_answer_keys_scope_label`. `(textbook_id, folder_id, label)` 로 걸면
+    Postgres 가 NULL 을 서로 다르게 봐서 교재 전체 답지에 제약이 **전혀 안 먹는다**.
 - 4차 정리(015/016 — `_archive/`에 기록): 옛 해설 4컬럼 DROP(problems·problem_staging), `tags`·`problem_sets_new` 테이블 DROP. 결과는 baseline 에 반영됨.
 - ℹ️ `student_conversations`/`student_attempts`/`search_similar_problems`(구 deeptutor) 는 **원격에 적용된 적 없음** — deeptutor 폐기로 무의미.
 
 ## 향후 작업
 
 - **튜터 고도화** — CMS 해설 도형 수동 bbox 입력 UI(`solution_nodes.figure_image_crop_url` 채우기), 노드 전이 자동 검증(논리 비약 탐지). (대화맥락 주입은 15차에 완료 — `conversation_history` 7턴.)
-- **teacher 앱** 숙제 배포/분석 완성도 ↑ (현재 기초 구현 60~70%)
+- **teacher 앱** — 대개편 완료(2026-08-27). 남은 것: 솔라피 계정 발급 후 실발송 전환,
+  학습보고서 A4 인쇄(현재 화면+문자만), 출석 → 수업(강의) 단위 확장 여지.
 - **student 앱** 오답노트 고도화 (막힌 지점 도우미 연계 UI 포함)
 - ~~로컬 migrations 드리프트 해소~~ ✅ 완료(2026-06-20 baseline 리셋)
 

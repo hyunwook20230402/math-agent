@@ -232,6 +232,16 @@ const TextbookManagementNew = () => {
   const childrenOf = (list: ProblemFolder[], parentId: string | null) =>
     list.filter(f => f.parent_id === parentId);
 
+  /** 펼쳐 둔 모든 교재의 폴더를 한 배열로. 드래그는 교재 경계를 넘나들 수 있어야 한다.
+   *  (옛 코드는 `folderList`= **선택된 교재만** 봐서, 다른 교재 폴더를 끌면 대상을
+   *   못 찾아 아무 일도 일어나지 않았다.) */
+  const allFolders = Object.values(folders).flat();
+
+  /** 그 교재의 그 부모 밑 형제들. 최상위(parent=null)는 교재별로 갈라야 한다 —
+   *  전체 목록에서 parent_id === null 로 거르면 다른 교재 폴더까지 형제가 된다. */
+  const siblingsIn = (textbookId: string, parentId: string | null) =>
+    (folders[textbookId] ?? []).filter(f => f.parent_id === parentId);
+
   /** 최상위 → 해당 폴더 순서의 조상 경로. 브레드크럼과 컨텍스트에 쓴다. */
   const pathOf = (list: ProblemFolder[], folder: ProblemFolder): ProblemFolder[] => {
     const byId = new Map(list.map(f => [f.id, f]));
@@ -421,7 +431,10 @@ const TextbookManagementNew = () => {
     } else {
       // DB 가 ON DELETE CASCADE 라 하위 폴더도 같이 사라진다.
       // 문제는 지워지지 않고 folder_id 가 NULL 이 되어 교재 루트로 돌아간다(ON DELETE SET NULL).
-      const doomed = descendantIds(folderList, id);
+      // 선택된 교재가 아닌 폴더도 지울 수 있다 — 전체 목록에서 하위를 찾아야
+      // 그 안에 선택된 폴더가 있었는지 제대로 판정된다.
+      const doomed = descendantIds(allFolders, id);
+      const owner = allFolders.find(f => f.id === id)?.textbook_id;
       const { error } = await supabase.from('problem_folders').delete().eq('id', id);
       if (error) {
         toast({ title: '오류', description: '폴더 삭제에 실패했습니다.', variant: 'destructive' });
@@ -430,7 +443,7 @@ const TextbookManagementNew = () => {
         if (selectedFolder && doomed.includes(selectedFolder.id)) {
           setSelectedFolder(null); ctxSetFolder(null);
         }
-        if (selectedTextbook) await fetchFolders(selectedTextbook.id);
+        await fetchFolders(owner ?? selectedTextbook?.id ?? '');
       }
     }
     setDeleteTarget(null);
@@ -519,7 +532,15 @@ const TextbookManagementNew = () => {
   // 드래그로 옮기거나, 폴더 행의 '이동' 버튼으로 목록에서 골라 옮긴다.
   // 자기 하위로 옮기는 순환은 DB 트리거가 막지만, 화면에서도 미리 걸러 안내한다.
   const [draggingFolderId, setDraggingFolderId] = useState<string | null>(null);
+  /** 지금 끌고 있는 폴더가 속한 교재. 다른 교재 위에서는 드롭 표시를 안 띄우는 데 쓴다. */
+  const draggingTextbookId = draggingFolderId
+    ? allFolders.find(f => f.id === draggingFolderId)?.textbook_id ?? null
+    : null;
+
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  // 놓는 위치. null 이면 '그 폴더 안으로', before/after 면 '그 폴더 앞/뒤 순서로'.
+  // 한 줄의 위/아래 가장자리에 대면 순서 바꾸기, 가운데면 안으로 넣기.
+  const [dropEdge, setDropEdge] = useState<'before' | 'after' | null>(null);
   const [folderMoveTarget, setFolderMoveTarget] = useState<ProblemFolder | null>(null);
   const [folderMoveParent, setFolderMoveParent] = useState<string>('');
 
@@ -531,8 +552,25 @@ const TextbookManagementNew = () => {
     return !descendantIds(list, moving.id).includes(candidateId);
   };
 
+  /**
+   * 폴더는 **같은 교재 안에서만** 옮긴다.
+   *
+   * 교재를 건너뛰게 하면 하위 폴더·문제·staging 의 `textbook_id` 를 전부 다시 붙여야
+   * 하고, 하나라도 빠지면 브레드크럼이 엉뚱한 교재를 띄운다(실측: 쎈 120문제가
+   * folder=쎈 / textbook=내신 기출 로 어긋나 있었다). 사용자 결정으로 교재 경계를 막는다.
+   */
+  const sameTextbook = (moving: ProblemFolder, targetTextbookId: string) => {
+    if (moving.textbook_id === targetTextbookId) return true;
+    toast({
+      title: '이동 불가',
+      description: '폴더는 같은 교재 안에서만 옮길 수 있습니다.',
+      variant: 'destructive',
+    });
+    return false;
+  };
+
   const moveFolder = async (folder: ProblemFolder, newParentId: string | null) => {
-    if (!canBeParent(folderList, folder, newParentId)) return;
+    if (!canBeParent(allFolders, folder, newParentId)) return;
     const { error } = await supabase
       .from('problem_folders')
       .update({ parent_id: newParentId })
@@ -548,20 +586,95 @@ const TextbookManagementNew = () => {
       return;
     }
     const parentName = newParentId
-      ? (folderList.find(f => f.id === newParentId)?.name ?? '상위 폴더')
-      : (selectedTextbook?.name ?? '교재');
+      ? (allFolders.find(f => f.id === newParentId)?.name ?? '상위 폴더')
+      : (textbooks.find(t => t.id === folder.textbook_id)?.name ?? '교재');
     toast({ title: '이동 완료', description: `'${folder.name}'을(를) ${parentName} 아래로 옮겼습니다.` });
-    if (selectedTextbook) await fetchFolders(selectedTextbook.id);
+    // **그 폴더가 속한 교재**를 다시 읽는다 — 선택된 교재가 아닐 수 있다.
+    await fetchFolders(folder.textbook_id);
     if (newParentId) setExpandedFolders(prev => new Set([...prev, newParentId]));
   };
 
-  const handleFolderDrop = async (targetId: string | null) => {
-    const moving = folderList.find(f => f.id === draggingFolderId);
+  /**
+   * 형제 폴더 사이 순서를 바꾼다 (`sort_order` 다시 매김).
+   *
+   * 폴더 목록은 `sort_order` 로 정렬해 가져오는데, 지금까지는 그 값이 만들 때 정해진
+   * 뒤로 바뀌지 않아 같은 값이 여럿 생겼다(실측: 고3 모의고사 세 회차가 1·2·2). 값이
+   * 겹치면 순서가 들쭉날쭉하므로, **옮길 때마다 그 형제들을 1부터 다시 매긴다.**
+   */
+  const reorderFolder = async (
+    moving: ProblemFolder, target: ProblemFolder, where: 'before' | 'after',
+  ) => {
+    if (!sameTextbook(moving, target.textbook_id)) return;
+    const newParent = target.parent_id;
+    const textbookId = moving.textbook_id;
+
+    // 부모가 바뀔 때만 옮긴다(같은 부모 안 순서 바꾸기는 아래 재매김만 하면 된다).
+    if (moving.parent_id !== newParent) {
+      if (moving.id === newParent || descendantIds(allFolders, moving.id).includes(newParent ?? '')) {
+        toast({ title: '이동 불가', description: '폴더를 자기 하위 폴더 아래로 옮길 수 없습니다.', variant: 'destructive' });
+        return;
+      }
+      const { error } = await supabase
+        .from('problem_folders').update({ parent_id: newParent }).eq('id', moving.id);
+      if (error) {
+        const dup = (error as { code?: string }).code === '23505';
+        toast({
+          title: '오류',
+          description: dup ? '옮기려는 위치에 같은 이름의 폴더가 이미 있습니다.' : '폴더를 옮기지 못했습니다.',
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
+
+    const siblings = siblingsIn(textbookId, newParent).filter(f => f.id !== moving.id);
+    const at = siblings.findIndex(f => f.id === target.id);
+    const insertAt = where === 'before' ? at : at + 1;
+    const ordered = [...siblings.slice(0, insertAt), moving, ...siblings.slice(insertAt)];
+
+    // upsert 로 한 번에 못 보낸다 — PostgREST 가 INSERT 로 취급해 name·textbook_id 가
+    // NOT NULL 위반(23502)을 낸다. 형제는 많아야 열 몇 개라 바뀐 것만 따로 보낸다.
+    const changed = ordered
+      .map((f, i) => ({ f, order: i + 1 }))
+      .filter(({ f, order }) => f.sort_order !== order);
+    const results = await Promise.all(changed.map(({ f, order }) =>
+      supabase.from('problem_folders').update({ sort_order: order }).eq('id', f.id)));
+    if (results.some(r => r.error)) {
+      toast({ title: '오류', description: '순서를 저장하지 못했습니다.', variant: 'destructive' });
+      return;
+    }
+    await fetchFolders(textbookId);
+    if (newParent) setExpandedFolders(prev => new Set([...prev, newParent]));
+  };
+
+  const handleFolderDrop = async (
+    targetId: string | null,
+    where: 'before' | 'after' | null = null,
+    rootTextbookId?: string,
+  ) => {
+    // **모든 교재의 폴더**에서 찾는다 — 옛 코드는 선택된 교재 목록만 봐서, 다른 교재를
+    // 펼쳐 놓고 끌면 대상을 못 찾아 아무 일도 일어나지 않았다("고3 모의고사는 이동이 안 된다").
+    const moving = allFolders.find(f => f.id === draggingFolderId);
+    const target = targetId ? allFolders.find(f => f.id === targetId) : null;
     setDraggingFolderId(null);
     setDropTargetId(null);
+    setDropEdge(null);
     if (!moving) return;
-    if (!canBeParent(folderList, moving, targetId)) {
-      if (targetId && descendantIds(folderList, moving.id).includes(targetId)) {
+
+    // 가장자리에 놓았으면 '순서 바꾸기', 가운데면 기존처럼 '그 폴더 안으로'.
+    if (where && target) {
+      await reorderFolder(moving, target, where);
+      return;
+    }
+    // 교재 최상위로 빼기 — 그 교재의 폴더만 받는다.
+    if (!target) {
+      if (!sameTextbook(moving, rootTextbookId ?? moving.textbook_id)) return;
+      await moveFolder(moving, null);
+      return;
+    }
+    if (!sameTextbook(moving, target.textbook_id)) return;
+    if (!canBeParent(allFolders, moving, targetId)) {
+      if (targetId && descendantIds(allFolders, moving.id).includes(targetId)) {
         toast({ title: '이동 불가', description: '폴더를 자기 하위 폴더 아래로 옮길 수 없습니다.', variant: 'destructive' });
       }
       return;
@@ -590,18 +703,33 @@ const TextbookManagementNew = () => {
           style={indent}
           draggable
           onDragStart={e => { e.stopPropagation(); setDraggingFolderId(folder.id); }}
-          onDragEnd={() => { setDraggingFolderId(null); setDropTargetId(null); }}
+          onDragEnd={() => { setDraggingFolderId(null); setDropTargetId(null); setDropEdge(null); }}
           onDragOver={e => {
             if (!draggingFolderId || draggingFolderId === folder.id) return;
+            // 다른 교재 위에서는 표시선을 아예 안 띄운다 — 될 것처럼 보였다가
+            // 놓는 순간 거부되면 왜 안 되는지 알기 어렵다.
+            if (draggingTextbookId && draggingTextbookId !== folder.textbook_id) return;
             e.preventDefault(); e.stopPropagation();
+            // 한 줄을 위/가운데/아래로 삼등분한다 — 가장자리면 순서 바꾸기, 가운데면 안으로.
+            const box = e.currentTarget.getBoundingClientRect();
+            const y = e.clientY - box.top;
             setDropTargetId(folder.id);
+            setDropEdge(y < box.height / 3 ? 'before'
+              : y > (box.height * 2) / 3 ? 'after' : null);
           }}
-          onDragLeave={e => { e.stopPropagation(); setDropTargetId(prev => prev === folder.id ? null : prev); }}
-          onDrop={e => { e.preventDefault(); e.stopPropagation(); handleFolderDrop(folder.id); }}
-          className={`flex items-center gap-1 pr-3 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors group ${isSel ? 'bg-primary/10 text-primary font-medium' : ''} ${dropTargetId === folder.id ? 'ring-2 ring-primary ring-inset bg-primary/5' : ''} ${draggingFolderId === folder.id ? 'opacity-40' : ''}`}
+          onDragLeave={e => {
+            e.stopPropagation();
+            setDropTargetId(prev => (prev === folder.id ? null : prev));
+          }}
+          onDrop={e => { e.preventDefault(); e.stopPropagation(); handleFolderDrop(folder.id, dropEdge); }}
+          className={`relative flex items-center gap-1 pr-3 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors group ${isSel ? 'bg-primary/10 text-primary font-medium' : ''} ${dropTargetId === folder.id && !dropEdge ? 'ring-2 ring-primary ring-inset bg-primary/5' : ''} ${draggingFolderId === folder.id ? 'opacity-40' : ''}`}
           onClick={() => selectFolder(folder)}
-          title="끌어서 다른 폴더 위에 놓으면 그 아래로 옮겨집니다"
+          title="끌어서 — 줄의 위/아래 가장자리에 놓으면 순서가 바뀌고, 가운데에 놓으면 그 폴더 안으로 들어갑니다"
         >
+          {/* 순서 바꾸기 표시선 */}
+          {dropTargetId === folder.id && dropEdge && (
+            <div className={`pointer-events-none absolute left-0 right-0 h-0.5 bg-primary ${dropEdge === 'before' ? 'top-0' : 'bottom-0'}`} />
+          )}
           {kids.length > 0 ? (
             <button
               className="p-0 flex-shrink-0 text-muted-foreground"
@@ -777,16 +905,18 @@ const TextbookManagementNew = () => {
                       )}
 
                       {/* 최상위로 빼는 드롭 영역 겸 '폴더 추가'.
-                          펼친 교재면 늘 보여준다 — 선택된 교재에만 띄우면
-                          다른 교재에 폴더를 만들 방법이 없다.
-                          드래그 드롭만 선택된 교재로 한정한다(handleFolderDrop 이
-                          선택된 교재의 폴더 목록에서 대상을 찾기 때문). */}
+                          펼친 교재면 늘 보여준다. 드롭도 교재를 안 가린다 —
+                          `handleFolderDrop` 이 모든 교재의 폴더에서 대상을 찾고,
+                          다른 교재 폴더를 끌어오면 `sameTextbook` 이 막아 준다. */}
                       <div
-                        onDragOver={isSelected ? (e => { if (draggingFolderId) { e.preventDefault(); setDropTargetId('__root__'); } }) : undefined}
-                        onDragLeave={isSelected ? (() => setDropTargetId(prev => prev === '__root__' ? null : prev)) : undefined}
-                        onDrop={isSelected ? (e => { e.preventDefault(); handleFolderDrop(null); }) : undefined}
-                        className={`flex items-center gap-1 pl-7 pr-3 py-1 cursor-pointer text-muted-foreground hover:text-primary transition-colors ${isSelected && dropTargetId === '__root__' ? 'ring-2 ring-primary ring-inset bg-primary/5' : ''}`}
-                        title={isSelected && draggingFolderId ? '여기에 놓으면 교재 바로 아래(최상위)로 나옵니다' : undefined}
+                        onDragOver={e => {
+                          if (!draggingFolderId || draggingTextbookId !== textbook.id) return;
+                          e.preventDefault(); setDropTargetId(`__root__:${textbook.id}`); setDropEdge(null);
+                        }}
+                        onDragLeave={() => setDropTargetId(prev => (prev === `__root__:${textbook.id}` ? null : prev))}
+                        onDrop={e => { e.preventDefault(); handleFolderDrop(null, null, textbook.id); }}
+                        className={`flex items-center gap-1 pl-7 pr-3 py-1 cursor-pointer text-muted-foreground hover:text-primary transition-colors ${dropTargetId === `__root__:${textbook.id}` ? 'ring-2 ring-primary ring-inset bg-primary/5' : ''}`}
+                        title={draggingFolderId ? '여기에 놓으면 교재 바로 아래(최상위)로 나옵니다' : undefined}
                         onClick={() => {
                           setFolderForm({ name: '', description: '', sort_order: childrenOf(textbookFolders, null).length + 1 });
                           setFolderDialog({ textbookId: textbook.id, parentId: null, parentName: textbook.name });
@@ -1145,8 +1275,9 @@ const TextbookManagementNew = () => {
                 onChange={e => setFolderMoveParent(e.target.value)}
               >
                 <option value="">(최상위 — 교재 바로 아래)</option>
-                {flattenTree(folderList)
-                  .filter(({ folder }) => canBeParent(folderList, folderMoveTarget, folder.id))
+                {/* 그 폴더가 **속한 교재**의 목록만 — 폴더는 교재를 건너뛸 수 없다. */}
+                {flattenTree(folders[folderMoveTarget.textbook_id] ?? [])
+                  .filter(({ folder }) => canBeParent(allFolders, folderMoveTarget, folder.id))
                   .map(({ folder, depth }) => (
                     <option key={folder.id} value={folder.id}>
                       {`${' '.repeat(depth * 3)}${depth > 0 ? '└ ' : ''}${folder.name}`}

@@ -19,12 +19,13 @@ import {
   BarChart3
 } from 'lucide-react';
 import { useAuth } from '@shared/hooks/useAuth';
+// 날짜 버킷 비교는 반드시 로컬 기준 — toISOString() 은 UTC 라 KST 오전 배포가 전날로 밀린다.
+import { toDateStr } from '@shared/lib/reviewSchedule';
 import { distributionApi, studentAnswerApi, wrongAnswerApi, studentApi, analyticsApi } from '@shared/lib/api';
 import type { WeaknessRow } from '@shared/lib/api';
 import { WeaknessPanel } from '@/components/WeaknessPanel';
+import { Input } from '@shared/ui/input';
 import { format } from 'date-fns';
-import { Calendar } from '@shared/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import { DateRange } from 'react-day-picker';
 import type { 
   DistributionWithDetails, 
@@ -46,6 +47,10 @@ interface StudentStats {
   totalAttempts: number;
   solvedProblems: number;
 }
+
+// Date → 'YYYY-MM-DD' (input[type=date] 용). toISOString 은 UTC 라 하루 밀릴 수 있다.
+// 구현은 toDateStr 하나로 모은다 — 같은 변환이 두 벌이면 한쪽만 고쳐져 어긋난다.
+const toInputDate = (d?: Date) => (d ? toDateStr(d) : '');
 
 const StudentAnalysis = () => {
   const { studentId } = useParams<{ studentId: string }>();
@@ -191,13 +196,15 @@ const StudentAnalysis = () => {
       return;
     }
 
-    const fromDate = new Date(dateRange.from);
-    const toDate = new Date(dateRange.to);
-    const fromDateStr = fromDate.toISOString().split('T')[0];
-    const toDateStr = toDate.toISOString().split('T')[0];
+    // ⚠️ **toISOString() 은 UTC 다 — 여기서 쓰면 하루가 밀린다.**
+    //    달력에서 고른 8/28(로컬 자정)이 UTC 로 "2026-08-27" 이 되고, 27일 오전에 배포된
+    //    것도 UTC 로 "2026-08-27" 이라 둘이 같아진다(학생 대시보드에서 실측 재현).
+    //    달력·화면 표시가 로컬이므로 비교도 로컬(toDateStr)로 한다.
+    const fromDateStr = toDateStr(new Date(dateRange.from));
+    const toDateStrValue = toDateStr(new Date(dateRange.to));
 
     console.log('=== 날짜 필터 적용 ===');
-    console.log('선택한 날짜 범위:', { fromDateStr, toDateStr });
+    console.log('선택한 날짜 범위:', { fromDateStr, toDateStrValue });
 
     const filtered = allDistributions.filter(distribution => {
       const dateValue = distribution.distribution_date;
@@ -212,8 +219,8 @@ const StudentAnalysis = () => {
           return false;
         }
 
-        const distributionDateStr = distributionDate.toISOString().split('T')[0];
-        const isInRange = distributionDateStr >= fromDateStr && distributionDateStr <= toDateStr;
+        const distributionDateStr = toDateStr(distributionDate);
+        const isInRange = distributionDateStr >= fromDateStr && distributionDateStr <= toDateStrValue;
             
         return isInRange;
       } catch (error) {
@@ -439,35 +446,29 @@ const StudentAnalysis = () => {
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-4">
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="justify-start text-left font-normal">
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {dateRange?.from ? (
-                    dateRange.to ? (
-                      <>
-                        {format(dateRange.from, "LLL dd, y")} -{" "}
-                        {format(dateRange.to, "LLL dd, y")}
-                      </>
-                    ) : (
-                      format(dateRange.from, "LLL dd, y")
-                    )
-                  ) : (
-                    <span>날짜 범위 선택</span>
-                  )}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  initialFocus
-                  mode="range"
-                  defaultMonth={new Date()}
-                  selected={dateRange}
-                  onSelect={setDateRange}
-                  numberOfMonths={2}
-                />
-              </PopoverContent>
-            </Popover>
+            {/* Radix Popover 금지(dev-rules) — Portal 이 렌더는 되나 화면에 안 보인다.
+                기간 선택은 native date input 두 개로 충분하다. */}
+            <div className="flex items-center gap-2">
+              <Input
+                type="date"
+                className="h-10 w-44"
+                value={toInputDate(dateRange?.from)}
+                onChange={(e) => {
+                  const from = e.target.value ? new Date(`${e.target.value}T00:00:00`) : undefined;
+                  setDateRange((prev) => ({ from, to: prev?.to ?? from }) as DateRange);
+                }}
+              />
+              <span className="text-muted-foreground">~</span>
+              <Input
+                type="date"
+                className="h-10 w-44"
+                value={toInputDate(dateRange?.to)}
+                onChange={(e) => {
+                  const to = e.target.value ? new Date(`${e.target.value}T00:00:00`) : undefined;
+                  setDateRange((prev) => ({ from: prev?.from ?? to, to }) as DateRange);
+                }}
+              />
+            </div>
             <Button variant="outline" onClick={() => {
               const today = new Date();
               const todayRange: DateRange = {

@@ -57,6 +57,10 @@
           {
             "type": "command",
             "command": "python \"C:/Users/fpsem/Desktop/math-agent-main/math-agent-main/.claude/tutor_import_hook.py\""
+          },
+          {
+            "type": "command",
+            "command": "python \"C:/Users/fpsem/Desktop/math-agent-main/math-agent-main/.claude/tsx_tdz_hook.py\""
           }
         ]
       }

@@ -19,6 +19,10 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@shared/hooks/useAuth';
 import { distributionApi, studentAnswerApi, wrongAnswerApi, distributionAttemptApi } from '@shared/lib/api';
+// 회차 체계는 선생님 오답 표와 **같은 원본**을 쓴다 — 라벨/총회차를 여기서 다시 정의하면
+// 한쪽만 바뀌었을 때 학생이 보는 "2회차" 와 선생님이 보는 "2회차 숙제" 칸이 어긋난다.
+import { REVIEW_TARGET_ROUNDS, STAGE_LABELS, planWrongHomework, toDateStr, parseDate } from '@shared/lib/reviewSchedule';
+import type { ProblemAttemptStat } from '@shared/lib/reviewSchedule';
 import { format } from 'date-fns';
 import { Calendar } from '@shared/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
@@ -52,6 +56,12 @@ const StudentDashboard = () => {
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [distributionAttempts, setDistributionAttempts] = useState<{ [key: string]: number }>({});
+  // 문제별 전체 시도 요약(배포 무관) = 선생님 오답 표의 회차와 같은 기준.
+  // "N회차" 와 "오늘 몫을 이미 했는가" 의 근거.
+  const [problemAttempts, setProblemAttempts] = useState<{ [problemId: string]: ProblemAttemptStat }>({});
+  // 답안/시도 데이터가 다 들어왔는가. 로딩 중에는 진행률이 0 이라 **다 푼 문제집도 '문제 풀기'**
+  // 로 보이고, 그걸 누르면 세트 전체가 열려 모든 문제의 회차가 한 칸씩 뛴다(검토에서 확인).
+  const [cardsReady, setCardsReady] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(6);
   const [stats, setStats] = useState({
@@ -77,7 +87,11 @@ const StudentDashboard = () => {
       
       if (dateParam) {
         // URL 파라미터에서 날짜가 있으면 해당 날짜로 설정
-        const targetDate = new Date(dateParam);
+        // ⚠️ new Date('YYYY-MM-DD') 는 **UTC 자정**으로 읽혀 시간대에 따라 하루 밀린다.
+        //    parseDate 는 로컬 자정으로 만든다 — 필터 비교(toDateStr)와 기준을 맞춘다.
+        const targetDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam)
+          ? parseDate(dateParam)
+          : new Date(dateParam);
         if (!isNaN(targetDate.getTime())) {
           const targetRange: DateRange = {
             from: targetDate,
@@ -98,7 +112,7 @@ const StudentDashboard = () => {
       };
       setDateRange(todayRange);
       setIsInitialLoad(false);
-      console.log('초기 로드: 오늘 날짜로 필터 설정', today.toISOString().split('T')[0]);
+      console.log('초기 로드: 오늘 날짜로 필터 설정', toDateStr(today));
     }
   }, [isInitialLoad, allDistributions, searchParams]);
 
@@ -285,14 +299,17 @@ const StudentDashboard = () => {
         to: today
       };
       setDateRange(todayRange);
-      console.log('필터가 설정되지 않음: 오늘 날짜로 자동 설정', today.toISOString().split('T')[0]);
+      console.log('필터가 설정되지 않음: 오늘 날짜로 자동 설정', toDateStr(today));
       return;
     }
 
-    const fromDate = new Date(dateRange.from);
-    const toDate = new Date(dateRange.to);
-    const fromDateStr = fromDate.toISOString().split('T')[0];
-    const toDateStr = toDate.toISOString().split('T')[0];
+    // ⚠️ **toISOString() 은 UTC 다 — 여기서 쓰면 하루가 밀린다.**
+    //    달력에서 고른 8/28(로컬 자정)은 UTC 로 8/27T15:00 → "2026-08-27" 이 되고,
+    //    27일 오전 10시에 배포된 문제집도 UTC 로 "2026-08-27" 이라 **둘이 같아진다**.
+    //    그래서 8/28 을 골랐는데 27일 컨텐츠가 뜨고 28일 것은 빠졌다(실측 재현).
+    //    화면 표시(format)와 달력 선택이 로컬이므로 비교도 로컬(toDateStr)로 해야 한다.
+    const fromDateStr = toDateStr(new Date(dateRange.from));
+    const toDateStrValue = toDateStr(new Date(dateRange.to));
 
     console.log('=== 날짜 필터 적용 ===');
     console.log('선택한 날짜 범위:', { fromDateStr, toDateStr });
@@ -313,14 +330,14 @@ const StudentDashboard = () => {
           return false;
         }
 
-        const distributionDateStr = distributionDate.toISOString().split('T')[0];
-            const isInRange = distributionDateStr >= fromDateStr && distributionDateStr <= toDateStr;
+        const distributionDateStr = toDateStr(distributionDate);
+            const isInRange = distributionDateStr >= fromDateStr && distributionDateStr <= toDateStrValue;
             
             console.log(`배포 "${distribution.title}":`, {
           원본날짜: dateValue,
               변환된날짜: distributionDateStr,
               시작일: fromDateStr,
-              종료일: toDateStr,
+              종료일: toDateStrValue,
           포함여부: isInRange
             });
             
@@ -334,7 +351,7 @@ const StudentDashboard = () => {
     console.log('필터링 결과:', {
       전체: allDistributions.length,
       필터링후: filtered.length,
-      남은배포: filtered.map(d => `${d.title} (${new Date(d.distribution_date).toISOString().split('T')[0]})`)
+      남은배포: filtered.map(d => `${d.title} (${toDateStr(new Date(d.distribution_date))})`)
     });
 
     setFilteredDistributions(filtered);
@@ -354,7 +371,8 @@ const StudentDashboard = () => {
       let distributionsData: DistributionWithDetails[] = [];
       try {
         console.log('학생 대시보드 - 현재 profile.id:', profile.id);
-        distributionsData = await distributionApi.getStudentDistributions(profile.id);
+        // hideScheduled — 오답 복습 예약처럼 아직 시작 시각이 안 된 배포는 학생에게 안 보인다
+        distributionsData = await distributionApi.getStudentDistributions(profile.id, { hideScheduled: true });
         console.log('학생 대시보드 - 조회된 배포 데이터:', distributionsData);
         
         // 각 배포의 문제 세트 구조 확인
@@ -387,6 +405,16 @@ const StudentDashboard = () => {
         console.log('배포별 도전횟수:', attemptCounts);
       } catch (error) {
         console.warn('도전횟수 조회 실패:', error);
+      }
+
+      // 문제별 전체 시도 요약 — "오답 숙제하기 (N회차)" 의 N + 오늘 몫 완료 판정.
+      // 실패하면 빈 맵이 되어 모두 2회차로 보이므로, 조용히 넘기지 않고 경고를 남긴다.
+      try {
+        const attemptsByProblem = await studentAnswerApi.getProblemAttemptStats(profile.id);
+        setProblemAttempts(attemptsByProblem);
+        console.log('문제별 전체 시도 요약:', attemptsByProblem);
+      } catch (error) {
+        console.warn('문제별 시도 요약 조회 실패 (회차 표기가 부정확할 수 있음):', error);
       }
 
       // 학생 답안 조회 - 각 배포별로 조회
@@ -457,6 +485,9 @@ const StudentDashboard = () => {
       generateRecentActivities(achievementsData, allStudentAnswers);
     } catch (error) {
       console.error('대시보드 데이터 조회 실패:', error);
+    } finally {
+      // 실패해도 세운다 — 영원히 "불러오는 중" 으로 두면 아무것도 못 한다.
+      setCardsReady(true);
     }
   };
 
@@ -629,84 +660,58 @@ const StudentDashboard = () => {
     };
   };
 
-  // 오답만 필터링하는 함수 - 가장 최근 시도에서 틀린 문제들만 반환
-  const getWrongAnswersForDistribution = (distribution: DistributionWithDetails) => {
+  /**
+   * 이 배포의 "오답 숙제" 대상과 회차.
+   *
+   * 여기서는 **이 배포에서 한 번이라도 틀린 문제**를 골라내기만 하고, 회차 계산은
+   * `planWrongHomework`(선생님 회차 표와 같은 파일)에 맡긴다 — 규칙을 두 군데 두면 갈라진다.
+   */
+  const getWrongHomework = (distribution: DistributionWithDetails | undefined) => {
+    if (!distribution) return planWrongHomework([], problemAttempts);
+
     const problemIds = distribution.problem_set.problems.map(p => p.id);
-    console.log(`오답 필터링 - 배포 ${distribution.id}의 문제 ID들:`, problemIds);
-    
-    const relevantAnswers = studentAnswers.filter(answer => {
-      const matchesProblem = problemIds.includes(answer.problem_id);
-      const matchesDistribution = answer.distribution_id === distribution.id;
-      
-      return matchesProblem && matchesDistribution;
-    });
-    
-    console.log(`오답 필터링 - 관련된 모든 답안들:`, relevantAnswers);
-    
-    // 가장 최근 시도 시간을 찾기
-    const latestAttemptTime = relevantAnswers.reduce((latest, answer) => {
-      const answerTime = new Date(answer.submitted_at);
-      return answerTime > latest ? answerTime : latest;
-    }, new Date(0));
-    
-    console.log(`오답 필터링 - 가장 최근 시도 시간:`, latestAttemptTime);
-    
-    // 가장 최근 시도에서 틀린 문제들만 필터링
-    const latestWrongAnswers = relevantAnswers.filter(answer => {
-      const answerTime = new Date(answer.submitted_at);
-      const isLatestAttempt = Math.abs(answerTime.getTime() - latestAttemptTime.getTime()) < 1000; // 1초 이내 차이
-      const isWrong = !answer.is_correct;
-      
-      console.log(`오답 필터링 - 답안 ${answer.id}:`, {
-        problem_id: answer.problem_id,
-        submitted_at: answer.submitted_at,
-        is_correct: answer.is_correct,
-        isLatestAttempt,
-        isWrong,
-        included: isLatestAttempt && isWrong
-      });
-      
-      return isLatestAttempt && isWrong;
-    });
-    
-    console.log(`오답 필터링 - 가장 최근 시도에서 틀린 문제들:`, latestWrongAnswers);
-    
-    // 중복 제거 (같은 문제를 여러 번 틀렸을 경우)
-    const uniqueWrongProblemIds = [...new Set(latestWrongAnswers.map(answer => answer.problem_id))];
-    
-    console.log(`오답 필터링 - 최종 오답 문제 ID들:`, uniqueWrongProblemIds);
-    
-    return uniqueWrongProblemIds;
+    const everWrong = new Set(
+      studentAnswers
+        .filter(a =>
+          a.distribution_id === distribution.id &&
+          problemIds.includes(a.problem_id) &&
+          !a.is_correct
+        )
+        .map(a => a.problem_id)
+    );
+
+    // 세트에 담긴 순서대로 풀리게 한다(제출 순서가 아니라 문제 순서)
+    return planWrongHomework(problemIds.filter(id => everWrong.has(id)), problemAttempts);
   };
 
-  // 오답만 다시 풀기 시작
-  const startWrongAnswersOnly = async (distributionId: string) => {
+  // 오답 숙제하기 — 틀린 문제만 골라 다시 풀린다. 제출되면 student_answers 에 한 행이 더 쌓여
+  // 선생님 오답 표의 그 회차 칸(2회차 숙제 …)이 실제 푼 날짜로 채워진다.
+  const startWrongAnswerHomework = async (distributionId: string) => {
     if (!profile) return;
-    
+
     const distribution = filteredDistributions.find(d => d.id === distributionId);
     if (!distribution) return;
-    
-    const wrongProblemIds = getWrongAnswersForDistribution(distribution);
-    if (wrongProblemIds.length === 0) {
+
+    const { problemIds, round } = getWrongHomework(distribution);
+    if (problemIds.length === 0) {
       toast({
         title: "오답 없음",
-        description: "이 문제 세트에는 오답이 없습니다.",
+        description: "이 문제집에는 다시 풀 오답이 없습니다.",
         variant: "default"
       });
       return;
     }
-    
+
     try {
-      // 도전 횟수 기록 추가
-      await distributionAttemptApi.addAttempt(profile.id, distributionId, 'wrong_only');
-      console.log(`도전 기록 추가: wrong_only - 배포 ${distributionId}`);
+      // 도전 횟수 기록 (표기는 그대로, 유형만 회차를 남긴다)
+      await distributionAttemptApi.addAttempt(profile.id, distributionId, `wrong_round_${round}`);
+      console.log(`도전 기록 추가: wrong_round_${round} - 배포 ${distributionId}, ${problemIds.length}문제`);
     } catch (error) {
       console.error('도전 기록 추가 실패:', error);
     }
-    
-    // 오답 문제 ID들을 URL 파라미터로 전달
-    const wrongIdsParam = wrongProblemIds.join(',');
-    navigate(`/student/problems/${distributionId}?wrongOnly=true&wrongIds=${wrongIdsParam}`);
+
+    // 오답 문제 ID 들을 URL 파라미터로 전달 (SolveProblem 이 wrongIds 로 걸러 낸다)
+    navigate(`/student/problems/${distributionId}?wrongOnly=true&wrongIds=${problemIds.join(',')}`);
   };
 
   return (
@@ -776,7 +781,7 @@ const StudentDashboard = () => {
                  to: today
                };
                setDateRange(todayRange);
-               console.log('필터 초기화: 오늘 날짜로 설정', today.toISOString().split('T')[0]);
+               console.log('필터 초기화: 오늘 날짜로 설정', toDateStr(today));
              }}>
                <CalendarIcon className="mr-2 h-4 w-4" />
                오늘 날짜로 초기화
@@ -860,10 +865,13 @@ const StudentDashboard = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {getPaginatedDistributions().map((distribution) => {
               const progress = getProgressForDistribution(distribution);
-              
+              const homework = getWrongHomework(distribution);
+              // 1회차(처음 풀기)를 아직 다 못 끝냈으면 오답 숙제가 아니라 남은 문제를 마저 푼다
+              const firstRoundDone = progress.total > 0 && progress.completed >= progress.total;
+
               // 오답을 모두 해결했는지 확인 (모든 문제를 풀었고 정답률이 100%인 경우)
               const hasAllWrongAnswersSolved = progress.completed > 0 && progress.accuracy === 100;
-              
+
               return (
                 <div key={distribution.id} className={`p-4 border rounded-lg hover:shadow-md transition-shadow ${
                   hasAllWrongAnswersSolved ? 'bg-blue-100 border-blue-300' : ''
@@ -911,33 +919,72 @@ const StudentDashboard = () => {
                       <Play className="h-3 w-3" />
                       도전횟수: {distributionAttempts[distribution.id] || 0}회
                     </span>
+                    {cardsReady && firstRoundDone && homework.wrongTotal > 0 && (
+                      <span className="flex items-center gap-1">
+                        <XCircle className="h-3 w-3" />
+                        오답 {homework.wrongTotal}문제
+                      </span>
+                    )}
                   </div>
                   <div className="space-y-2">
-                    <Button 
-                      className="w-full" 
-                      onClick={() => startProblemSet(distribution.id)}
-                    >
-                      {progress.completed > 0 ? '전체 다시 풀기' : '문제 풀기'}
-                    </Button>
-                    {progress.completed > 0 && (
+                    {/* ⚠️ 데이터가 오기 전에는 아무 버튼도 내주지 않는다.
+                        그 사이엔 진행률이 0 이라 **다 푼 문제집도 '문제 풀기'** 로 보이고,
+                        누르면 오답만이 아니라 세트 전체가 열려 모든 문제의 회차가 한 칸씩 뛴다. */}
+                    {!cardsReady && (
+                      <Button className="w-full" variant="outline" disabled>
+                        불러오는 중...
+                      </Button>
+                    )}
+
+                    {/* 1회차를 아직 안 끝냈으면 먼저 그것부터 */}
+                    {cardsReady && !firstRoundDone && (
+                      <Button
+                        className="w-full"
+                        onClick={() => startProblemSet(distribution.id)}
+                      >
+                        {progress.completed > 0 ? '이어서 풀기' : '문제 풀기'}
+                      </Button>
+                    )}
+
+                    {/* 다 풀었고 오늘 풀 오답이 있으면 → 그날 틀린 것을 바로 숙제로 */}
+                    {cardsReady && firstRoundDone && homework.state === 'due' && (
                       <>
-                        <Button 
-                          variant="outline"
-                          className="w-full" 
-                          onClick={() => startWrongAnswersOnly(distribution.id)}
-                        >
-                          <XCircle className="h-4 w-4 mr-2" />
-                          오답만 다시 풀기
-                        </Button>
                         <Button
-                          variant="outline"
                           className="w-full"
-                          onClick={() => navigate(`/student/wrong-answers/${distribution.id}`)}
+                          onClick={() => startWrongAnswerHomework(distribution.id)}
                         >
-                          <AlertCircle className="h-4 w-4 mr-2" />
-                          오답 분석
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          오답 숙제하기 ({homework.round}회차)
                         </Button>
+                        {/* 선생님 오답 표의 회차 이름(숙제/다음 수업/2주/4주)을 그대로 */}
+                        <p className="text-xs text-center text-muted-foreground">
+                          {STAGE_LABELS[homework.round - 1]} · {homework.problemIds.length}문제
+                        </p>
                       </>
+                    )}
+
+                    {/* 오늘 몫을 끝냈다 — 버튼은 감추고 인사만 남긴다 */}
+                    {cardsReady && firstRoundDone && homework.state === 'resting' && (
+                      <div className="flex items-center justify-center gap-2 py-2 text-sm font-medium text-emerald-600">
+                        <CheckCircle className="h-4 w-4" />
+                        수고하셨습니다
+                      </div>
+                    )}
+
+                    {/* 오답을 전부 5회까지 채웠다 */}
+                    {cardsReady && firstRoundDone && homework.state === 'completed' && (
+                      <Button className="w-full" variant="outline" disabled>
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        복습 {REVIEW_TARGET_ROUNDS}회 완료
+                      </Button>
+                    )}
+
+                    {/* 오답이 아예 없는 문제집 */}
+                    {cardsReady && firstRoundDone && homework.state === 'none' && (
+                      <Button className="w-full" variant="outline" disabled>
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        오답 없음 · 모두 맞혔어요
+                      </Button>
                     )}
                   </div>
                 </div>
